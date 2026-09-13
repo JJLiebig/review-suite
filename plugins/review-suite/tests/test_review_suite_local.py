@@ -766,6 +766,20 @@ def test_classify_review_result_keeps_capacity_for_interruption_boilerplate() ->
     assert classification["grade_block_reason"] == "selected_model_at_capacity"
 
 
+def test_classify_review_result_surfaces_authentication_failure() -> None:
+    classification = _classify_review_result(
+        reviewer_output="",
+        stderr_text="",
+        session_id="session-123",
+        thread_id="thread-123",
+        rollout_error="Your access token could not be refreshed. Please log out and sign in again.",
+    )
+
+    assert classification["review_status"] == "authentication_failed"
+    assert classification["grade_block_reason"] == "codex_authentication_failed"
+    assert "Log out and sign in again" in classification["status_summary"]
+
+
 def _opencode_error_stderr(error_class: str, **extra: object) -> str:
     payload: dict[str, object] = {
         "session_id": "ses_opencode",
