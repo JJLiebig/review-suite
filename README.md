@@ -87,6 +87,17 @@ To replace an active review with a stricter one:
 <python> <plugin-root>/scripts/review.py --id <id> --restart-mode deep --reason "why deeper review is required"
 ```
 
+If a cycle froze mistaken literal brief text, replace it with a fresh same-mode
+cycle before accepting any findings:
+
+```powershell
+<python> <plugin-root>/scripts/review.py --id <id> --restart-brief (Get-Content -Raw "<brief.md>") --reason "why the frozen brief is invalid"
+```
+
+This keeps the old cycle and its history, but reruns cleanup, review, and
+validation from unknown on the current clean descendant head. It is unavailable
+after findings or convergence activity.
+
 When a review exhausts its local round budget, its emitted action can start one
 same-mode successor without repeating the repository context:
 
