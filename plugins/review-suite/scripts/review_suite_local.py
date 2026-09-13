@@ -3287,6 +3287,9 @@ def _classify_review_result(
     rollout_error: str = "",
 ) -> dict[str, Any]:
     output = (reviewer_output or "").strip()
+    authentication_failed = (
+        "access token could not be refreshed" in (rollout_error or "").lower()
+    )
     unsupported_model = (
         "model is not supported when using codex with a chatgpt account"
         in (rollout_error or "").lower()
@@ -3297,6 +3300,13 @@ def _classify_review_result(
     interrupted = _review_interrupted_detected(
         stderr_text=stderr_text, reviewer_output=output
     )
+    if authentication_failed and (not output or interrupted):
+        return {
+            "review_status": "authentication_failed",
+            "status_summary": "Codex authentication failed: access token could not be refreshed. Log out and sign in again, then resume this review.",
+            "grade_blocked": True,
+            "grade_block_reason": "codex_authentication_failed",
+        }
     if unsupported_model and (not output or interrupted):
         return {
             "review_status": "unsupported_model",
