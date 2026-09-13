@@ -151,6 +151,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--restart-mode", choices=RESTART_TARGET_MODES)
     parser.add_argument(
+        "--restart-brief",
+        help="Replace a mistaken frozen review brief and start a fresh same-mode cycle.",
+    )
+    parser.add_argument(
         "--contract-conflict", choices=tuple(sorted(CONTRACT_CONFLICTS))
     )
     parser.add_argument(
@@ -726,15 +730,17 @@ def _reject_review_brief_replacement(
     state: dict[str, Any], review_brief: str | None
 ) -> None:
     if review_brief is not None and review_brief != state.get("review_brief"):
+        public_id = str(state.get("public_id") or "<id>").strip()
         raise ValueError(
-            "review brief is frozen for this cycle; start a new cycle to replace it"
+            "review brief is frozen for this cycle; use "
+            f"--id {public_id} --restart-brief <MARKDOWN> --reason <WHY> to replace it"
         )
 
 
-def _restart_reason(args: argparse.Namespace) -> str:
+def _restart_reason(args: argparse.Namespace, *, option: str = "--restart-mode") -> str:
     reason = str(args.reason or "").strip()
     if not reason or reason == "REASON":
-        raise ValueError("--reason is required for --restart-mode")
+        raise ValueError(f"--reason is required for {option}")
     return reason
 
 
@@ -2130,6 +2136,7 @@ def _create_successor_cycle(
     reason: str,
     kind: str,
     require_exact_identity: bool,
+    review_brief: str | None,
 ) -> tuple[dict[str, Any], bool]:
     if isinstance(state.get("superseded_by"), dict):
         replacement = str(
@@ -2158,7 +2165,11 @@ def _create_successor_cycle(
         if source_skipped_deslop
         else None
     )
-    restart_token = f"{state.get('cycle_key')}:{target_mode}"
+    restart_token = (
+        f"{state.get('cycle_key')}:{target_mode}"
+        if kind == "mode-restart"
+        else f"{state.get('cycle_key')}:{kind}"
+    )
     replacement = create_cycle(
         cwd=review_root,
         base=base,
@@ -2172,10 +2183,12 @@ def _create_successor_cycle(
         deslop_enabled=not source_skipped_deslop,
         deslop_skip_source=deslop_skip_source,
         restart_token=restart_token,
-        review_brief=state.get("review_brief"),
+        review_brief=review_brief,
     )
     existing = load_cycle_by_key(state_dir, str(replacement["cycle_key"]))
     if existing is not None:
+        if existing.get("review_brief") != review_brief:
+            raise ValueError("review cycle already has a different successor brief")
         return _copy_runtime_options(existing, state), True
     replacement = _copy_runtime_options(replacement, state)
     _record_model_override(replacement, model_override)
@@ -2199,6 +2212,7 @@ def _start_successor_cycle(
     reason: str,
     kind: str,
     require_exact_identity: bool,
+    review_brief: str | None,
 ) -> dict[str, Any]:
     replacement, _ = _create_successor_cycle(
         state=state,
@@ -2207,6 +2221,7 @@ def _start_successor_cycle(
         reason=reason,
         kind=kind,
         require_exact_identity=require_exact_identity,
+        review_brief=review_brief,
     )
     superseded = abort_cycle(state, reason=reason)
     superseded["superseded_by"] = {
@@ -2268,6 +2283,62 @@ def _restart_cycle(
         reason=reason,
         kind="mode-restart",
         require_exact_identity=True,
+        review_brief=state.get("review_brief"),
+    )
+
+
+def _restart_review_brief(
+    state: dict[str, Any], *, state_dir: Path, review_brief: str, reason: str
+) -> dict[str, Any]:
+    if not review_brief.strip():
+        raise ValueError("--restart-brief cannot be blank")
+    current_brief = state.get("review_brief")
+    if not isinstance(current_brief, str) or not current_brief.strip():
+        raise ValueError("review cycle has no frozen review brief to replace")
+    if review_brief == current_brief:
+        raise ValueError("--restart-brief must differ from the frozen review brief")
+
+    convergence = convergence_summary(state)
+    if (
+        state.get("stage")
+        not in {
+            STAGE_CREATED,
+            STAGE_DECISION_PENDING,
+            STAGE_REVIEW_GREEN,
+            STAGE_LOCAL_GREEN_HANDOFF,
+        }
+        or state.get("active_findings") is not None
+        or convergence.get("status") != "ACTIVE"
+        or int(convergence.get("accepted_findings_heads") or 0) != 0
+    ):
+        raise ValueError(
+            "cannot replace review brief after findings or convergence activity; "
+            "follow the existing review action"
+        )
+
+    review_root, _, _, head, merge_base_head = _current_restart_identity(
+        state, require_exact=False
+    )
+    identity = dict(state.get("identity") or {})
+    expected_head = str(identity.get("head") or "").strip()
+    expected_merge_base = str(identity.get("merge_base") or "").strip()
+    if merge_base_head != expected_merge_base:
+        raise ValueError(
+            "cannot replace review brief after merge-base changed; start a new review instead"
+        )
+    if head != expected_head and not is_ancestor(review_root, expected_head, head):
+        raise ValueError(
+            "cannot replace review brief after review lineage changed; start a new review instead"
+        )
+
+    return _start_successor_cycle(
+        state,
+        state_dir=state_dir,
+        target_mode=_current_mode(state),
+        reason=reason,
+        kind="review-brief-restart",
+        require_exact_identity=False,
+        review_brief=review_brief,
     )
 
 
@@ -2841,6 +2912,7 @@ def main() -> int:
         args = parser.parse_args()
         state_dir = Path(default_state_dir()).resolve(strict=False)
         has_validation_status = _has_validation_status(args)
+        has_restart_brief = args.restart_brief is not None
         if args.json and not args.status:
             raise ValueError("--json requires --status")
         if args.json and args.verbose:
@@ -2859,6 +2931,7 @@ def main() -> int:
             if (
                 args.mode
                 or args.restart_mode
+                or has_restart_brief
                 or args.contract_conflict
                 or args.convergence_decision
                 or args.reason
@@ -2885,6 +2958,8 @@ def main() -> int:
             return cmd_branch_status(args)
         if args.restart_mode and not args.id:
             raise ValueError("--restart-mode requires --id")
+        if has_restart_brief and not args.id:
+            raise ValueError("--restart-brief requires --id")
         convergence_action = args.contract_conflict or args.convergence_decision
         if convergence_action and not args.id:
             raise ValueError("convergence actions require --id")
@@ -2906,6 +2981,7 @@ def main() -> int:
                     "wsl",
                 )
             )
+            or has_restart_brief
             or has_validation_status
         )
         if convergence_action and (convergence_conflict or other_action):
@@ -2916,12 +2992,17 @@ def main() -> int:
             raise ValueError(
                 "--skip-deslop/--no-deslop can only be used when creating a review cycle"
             )
-        if args.reason and not (args.restart_mode or args.deslop_done):
-            raise ValueError("--reason requires --restart-mode or --deslop-done")
+        if args.reason and not (
+            args.restart_mode or has_restart_brief or args.deslop_done
+        ):
+            raise ValueError(
+                "--reason requires --restart-mode, --restart-brief, or --deslop-done"
+            )
         if args.deslop_done and not args.id:
             raise ValueError("--deslop-done requires --id")
         if args.deslop_done and (
             args.restart_mode
+            or has_restart_brief
             or args.decision
             or args.github_review
             or args.github_force
@@ -2936,6 +3017,17 @@ def main() -> int:
                 "GitHub notes, validation status flags, show-findings, or show-status"
             )
         if args.restart_mode and (
+            has_restart_brief
+            or args.decision
+            or args.github_review
+            or args.github_force
+            or args.github_result
+            or has_validation_status
+        ):
+            raise ValueError(
+                "--restart-mode cannot be combined with restart-brief, decisions, GitHub review, GitHub results, or validation status flags"
+            )
+        if has_restart_brief and (
             args.decision
             or args.github_review
             or args.github_force
@@ -2943,7 +3035,7 @@ def main() -> int:
             or has_validation_status
         ):
             raise ValueError(
-                "--restart-mode cannot be combined with decisions, GitHub review, GitHub results, or validation status flags"
+                "--restart-brief cannot be combined with decisions, GitHub review, GitHub results, or validation status flags"
             )
         if args.decision and not args.id:
             raise ValueError("--decision requires --id")
@@ -2978,6 +3070,7 @@ def main() -> int:
             raise ValueError("--show-findings cannot be combined with --show-status")
         if args.show_findings and (
             args.restart_mode
+            or has_restart_brief
             or args.decision
             or args.github_review
             or args.github_force
@@ -2990,6 +3083,7 @@ def main() -> int:
             )
         if args.show_status and (
             args.restart_mode
+            or has_restart_brief
             or args.decision
             or args.github_review
             or args.github_force
@@ -3044,6 +3138,15 @@ def main() -> int:
                     state_dir=state_dir,
                     target_mode=str(args.restart_mode),
                     reason=_restart_reason(args),
+                )
+                _render(state, state_dir=state_dir)
+                return 0
+            if has_restart_brief:
+                state = _restart_review_brief(
+                    state,
+                    state_dir=state_dir,
+                    review_brief=str(args.restart_brief),
+                    reason=_restart_reason(args, option="--restart-brief"),
                 )
                 _render(state, state_dir=state_dir)
                 return 0

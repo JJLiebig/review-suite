@@ -1676,7 +1676,8 @@ def test_review_brief_is_frozen_and_public_output_reports_coverage(
 
     assert review.main() == 2
     assert errors[-1] == (
-        "review brief is frozen for this cycle; start a new cycle to replace it"
+        "review brief is frozen for this cycle; use "
+        f"--id {public_id} --restart-brief <MARKDOWN> --reason <WHY> to replace it"
     )
 
     terminal = _cycle_payload(state_dir, public_id)
@@ -2548,6 +2549,182 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert review_calls[1]["allow_unsafe_windows_wsl_fallback"] is True
     assert review_calls[1]["step_position"] == 1
     assert review_calls[1]["step_total"] == 4
+
+
+def test_restart_brief_supersedes_invalid_cycle_with_fresh_same_mode_ladder(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _use_compact_normal_profile(monkeypatch, tmp_path / "state", include_deep=True)
+    review_calls = _stub_review(monkeypatch, "old-round", "replacement-round")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/restart-brief")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "deep",
+            "--review-brief",
+            "C:/tmp/brief.md",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    old_id = str(created["review"])
+    _run_review(
+        monkeypatch,
+        [
+            "--id",
+            old_id,
+            "--focused-validation",
+            "passed",
+            "--full-suite",
+            "passed",
+            "--ci",
+            "passed",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    old_state = _cycle_payload(state_dir, old_id)
+    assert old_state["stage"] == "decision-pending"
+    assert old_state["validation"] == {
+        "review_green": "unknown",
+        "focused": "passed",
+        "full_suite": "passed",
+        "ci": "passed",
+    }
+    old_rounds = deepcopy(old_state["rounds"])
+    _git(repo, "commit", "--allow-empty", "-m", "audit review input")
+    current_head = _git(repo, "rev-parse", "HEAD")
+    replacement_brief = "# Goal\n\nReview the complete contract."
+
+    exit_code, restarted = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            old_id,
+            "--restart-brief",
+            replacement_brief,
+            "--reason",
+            "the frozen brief was a file path",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    new_id = str(restarted["review"])
+    assert exit_code == 0
+    assert new_id != old_id
+    assert len(review_calls) == 2
+    old_saved = _cycle_payload(state_dir, old_id)
+    new_state = _cycle_payload(state_dir, new_id)
+    assert old_saved["stage"] == "aborted"
+    assert old_saved["review_brief"] == "C:/tmp/brief.md"
+    assert old_saved["rounds"] == old_rounds
+    assert old_saved["superseded_by"] == {
+        "review": new_id,
+        "cycle_key": new_state["cycle_key"],
+        "mode": "deep",
+        "reason": "the frozen brief was a file path",
+        "kind": "review-brief-restart",
+    }
+    assert new_state["review_brief"] == replacement_brief
+    assert new_state["mode"] == {"requested": "deep", "effective": "deep"}
+    assert new_state["identity"]["head"] == current_head
+    assert new_state["identity"]["merge_base"] == old_state["identity"]["merge_base"]
+    assert new_state["validation"] == {
+        "review_green": "unknown",
+        "focused": "unknown",
+        "full_suite": "unknown",
+        "ci": "unknown",
+    }
+    assert new_state["deslop"] == {"tracked": True, "status": "tracked"}
+    assert new_state["decisions"] == []
+    assert new_state["convergence"]["accepted_findings_heads"] == []
+    assert [item["round_id"] for item in new_state["rounds"]] == ["replacement-round"]
+    assert new_state["restart"]["token"] == (
+        f"{old_state['cycle_key']}:review-brief-restart"
+    )
+    assert new_state["restart"]["kind"] == "review-brief-restart"
+
+
+def test_restart_brief_cannot_reset_accepted_findings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--skip-deslop",
+            "--mode",
+            "fast",
+            "--review-brief",
+            "Mistaken brief",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(created["review"])
+    _run_review(
+        monkeypatch,
+        [
+            "--id",
+            public_id,
+            "--decision",
+            "findings",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    before = _cycle_payload(state_dir, public_id)
+    errors: list[str] = []
+    monkeypatch.setattr(
+        review,
+        "emit_error",
+        lambda message, **kwargs: errors.append(str(message)) or 2,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review.py",
+            "--id",
+            public_id,
+            "--restart-brief",
+            "Replacement brief",
+            "--reason",
+            "replace input",
+        ],
+    )
+
+    assert review.main() == 2
+    assert errors[-1] == (
+        "cannot replace review brief after findings or convergence activity; "
+        "follow the existing review action"
+    )
+    assert _cycle_payload(state_dir, public_id) == before
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
 
 
 def test_contract_conflict_and_one_use_continue_are_durable(
