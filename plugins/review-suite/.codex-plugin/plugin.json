@@ -4,10 +4,10 @@
   "description": "Stateful review workflows with a default local orchestrator and GitHub review handoff.",
   "author": {
     "name": "Jonathan",
-    "url": "https://github.com/Pimpmuckl"
+    "url": "https://github.com/JJLiebig"
   },
-  "homepage": "https://github.com/Pimpmuckl/review-suite",
-  "repository": "https://github.com/Pimpmuckl/review-suite",
+  "homepage": "https://github.com/JJLiebig/review-suite",
+  "repository": "https://github.com/JJLiebig/review-suite",
   "license": "MIT",
   "keywords": [
     "codex",
@@ -27,9 +27,9 @@
       "Interactive",
       "Write"
     ],
-    "websiteURL": "https://github.com/Pimpmuckl/review-suite",
-    "privacyPolicyURL": "https://github.com/Pimpmuckl/review-suite",
-    "termsOfServiceURL": "https://github.com/Pimpmuckl/review-suite",
+    "websiteURL": "https://github.com/JJLiebig/review-suite",
+    "privacyPolicyURL": "https://github.com/JJLiebig/review-suite",
+    "termsOfServiceURL": "https://github.com/JJLiebig/review-suite",
     "defaultPrompt": [
       "Use review for local review/status, review-github for PR review, review-plan for plan checks, and review-deslop for simplification passes."
     ],

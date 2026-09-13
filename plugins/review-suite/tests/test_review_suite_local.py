@@ -627,7 +627,7 @@ def test_repo_name_from_round_payload_prefers_git_remote_for_opaque_worktree(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "esbzptu4"
-    _git_repo_with_origin(repo, "https://github.com/Pimpmuckl/review-suite.git")
+    _git_repo_with_origin(repo, "https://github.com/JJLiebig/review-suite.git")
 
     assert repo_name_from_round_payload({"review_cwd": str(repo)}) == "review-suite"
 
@@ -653,7 +653,7 @@ def test_enrich_record_repo_names_uses_round_payload_remote_for_old_rows(
     rounds_dir = state_dir / "rounds"
     rounds_dir.mkdir(parents=True)
     repo = tmp_path / "spp_worktrees" / "esbzptu4"
-    _git_repo_with_origin(repo, "git@github.com:Pimpmuckl/codex-account-switcher.git")
+    _git_repo_with_origin(repo, "git@github.com:JJLiebig/codex-account-switcher.git")
     round_id = "phase_review-esbzptu4-123456-20260412T130000Z-abcdef01"
     (rounds_dir / f"{round_id}.json").write_text(
         json.dumps({"review_cwd": str(repo)}),
