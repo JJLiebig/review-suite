@@ -34,6 +34,12 @@ deep_arena_loops = 1
 Existing overrides continue to work. Keep rating pool IDs stable when moving
 settings so historical ratings retain their identity.
 
+Use `review.py --no-arena --cd <repo-root>` to skip Arena for one new review
+cycle. To disable Arena for future reviews in one repository while retaining
+the global setting elsewhere, use `review.py --set-no-arena --cd <repo-root>`;
+`--clear-no-arena` returns that repository to the global setting. These
+repository preferences are local to the clone and do not modify tracked files.
+
 Review sequences and reviewer counts live separately in
 [`workflow_settings.toml`](../plugins/review-suite/references/workflow_settings.toml).
 The loader merges workflow settings, Arena settings, model defaults, then user

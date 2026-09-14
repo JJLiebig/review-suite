@@ -134,6 +134,7 @@ CONTINUATION_REDIRECT_STAGES = {
     STAGE_CRASHED,
     "decision-required",
 }
+REPO_NO_ARENA_CONFIG = "review-suite.no-arena"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -163,6 +164,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--reason", help="Reason for restart or closure dismissal")
     parser.add_argument("--cd")
+    parser.add_argument(
+        "--no-arena",
+        action="store_true",
+        help="Skip Arena when creating this review cycle.",
+    )
+    arena_preference = parser.add_mutually_exclusive_group()
+    arena_preference.add_argument(
+        "--set-no-arena",
+        action="store_true",
+        help="Disable Arena for future reviews in this repository.",
+    )
+    arena_preference.add_argument(
+        "--clear-no-arena",
+        action="store_true",
+        help="Return this repository to the global Arena setting.",
+    )
     parser.add_argument("--base", help="Override the detected default branch ref.")
     parser.add_argument(
         "--review-brief",
@@ -671,6 +688,83 @@ def _configured_selection(config: dict[str, Any]) -> str:
     return str(((config.get("orchestrator") or {}).get("selection") or "auto")).strip()
 
 
+def _git_config(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo), "config", "--local", *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
+def _repo_has_no_arena(repo: Path) -> bool:
+    proc = _git_config(repo, "--type=bool", "--get", REPO_NO_ARENA_CONFIG)
+    if proc.returncode == 1:
+        return False
+    if proc.returncode != 0:
+        raise ValueError(
+            (
+                proc.stderr or proc.stdout or "could not read repository Arena setting"
+            ).strip()
+        )
+    return proc.stdout.strip() == "true"
+
+
+def _set_repo_no_arena(repo: Path, *, disabled: bool) -> None:
+    if disabled:
+        proc = _git_config(repo, REPO_NO_ARENA_CONFIG, "true")
+    else:
+        current = _git_config(repo, "--get-all", REPO_NO_ARENA_CONFIG)
+        if current.returncode == 1:
+            return
+        if current.returncode != 0:
+            raise ValueError(
+                (
+                    current.stderr
+                    or current.stdout
+                    or "could not read repository Arena setting"
+                ).strip()
+            )
+        proc = _git_config(repo, "--unset-all", REPO_NO_ARENA_CONFIG)
+    if proc.returncode != 0:
+        raise ValueError(
+            (
+                proc.stderr
+                or proc.stdout
+                or "could not update repository Arena setting"
+            ).strip()
+        )
+
+
+def _configure_repo_arena(args: argparse.Namespace) -> int | None:
+    if not (args.set_no_arena or args.clear_no_arena):
+        return None
+    allowed = {"cd", "set_no_arena", "clear_no_arena"}
+    conflicts = [
+        name
+        for name, value in vars(args).items()
+        if name not in allowed and value not in (None, False)
+    ]
+    if conflicts:
+        raise ValueError(
+            "repository Arena configuration cannot be combined with "
+            + ", ".join(f"--{name.replace('_', '-')}" for name in conflicts)
+        )
+    repo = resolve_repo_root(args.cd)
+    disabled = bool(args.set_no_arena)
+    _set_repo_no_arena(repo, disabled=disabled)
+    emit_toon(
+        {
+            "status": "configured",
+            "cwd": normalize_cwd(str(repo)),
+            "arena": "disabled" if disabled else "global-default",
+        }
+    )
+    return 0
+
+
 def _path_key(path: Path) -> str:
     key = str(path.resolve(strict=False))
     return key.lower() if sys.platform == "win32" else key
@@ -709,6 +803,8 @@ def _reject_id_creation_args(args: argparse.Namespace, state: dict[str, Any]) ->
         for name in ("mode", "cd", "base", "review_brief", "model", "reasoning")
         if getattr(args, name) is not None
     ]
+    if args.no_arena:
+        sent.append("no_arena")
     if not sent:
         return
     mode = dict(state.get("mode") or {})
@@ -1825,6 +1921,7 @@ def _compatible_continuation_cycle(
     head: str,
     merge_base_head: str,
     effective_mode: str,
+    arena_enabled: bool,
     review_brief: str | None = None,
     skip_deslop: bool = False,
 ) -> dict[str, Any] | None:
@@ -1886,6 +1983,12 @@ def _compatible_continuation_cycle(
         state_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
         decision_pending = state_stage == "decision-required"
         if state_mode != effective_mode and not decision_pending:
+            continue
+        state_arena_enabled = any(
+            isinstance(step, dict) and step.get("kind") == "arena"
+            for step in dict(state.get("review_plan") or {}).get("steps", [])
+        )
+        if state_arena_enabled != arena_enabled and not decision_pending:
             continue
         if _cycle_cli_skips_deslop(state) != bool(skip_deslop) and not decision_pending:
             continue
@@ -1989,6 +2092,14 @@ def _config_with_model_override(
     return merged
 
 
+def _config_without_arena(config: dict[str, Any], *, disabled: bool) -> dict[str, Any]:
+    if not disabled:
+        return config
+    merged = deepcopy(config)
+    merged["arena"]["enabled"] = False
+    return merged
+
+
 def _record_model_override(state: dict[str, Any], override: dict[str, str]) -> None:
     if override:
         state["model_override"] = dict(override)
@@ -2020,6 +2131,8 @@ def _create_or_resume_cycle(
     merge_base_head = merge_base(review_root, base, "HEAD")
     model_override = _requested_model_override(args)
     config = _config_with_model_override(load_config(state_dir), model_override)
+    arena_disabled = bool(args.no_arena) or _repo_has_no_arena(review_root)
+    config = _config_without_arena(config, disabled=arena_disabled)
     resolution = resolve_orchestrator_profile(
         config, mode=mode, selection=_configured_selection(config)
     )
@@ -2032,6 +2145,7 @@ def _create_or_resume_cycle(
         head=head,
         merge_base_head=merge_base_head,
         effective_mode=resolution.effective_mode,
+        arena_enabled=any(step.kind == "arena" for step in resolution.steps),
         review_brief=args.review_brief,
         skip_deslop=skip_deslop,
     )
@@ -2050,7 +2164,15 @@ def _create_or_resume_cycle(
         effective_selection=resolution.effective_selection,
         deslop_enabled=not skip_deslop,
         deslop_skip_source="cli" if skip_deslop else None,
-        cycle_token="skip-deslop" if skip_deslop else None,
+        cycle_token=",".join(
+            token
+            for token, enabled in (
+                ("skip-deslop", skip_deslop),
+                ("no-arena", arena_disabled),
+            )
+            if enabled
+        )
+        or None,
         review_brief=args.review_brief,
     )
     if str(base_info["requested_base"]) != base:
@@ -2065,6 +2187,8 @@ def _create_or_resume_cycle(
         _reject_review_brief_replacement(existing, args.review_brief)
         return _apply_runtime_options(existing, args)
     state = _apply_profile_resolution(state, resolution)
+    if arena_disabled:
+        state["arena_disabled"] = "cli" if args.no_arena else "repository"
     _record_model_override(state, model_override)
     return state
 
@@ -2151,6 +2275,10 @@ def _create_successor_cycle(
     )
     model_override = dict(state.get("model_override") or {})
     config = _config_with_model_override(load_config(state_dir), model_override)
+    arena_disabled = state.get("arena_disabled") == "cli" or _repo_has_no_arena(
+        review_root
+    )
+    config = _config_without_arena(config, disabled=arena_disabled)
     selection = str(
         dict(state.get("selection") or {}).get("requested")
         or _configured_selection(config)
@@ -2191,6 +2319,10 @@ def _create_successor_cycle(
             raise ValueError("review cycle already has a different successor brief")
         return _copy_runtime_options(existing, state), True
     replacement = _copy_runtime_options(replacement, state)
+    if arena_disabled:
+        replacement["arena_disabled"] = (
+            "cli" if state.get("arena_disabled") == "cli" else "repository"
+        )
     _record_model_override(replacement, model_override)
     replacement["restart"].update(
         {
@@ -2910,6 +3042,9 @@ def main() -> int:
     parser = build_parser()
     try:
         args = parser.parse_args()
+        arena_configuration = _configure_repo_arena(args)
+        if arena_configuration is not None:
+            return arena_configuration
         state_dir = Path(default_state_dir()).resolve(strict=False)
         has_validation_status = _has_validation_status(args)
         has_restart_brief = args.restart_brief is not None
@@ -2949,6 +3084,7 @@ def main() -> int:
                 or args.review_brief
                 or args.model
                 or args.reasoning
+                or args.no_arena
                 or args.show_findings
                 or args.show_status
             ):

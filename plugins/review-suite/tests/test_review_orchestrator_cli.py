@@ -436,6 +436,109 @@ def test_profile_resolution_serializes_configured_arena_pool(tmp_path: Path) -> 
     assert len(arena_step["variant_ids"]) == 19
 
 
+def _enable_arena(state_dir: Path) -> None:
+    state_dir.mkdir(parents=True)
+    (state_dir / "settings.toml").write_text(
+        "[arena]\nenabled = true\n"
+        "[orchestrator.stable_defaults]\nnormal_arena_loops = 1\n",
+        encoding="utf-8",
+    )
+
+
+def test_repo_no_arena_preference_handles_spaces_and_can_be_cleared(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo with spaces"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _enable_arena(state_dir)
+
+    _, configured = _run_review(monkeypatch, ["--set-no-arena", "--cd", str(repo)])
+    assert configured["arena"] == "disabled"
+    assert (
+        _git(
+            repo,
+            "config",
+            "--local",
+            "--type=bool",
+            "--get",
+            review.REPO_NO_ARENA_CONFIG,
+        )
+        == "true"
+    )
+
+    review_calls = _stub_review(monkeypatch)
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--skip-deslop",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    state = _cycle_payload(state_dir, str(created["review"]))
+    assert all(step["kind"] != "arena" for step in state["review_plan"]["steps"])
+    assert len(review_calls) == 1
+
+    _, cleared = _run_review(monkeypatch, ["--clear-no-arena", "--cd", str(repo)])
+    assert cleared["arena"] == "global-default"
+    assert not review._repo_has_no_arena(repo)
+
+    _, restarted = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            str(created["review"]),
+            "--restart-mode",
+            "deep",
+            "--reason",
+            "exercise cleared Arena preference",
+        ],
+    )
+    successor = _cycle_payload(state_dir, str(restarted["review"]))
+    assert any(step["kind"] == "arena" for step in successor["review_plan"]["steps"])
+
+
+def test_no_arena_skips_arena_for_one_cycle_without_setting_repo_preference(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _enable_arena(state_dir)
+    review_calls = _stub_review(monkeypatch)
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--skip-deslop",
+            "--no-arena",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    state = _cycle_payload(state_dir, str(created["review"]))
+    assert all(step["kind"] != "arena" for step in state["review_plan"]["steps"])
+    assert state["arena_disabled"] == "cli"
+    assert len(review_calls) == 1
+    assert not review._repo_has_no_arena(repo)
+
+
 def test_model_override_prefixes_provider_model_and_defaults_reasoning(
     tmp_path: Path,
 ) -> None:

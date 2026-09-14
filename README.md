@@ -37,6 +37,18 @@ Omitting `--mode` creates a `normal` review. Pass `--mode fast` or `--mode deep`
 only when the risk warrants it. Review Suite detects the remote default branch;
 use `--base <ref>` only to override it explicitly.
 
+Keep Arena enabled globally while skipping it for one new review with
+`--no-arena`. To persist that choice for a repository without changing tracked
+files, set or clear its local preference:
+
+```powershell
+<python> <plugin-root>/scripts/review.py --set-no-arena --cd <repo-root>
+<python> <plugin-root>/scripts/review.py --clear-no-arena --cd <repo-root>
+```
+
+The preference applies to future review cycles. Existing cycles keep their
+frozen plan.
+
 The first call creates or reconnects a review and prints an `Action`. Run its
 `cmd`, or classify the review output and run exactly one matching `choices`
 command. After a review id exists, the normal continuation is:
