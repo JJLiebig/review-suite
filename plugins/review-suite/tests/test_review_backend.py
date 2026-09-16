@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -74,6 +75,79 @@ def test_opencode_review_env_is_read_only(monkeypatch: pytest.MonkeyPatch) -> No
     assert permission["glob"] == "allow"
     assert permission["grep"] == "allow"
     assert env["OPENCODE_DISABLE_AUTOUPDATE"] == "true"
+
+
+@pytest.mark.parametrize(
+    ("npm", "expected"),
+    [
+        ("@ai-sdk/openai-compatible", {"max_tokens": 131072}),
+        ("@ai-sdk/anthropic", {"max_tokens": 131072}),
+        ("@ai-sdk/openai", {"max_output_tokens": 131072}),
+        ("@ai-sdk/google", {"generationConfig": {"maxOutputTokens": 131072}}),
+    ],
+)
+def test_launch_scopes_advertised_output_maximum_to_review_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    npm: str,
+    expected: dict,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", "unchanged-parent-config")
+    catalog = tmp_path / "opencode" / "models.json"
+    catalog.parent.mkdir()
+    original = json.dumps(
+        {
+            "opencode-go": {
+                "npm": "unused-default",
+                "models": {
+                    "glm-5.3-flash": {
+                        "provider": {"npm": npm},
+                        "limit": {"output": 131072},
+                    },
+                    "other-model": {"limit": {"output": 100}},
+                },
+            }
+        }
+    )
+    catalog.write_text(original, encoding="utf-8")
+    launch = prepare_opencode_review_launch(
+        tool_name="review-suite",
+        model="opencode-go/glm-5.3-flash",
+        reasoning_effort="low",
+        title="test",
+        review_root=tmp_path,
+        base="main",
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+    config = json.loads(launch.env["OPENCODE_CONFIG_CONTENT"])
+    assert config["providers"] == {
+        "opencode-go": {
+            "models": {
+                "glm-5.3-flash": {"body": expected},
+            }
+        }
+    }
+    assert launch.command[launch.command.index("--variant") + 1] == "low"
+    assert config["agent"][OPENCODE_REVIEW_AGENT]["permission"]["edit"] == "deny"
+    assert (
+        opencode_review_env()["OPENCODE_CONFIG_CONTENT"]
+        != launch.env["OPENCODE_CONFIG_CONTENT"]
+    )
+    assert catalog.read_text(encoding="utf-8") == original
+    assert os.environ["OPENCODE_CONFIG_CONTENT"] == "unchanged-parent-config"
+
+
+def test_unavailable_output_catalogue_warns_without_inventing_a_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    with pytest.warns(UserWarning, match="using the provider default"):
+        config = json.loads(
+            opencode_review_env("opencode-go/glm-5.3-flash")["OPENCODE_CONFIG_CONTENT"]
+        )
+    assert config["providers"] == {}
 
 
 def test_opencode_prompt_preserves_review_suite_contract() -> None:

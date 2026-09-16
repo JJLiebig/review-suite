@@ -27,6 +27,7 @@ The backend deliberately shares the existing Review Suite review prompt, target 
 OpenCode is launched through a small adapter with a Review Suite-owned primary review agent. The adapter:
 
 - runs `opencode run --standalone` non-interactively in the review checkout;
+- requests the selected model's advertised maximum output from OpenCode's local `models.json` catalogue (`$XDG_CACHE_HOME/opencode`, default `~/.cache/opencode`), through subprocess-only configuration; ordinary OpenCode sessions and reasoning settings are unchanged. If the catalogue or a supported model adapter is unavailable, it warns and leaves the provider default in place;
 - injects a review system prompt that mirrors Codex review's actionable-defect criteria while leaving Review Suite's output contract authoritative;
 - denies shell, edits, subagents/tasks, web access, skills, questions, and external-directory access;
 - allows only repository read/search/LSP tools;

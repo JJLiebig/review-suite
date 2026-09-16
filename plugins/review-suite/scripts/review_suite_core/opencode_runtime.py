@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import warnings
 from pathlib import Path
 
 from .lens_runtime import (
@@ -107,11 +108,42 @@ def _allow_gitless_review_config() -> dict[str, object]:
     }
 
 
-def opencode_review_env() -> dict[str, str]:
+def _opencode_output_config(model: str) -> dict[str, object]:
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    try:
+        catalog = json.loads(
+            (cache / "opencode" / "models.json").read_text(encoding="utf-8")
+        )
+        provider_id, model_id = model.split("/", 1)
+        provider = catalog[provider_id]
+        info = provider["models"][model_id]
+        maximum = info["limit"]["output"]
+        npm = info.get("provider", {}).get("npm") or provider.get("npm")
+        if not isinstance(maximum, int) or maximum <= 0:
+            raise ValueError("no advertised output maximum")
+        if npm in {"@ai-sdk/openai-compatible", "@ai-sdk/anthropic"}:
+            body = {"max_tokens": maximum}
+        elif npm == "@ai-sdk/openai":
+            body = {"max_output_tokens": maximum}
+        elif npm == "@ai-sdk/google":
+            body = {"generationConfig": {"maxOutputTokens": maximum}}
+        else:
+            raise ValueError(f"unsupported model adapter: {npm}")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        warnings.warn(
+            f"Cannot determine the output maximum for {model}; using the provider default ({exc}).",
+            stacklevel=2,
+        )
+        return {}
+    return {provider_id: {"models": {model_id: {"body": body}}}}
+
+
+def opencode_review_env(model: str = "") -> dict[str, str]:
     env = os.environ.copy()
-    env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
-        _allow_gitless_review_config(), separators=(",", ":")
-    )
+    config = _allow_gitless_review_config()
+    if model:
+        config["providers"] = _opencode_output_config(model)
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config, separators=(",", ":"))
     env["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
     env["PYTHONIOENCODING"] = "utf-8"
     return env
@@ -228,6 +260,6 @@ def prepare_opencode_review_launch(
         stdin_text=stdin_text,
         final_message_path=None,
         cwd=review_root.resolve(),
-        env=opencode_review_env(),
+        env=opencode_review_env(model_name),
         effective_reasoning_effort=variant or "provider-default",
     )
