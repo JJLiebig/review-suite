@@ -17,6 +17,7 @@ from review_suite_core.config import default_state_dir
 from review_suite_core.orchestrator_profiles import MODE_STRICTNESS_ORDER
 from review_suite_core.orchestrator_state import (
     HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
+    FIX_REVIEW_POLICY,
     convergence_summary,
     green_review_head_change_summary,
     review_ladder_summary,
@@ -563,14 +564,19 @@ def _orchestrator_action(
                     "note": "Classify the reviewer output, then record clean or findings.",
                 }
     elif stage == "fix-pending":
-        note = "Commit/amend valid fixes, then rerun this command."
+        note = FIX_REVIEW_POLICY
         if str(state.get("review_brief") or "").strip():
             note += (
                 " If a finding conflicts with the frozen contract, rerun this review "
                 "id with --contract-conflict <dimension> instead."
             )
         action = {
-            "cmd": _review_command(public_id),
+            "choices": {
+                "fixes_validated": _review_command(
+                    public_id, extra=("--fixes-validated", "ELIGIBILITY_AND_VALIDATION")
+                ),
+                "repeat_review": _review_command(public_id),
+            },
             "note": note,
         }
     elif stage in {"review-green", "local-green-handoff"}:

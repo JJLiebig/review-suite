@@ -64,6 +64,14 @@ NO_WORK_STAGES = {
     STAGE_RUNNING,
 }
 CLI_VALIDATION_STATUSES = ("passed", "failed", "pending", "waived")
+FIXES_VALIDATED_NOTE = "Fixed and validated; no repeat review required."
+FIX_REVIEW_POLICY = (
+    "After fixing accepted findings, run relevant validation. Do not rerun review when every fix is either "
+    "docs/test-only, preserving intended behavior and test coverage, or a low-blast-radius P2 or lower, "
+    "outside high-stakes or business-critical behavior such as security, billing, data integrity, or concurrency. "
+    "Otherwise, rerun on the same review id. Do not rerun solely for a clean verdict, a changed commit hash, "
+    "or extra confidence. Commit/amend fixes before recording completion or repeating review."
+)
 VALIDATION_STATUSES = {"unknown", *CLI_VALIDATION_STATUSES}
 VALIDATION_READY_STATUSES = {"passed", "waived"}
 HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER = "head_changed_after_review"
@@ -1565,6 +1573,59 @@ def _active_findings(state: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(active, dict):
         raise ValueError("no active findings are waiting for a transition")
     return active
+
+
+def record_fixes_validated(
+    state: dict[str, Any], *, head: str, note: str
+) -> dict[str, Any]:
+    """Close accepted findings by caller validation without inventing a reviewer verdict."""
+    if state.get("stage") != STAGE_FIX_PENDING:
+        raise ValueError("--fixes-validated requires accepted findings awaiting fixes")
+    next_state = _copy_state(state)
+    active = _active_findings(next_state)
+    note = _required_text(note, field="fix eligibility and validation note")
+    resolution = {
+        "source_round_id": active["round_id"],
+        "findings_head": active["reviewed_head"],
+        "head": head,
+        "note": note,
+    }
+    next_state.setdefault("validated_fixes", []).append(resolution)
+    next_state["active_findings"] = None
+    next_state["validation"] = {
+        "focused": "passed",
+        "full_suite": "unknown",
+        "ci": "unknown",
+        "review_green": "unknown",
+    }
+    next_state.setdefault("review_heads", {}).update(
+        last_fix_head=head,
+        last_reviewed_head=head,
+    )
+    _convergence(next_state).pop("continue_pending", None)
+    profile_round_id = _profile_round_id_for_findings(next_state, active)
+    if profile_round_id:
+        profile = _profile_step_for_round(next_state, profile_round_id)
+        if profile:
+            _complete_profile_step_from_metadata(
+                next_state,
+                profile_step=profile,
+                round_id=profile_round_id,
+                lane=profile["lane"],
+                reviewed_head=active["reviewed_head"],
+            )
+    if active.get("lane") == "review-github":
+        next_state["github_review"] = {
+            "status": GITHUB_RESULT_WAIVED,
+            "reviewed_head": head,
+            "note": f"{FIXES_VALIDATED_NOTE} {note}",
+        }
+    if review_profile_has_next_step(next_state):
+        _set_stage(next_state, STAGE_CREATED, _next_profile_step_action(next_state))
+    else:
+        _set_review_green(next_state, "passed")
+        _set_stage(next_state, STAGE_REVIEW_GREEN)
+    return next_state
 
 
 def mark_fix_detected(

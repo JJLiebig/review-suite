@@ -18,5 +18,5 @@ Rules:
 - Wait for wrapper output; do not post another request.
 - Code only valid findings.
 - Record the GitHub result on the owning local review id: `review.py --id <id> --github-result clean|findings`, or `--github-result waived --github-note "why"` when GitHub cannot run or no-GitHub is approved.
-- After `--github-result findings`, fix the issue and follow the emitted `review.py --id <id>` actions; the same id reruns final local signoff before GitHub is requested again.
+- After `--github-result findings`, fix the issue and follow the emitted actions. Apply the [no-repeat criteria](../review/SKILL.md): eligible fixes close with `--fixes-validated "<eligibility and validation passed>"` without another local or GitHub review; otherwise the same id reruns local signoff before GitHub is requested again.
 - Do not call the PR final/merge-ready until full-suite/CI is passed or explicitly waived with a reason.

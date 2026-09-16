@@ -90,7 +90,9 @@ def render(config: dict) -> str:
         [
             "```",
             "",
-            "Reviewers report findings; fixes are reviewed before advancing. In normal/deep modes, cleanup "
+            "Reviewers report findings; fixes require relevant validation. "
+            "Eligible docs/test-only or low-risk P2-or-lower fixes do not repeat review "
+            "(see [review strategy](review-strategy.md)). In normal/deep modes, cleanup "
             "runs once before final signoff and does not repeat after later fixes. "
             "Required validation must pass before completion. "
             "GitHub review uses its service-selected model.",

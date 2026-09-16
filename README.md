@@ -20,9 +20,9 @@ codex plugin marketplace upgrade review-suite
 
 | Mode | Use it for | Local review |
 | --- | --- | --- |
-| `fast` | UI-only, local presentation, and other small, well-tested changes | Dual normal-model signoff until green; no cleanup or GitHub review; at most two local rounds |
-| `normal` | Everything else | Optional Arena rounds, one cleanup pass, dual normal-model signoff until green, then GitHub review |
-| `deep` | Billing, login/auth, security, business-critical systems, database integrity/migrations, concurrency, and similarly critical logic | Dual normal-model signoff until green, optional Arena rounds, one cleanup pass, dual deep-model signoff until green, then GitHub review |
+| `fast` | UI-only, local presentation, and other small, well-tested changes | Dual normal-model signoff with risk-based fix verification; no cleanup or GitHub review; at most two local rounds |
+| `normal` | Everything else | Optional Arena rounds, one cleanup pass, dual normal-model signoff with risk-based fix verification, then GitHub review |
+| `deep` | Billing, login/auth, security, business-critical systems, database integrity/migrations, concurrency, and similarly critical logic | Dual normal-model signoff with risk-based fix verification, optional Arena rounds, one cleanup pass, dual deep-model signoff with risk-based fix verification, then GitHub review |
 
 These are risk heuristics, not permission to downgrade a UI-looking change that
 crosses a trust or data-integrity boundary.

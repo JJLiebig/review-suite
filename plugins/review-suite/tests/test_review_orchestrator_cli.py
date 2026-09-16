@@ -1941,12 +1941,8 @@ def test_id_auto_records_structured_findings_before_fix_loop(
     )
 
     assert exit_code == 0
-    assert (
-        findings["Action"]["note"]
-        == "Commit/amend valid fixes, then rerun this command. If a finding "
-        "conflicts with the frozen contract, rerun this review id with "
-        "--contract-conflict <dimension> instead."
-    )
+    assert "--contract-conflict <dimension>" in findings["Action"]["note"]
+    assert "--fixes-validated" in str(findings["Action"]["choices"])
     state = _cycle_payload(state_dir, public_id)
     assert state["decisions"][0]["command"] == "findings"
     assert state["active_findings"]["status"] == "fix-pending"
@@ -4024,10 +4020,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
 
     assert exit_code == 0
     assert github_findings["github_review"] == "findings"
-    assert (
-        github_findings["Action"]["note"]
-        == "Commit/amend valid fixes, then rerun this command."
-    )
+    assert "--fixes-validated" in str(github_findings["Action"]["choices"])
     state = _cycle_payload(state_dir, public_id)
     assert state["active_findings"]["lane"] == "review-github"
     assert state["active_findings"]["profile_round_id"] == "signoff-round-1"
@@ -5104,10 +5097,7 @@ def test_id_rerun_after_pending_decision_equivalent_base_drift_updates_reviewed_
         monkeypatch,
         ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
     )
-    assert (
-        findings["Action"]["note"]
-        == "Commit/amend valid fixes, then rerun this command."
-    )
+    assert "--fixes-validated" in str(findings["Action"]["choices"])
     state = _cycle_payload(state_dir, public_id)
     assert state["active_findings"]["reviewed_head"] == rebased_head
     assert state["decisions"][0]["reviewed_head"] == rebased_head
@@ -5193,9 +5183,11 @@ def test_id_rerun_after_findings_fix_allows_non_overlapping_merge_base_drift(
     }
 
 
-def test_id_rerun_after_findings_fix_allows_overlapping_base_drift(
+@pytest.mark.parametrize("repeat_review", [True, False])
+def test_id_findings_fix_allows_overlapping_base_drift(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    repeat_review: bool,
 ) -> None:
     _stub_deslop(monkeypatch)
     review_calls = _stub_review(
@@ -5240,10 +5232,25 @@ def test_id_rerun_after_findings_fix_allows_overlapping_base_drift(
         monkeypatch,
         ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
     )
-    assert (
-        findings["Action"]["note"]
-        == "Commit/amend valid fixes, then rerun this command."
-    )
+    assert "--fixes-validated" in str(findings["Action"]["choices"])
+
+    if not repeat_review:
+        code, _ = _run_review(
+            monkeypatch,
+            [
+                "--id",
+                public_id,
+                "--fixes-validated",
+                "Local P2 outside critical behavior; focused validation passed",
+            ],
+        )
+        assert code == 0
+        state = _cycle_payload(state_dir, public_id)
+        assert len(review_calls) == 1
+        assert state["identity"]["head"] == fixed_head
+        assert state["validated_fixes"][-1]["findings_head"] == reviewed_head
+        assert state["active_findings"] is None
+        return
 
     exit_code, verification = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
@@ -5265,6 +5272,114 @@ def test_id_rerun_after_findings_fix_allows_overlapping_base_drift(
     assert state["rounds"][0]["reviewed_head"] == reviewed_head
     assert state["rounds"][1]["reviewed_head"] == fixed_head
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+
+
+@pytest.mark.parametrize(
+    "mode,github,remaining",
+    [
+        ("fast", False, False),
+        ("normal", True, False),
+        ("deep", False, True),
+    ],
+)
+def test_validated_fixes_preserve_findings_and_remaining_gates_without_review(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mode: str,
+    github: bool,
+    remaining: bool,
+) -> None:
+    def emit_error(message: str, **kwargs: object) -> int:
+        review.emit_toon({"error": message})
+        return 2
+
+    monkeypatch.setattr(review, "emit_error", emit_error)
+    calls = _stub_review_with_terminal(monkeypatch, "clean" if github else "findings")
+    state_dir = tmp_path / "state"
+    config = deepcopy(review.load_config(state_dir))
+    steps = [
+        {
+            "name": "precision-signoff",
+            "count": 2,
+            "model_ref": "signoff_normal_model",
+            "rerun_on_findings": True,
+        }
+    ]
+    if remaining:
+        steps.append(
+            {"name": "final-signoff", "count": 2, "model_ref": "signoff_deep_model"}
+        )
+    config["orchestrator"]["profiles"]["stable"][mode]["steps"] = steps
+    monkeypatch.setattr(review, "load_config", lambda _: config)
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature")
+    findings_head = _commit_file(repo, "app.txt", "feature\n", "feature")
+    _, opened = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            mode,
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--skip-deslop",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(opened["review"])
+    if github:
+        _run_review(monkeypatch, ["--id", public_id, "--github-result", "findings"])
+    before = _cycle_payload(state_dir, public_id)
+    assert before["stage"] == "fix-pending"
+
+    # No committed fix, empty commits, dirty fixes and a different branch cannot close findings.
+    def close() -> tuple[int, dict[str, object]]:
+        return _run_review(
+            monkeypatch,
+            [
+                "--id",
+                public_id,
+                "--fixes-validated",
+                "Docs/test-only; relevant checks passed",
+            ],
+        )
+
+    assert close()[0] == 2
+    _git(repo, "commit", "--allow-empty", "-m", "empty")
+    assert close()[0] == 2
+    (repo / "app.txt").write_text("fixed\n")
+    assert close()[0] == 2
+    fix_head = _commit_file(repo, "app.txt", "fixed\n", "fix")
+    _git(repo, "checkout", "-b", "other")
+    assert close()[0] == 2
+    _git(repo, "checkout", "feature")
+    code, closed = close()
+    assert code == 0
+    assert len(calls) == 1
+    state = _cycle_payload(state_dir, public_id)
+    assert state["rounds"] == before["rounds"]
+    assert state["decisions"] == before["decisions"]
+    assert state["validated_fixes"][-1]["findings_head"] == findings_head
+    assert state["validated_fixes"][-1]["head"] == fix_head
+    assert state["active_findings"] is None
+    assert state["validation"]["focused"] == "passed"
+    assert state["validation"]["full_suite"] == "unknown"
+    assert state["validation"]["ci"] == "unknown"
+    assert state["stage"] == ("created" if remaining else "review-green")
+    if remaining:
+        assert state["pending_action"]["step_index"] == 1
+    elif github:
+        assert state["github_review"]["status"] == "waived"
+        assert closed["next_action"] == "validation"
+    else:
+        assert closed["next_action"] == "none"
+    _, status = _run_review(monkeypatch, ["--id", public_id, "--show-status"])
+    assert status["review_ladder"] != "invalidated"
+    assert len(calls) == 1
 
 
 def test_clean_followup_note_does_not_leak_to_later_review_steps(
@@ -5390,10 +5505,7 @@ def test_followup_findings_loops_back_to_fix_pending(
 
     assert exit_code == 0
     assert "stage" not in findings
-    assert (
-        findings["Action"]["note"]
-        == "Commit/amend valid fixes, then rerun this command."
-    )
+    assert "--fixes-validated" in str(findings["Action"]["choices"])
     state = _cycle_payload(state_dir, public_id)
     assert state["active_findings"]["round_id"] == "followup-round-1"
     assert state["active_findings"]["lane"] == "review-followup"
@@ -5590,10 +5702,7 @@ def test_fast_manual_github_findings_keeps_re_review_action(
     )
     assert exit_code == 0
     assert github_findings["github_review"] == "findings"
-    assert (
-        github_findings["Action"]["note"]
-        == "Commit/amend valid fixes, then rerun this command."
-    )
+    assert "--fixes-validated" in str(github_findings["Action"]["choices"])
 
     _commit_file(repo, "app.txt", "feature\nfixed\n", "fix github finding")
     _, signoff = _run_review_after_cleanup(

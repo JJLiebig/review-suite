@@ -35,7 +35,12 @@ Rules:
 - Without an id, use `review.py --status --cd <repo-root>` for branch routing.
 - The default base is the repository's remote default branch. Use `--base <ref>` only as an explicit override.
 - Resume with `review.py --id <id>` without creation flags. Use `--decision clean|findings` only when auto-advance cannot classify the verdict or the caller intentionally disagrees.
-- Verify findings against the diff/repo before fixing them, then run the emitted `review.py --id <id>`.
+- Verify findings against the diff/repo before fixing them.
+- After fixing accepted findings, run relevant validation. **Do not rerun review** when every fix is either:
+  1. Docs/test-only, preserving intended behavior and test coverage.
+  2. A low-blast-radius P2 or lower, outside high-stakes or business-critical behavior such as security, billing, data integrity, or concurrency.
+- Otherwise, rerun on the same review id. Do not rerun solely for a clean verdict, a changed commit hash, or extra confidence. Report: **“Fixed and validated; no repeat review required.”**
+- For eligible fixes, commit/amend and run `review.py --id <id> --fixes-validated "<eligibility and validation passed>"`. This records caller validation, preserves the findings, and skips repeat review. Remaining scheduled steps and required validation still apply.
 - After GitHub review returns, record the result on the owning review id: `--github-result clean`, `--github-result findings`, or `--github-result waived --github-note "why"`. Do not start a new ladder for GitHub findings.
 - Do not call PR-final/merge-ready until required validation passes. Record full-suite/CI gates as passed or explicitly waived with a reason; follow the emitted validation commands.
 

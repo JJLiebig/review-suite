@@ -56,6 +56,8 @@ from review_suite_core.orchestrator_runner import run_one_expensive_step
 from review_suite_core.orchestrator_state import (
     DECISION_CLEAN,
     DECISION_FINDINGS,
+    FIX_REVIEW_POLICY,
+    FIXES_VALIDATED_NOTE,
     CONVERGENCE_DECISIONS,
     CONTRACT_CONFLICTS,
     GITHUB_RESULT_CLEAN,
@@ -84,6 +86,7 @@ from review_suite_core.orchestrator_state import (
     mark_latest_profile_step_rerun_needed,
     record_clean_decision,
     record_findings_decision,
+    record_fixes_validated,
     record_followup_clean,
     record_followup_findings,
     record_github_result,
@@ -186,6 +189,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional Markdown goal and constraints, frozen for this review cycle.",
     )
     parser.add_argument("--decision", choices=(DECISION_CLEAN, DECISION_FINDINGS))
+    parser.add_argument(
+        "--fixes-validated",
+        metavar="NOTE",
+        help="Close eligible fixes without repeat review; explain eligibility and validation passed.",
+    )
     parser.add_argument("--github-review", action="store_true")
     parser.add_argument("--github-force", action="store_true")
     parser.add_argument(
@@ -2904,14 +2912,22 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
         }
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage == STAGE_FIX_PENDING:
-        note = "Commit/amend valid fixes, then rerun this command."
+        note = FIX_REVIEW_POLICY
         if str(state.get("review_brief") or "").strip():
             note += (
                 " If a finding conflicts with the frozen contract, rerun this review "
                 "id with --contract-conflict <dimension> instead."
             )
         action = {
-            "cmd": _review_command(public_id, state_dir=state_dir),
+            "choices": {
+                "fixes_validated": _review_command(
+                    public_id,
+                    "--fixes-validated",
+                    "ELIGIBILITY_AND_VALIDATION",
+                    state_dir=state_dir,
+                ),
+                "repeat_review": _review_command(public_id, state_dir=state_dir),
+            },
             "note": note,
         }
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
@@ -2981,6 +2997,12 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
         payload["convergence"] = convergence
     if validation := _validation_summary(state):
         payload["validation"] = validation
+    if (
+        state.get("validated_fixes")
+        and state["validated_fixes"][-1]["head"] == _identity_head(state)
+        and not state.get("active_findings")
+    ):
+        payload["fix_resolution"] = FIXES_VALIDATED_NOTE
     emit_toon(payload)
 
 
@@ -3048,6 +3070,35 @@ def main() -> int:
         state_dir = Path(default_state_dir()).resolve(strict=False)
         has_validation_status = _has_validation_status(args)
         has_restart_brief = args.restart_brief is not None
+        if args.fixes_validated is not None:
+            if not args.id:
+                raise ValueError("--fixes-validated requires --id")
+            if not args.fixes_validated.strip():
+                raise ValueError(
+                    "--fixes-validated requires an eligibility and validation note"
+                )
+            if any(
+                (
+                    args.status,
+                    args.show_status,
+                    args.show_findings,
+                    args.decision,
+                    args.deslop_done,
+                    args.restart_mode,
+                    has_restart_brief,
+                    args.reason,
+                    args.github_review,
+                    args.github_force,
+                    args.github_result,
+                    args.github_note,
+                    args.contract_conflict,
+                    args.convergence_decision,
+                    has_validation_status,
+                )
+            ):
+                raise ValueError(
+                    "--fixes-validated cannot be combined with another id action"
+                )
         if args.json and not args.status:
             raise ValueError("--json requires --status")
         if args.json and args.verbose:
@@ -3234,6 +3285,41 @@ def main() -> int:
             state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
             state = _apply_runtime_options(state, args)
             _reject_id_creation_args(args, state)
+            if args.fixes_validated is not None:
+                identity = _current_cycle_identity_if_compatible(state)
+                if not identity and state.get("stage") == STAGE_FIX_PENDING:
+                    identity = _fix_pending_head_change_identity_if_compatible(state)
+                resolutions = state.get("validated_fixes") or []
+                if (
+                    identity
+                    and resolutions
+                    and resolutions[-1]["head"] == identity["head"]
+                ):
+                    _render(state, state_dir=state_dir)
+                    return 0
+                active = dict(state.get("active_findings") or {})
+                if not identity or not _is_material_fix_head(
+                    state,
+                    head=identity["head"],
+                    reviewed_head=str(active.get("reviewed_head") or ""),
+                ):
+                    raise ValueError(
+                        "--fixes-validated requires committed fixes on the clean review branch"
+                    )
+                state = _with_current_identity(
+                    state,
+                    head=identity["head"],
+                    merge_base_head=identity["merge_base"],
+                    base_drift=identity.get("base_drift"),
+                )
+                state = record_fixes_validated(
+                    state,
+                    head=identity["head"],
+                    note=args.fixes_validated,
+                )
+                saved = save_cycle(state_dir, state)
+                _render(saved, state_dir=state_dir)
+                return 0
             if args.show_findings:
                 return _show_findings(state, state_dir=state_dir)
             if args.show_status:

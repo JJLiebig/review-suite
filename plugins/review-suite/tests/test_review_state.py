@@ -652,7 +652,7 @@ def test_review_state_status_uses_bare_id_for_structured_verdict(
         {"stage": "fix-pending"}, "rvw_progress", state_dir=state_dir
     )
     assert "--contract-conflict <dimension>" in str(briefed_fix["note"])
-    assert briefless_fix["note"] == "Commit/amend valid fixes, then rerun this command."
+    assert "--fixes-validated" in str(briefless_fix["choices"])
 
 
 def test_review_state_status_surfaces_grade_before_structured_verdict(
