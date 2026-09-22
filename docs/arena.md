@@ -12,6 +12,13 @@ half a group, bootstrap rounds mix under-sampled and established candidates
 evenly. New candidates join the existing pool at 1500 Elo without resetting
 established ratings.
 
+The roster also prepares `gpt-6-sol`, `gpt-6-luna`, and `gpt-6-astra-minor`
+for launch. Their low/medium/high/xhigh/max efforts and review task assignments
+provisionally follow Sol, Luna, and Astra respectively; confirm provider support
+before enabling these candidates. Prices are unknown and omitted, so their
+costs remain unpriced. Existing model defaults and rating pool IDs are unchanged.
+Pinned user `variant_ids` overrides must include the new candidates to sample them.
+
 ## Configuration
 
 Arena is disabled by default and is not needed for ordinary reviews.

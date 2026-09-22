@@ -87,6 +87,19 @@ def test_price_from_usage_splits_cache_write_tokens() -> None:
     assert _price_from_usage("gpt-5.4-mini", usage) == pytest.approx(0.0001065)
 
 
+@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra-minor"])
+def test_prelaunch_usage_does_not_inherit_another_models_price(model: str) -> None:
+    from review_suite_local import compute_cost_usd, load_roster
+
+    usage = {"input_tokens": 100, "output_tokens": 10}
+    roster = load_roster(SCRIPT_DIR.parent / "references" / "roster.json")
+    variant = next(v for v in roster["variants"] if v["model"] == model)
+
+    assert compute_cost_usd(variant, usage) is None
+    assert _price_from_usage(model, usage) is None
+    assert review_costs._price_from_total_tokens(model, 110) is None
+
+
 def test_rollout_usage_line_preserves_cache_write_tokens() -> None:
     line = json.dumps(
         {
