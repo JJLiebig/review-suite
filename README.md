@@ -1,20 +1,48 @@
 # Review Suite
 
-Review Suite is a Codex plugin for stateful local review, fix verification,
-validation tracking, and optional GitHub review.
+Review Suite provides stateful local review, fix verification, validation
+tracking, and optional GitHub review. Install it as a Codex plugin or as an
+agent skill for Codex, Claude Code, and other agents supported by the skills CLI.
 
-## Install
+## Install with the Codex marketplace
 
 ```powershell
 codex plugin marketplace add JJLiebig/review-suite
 codex plugin add review-suite@review-suite
 ```
 
-Refresh an existing installation with:
+Update an existing marketplace installation with:
 
 ```powershell
 codex plugin marketplace upgrade review-suite
 ```
+
+## Install with the skills CLI
+
+From the project where you want the skill:
+
+```powershell
+npx skills add JJLiebig/review-suite
+```
+
+Choose an agent when prompted. Add `--global` to install for your user instead
+of one project. The CLI installs one `review-suite` skill containing the same
+four workflows and Python engine as the Codex plugin. To update it:
+
+```powershell
+npx skills update review-suite
+```
+
+For a global installation, use `npx skills update -g review-suite`.
+
+The calling agent can be Claude Code, Codex, or another skills CLI target.
+Review Suite still launches a separate review backend: the default is the
+authenticated Codex CLI. Plan review, simplification review, and follow-up
+review also call Codex CLI directly. Selected local review models can use an
+authenticated OpenCode CLI through [explicit configuration](docs/opencode.md).
+GitHub review additionally needs an authenticated `gh` CLI and access to the
+GitHub `@codex review` bot. Both installation choices need Python 3.14.6+ and
+Git at runtime; the skills CLI installation also needs Node.js/npm for `npx`.
 
 ## Review modes
 
@@ -32,6 +60,9 @@ crosses a trust or data-integrity boundary.
 ```powershell
 <python> <plugin-root>/scripts/review.py --cd <repo-root>
 ```
+
+Here `<plugin-root>` is the installed marketplace plugin root, or the
+`plugins/review-suite/` directory inside the installed `review-suite` skill.
 
 Omitting `--mode` creates a `normal` review. Pass `--mode fast` or `--mode deep`
 only when the risk warrants it. Review Suite detects the remote default branch;
@@ -180,8 +211,7 @@ Review history, ratings, and orchestration state stay under
 Maintainer documentation: [Arena configuration](docs/arena.md).
 
 
-Requirements: Python 3.14.6+, `uv`, Codex CLI, Git, and GitHub CLI for GitHub
-review.
+Development requires `uv` in addition to the runtime tools above.
 
 ```powershell
 uv sync
@@ -196,9 +226,10 @@ After source changes, sync the installed plugin cache and marketplace source:
 .\scripts\sync-installed-cache.ps1
 ```
 
-Installed launchers create content-addressed runtime copies under
+Marketplace launchers create content-addressed runtime copies under
 `~/.codex/plugin-runtimes/review-suite/` without writing launcher bytecode into
-the installed plugin cache. Run commands through the installed plugin cache by
-default. When reviewing Review Suite itself, use the current source checkout
-only if the user explicitly requests dogfooding unsynced source changes. Never
-use the temporary marketplace clone.
+the installed plugin cache. Run marketplace commands through that cache by
+default. Skills CLI installs run from their own skill directory. When reviewing
+Review Suite itself, use the current source checkout only if the user explicitly
+requests dogfooding unsynced source changes. Never use the temporary marketplace
+clone.
