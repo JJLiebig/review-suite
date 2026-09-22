@@ -13,8 +13,7 @@ evenly. New candidates join the existing pool at 1500 Elo without resetting
 established ratings.
 
 The roster includes `gpt-6-sol` and `gpt-6-luna` with the supported
-low/medium/high/xhigh/max efforts. Review task assignments follow Sol and Luna,
-including disabled Luna low. `gpt-6-astra-minor` remains disabled and excluded
+low/medium/high/xhigh/max efforts. Review task assignments follow Sol and Luna; all supported Luna efforts are active. `gpt-6-astra-minor` remains disabled and excluded
 from the pools until the model resolves; its efforts provisionally follow Astra.
 Sol and Luna rates follow the [launch announcement](https://openai.com/index/introducing-gpt-6-sol-and-luna/):
 $2/$10 and $0.10/$0.50 per million input/output tokens respectively.
