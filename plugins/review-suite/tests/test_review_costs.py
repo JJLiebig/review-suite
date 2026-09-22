@@ -87,10 +87,10 @@ def test_price_from_usage_splits_cache_write_tokens() -> None:
     assert _price_from_usage("gpt-5.4-mini", usage) == pytest.approx(0.0001065)
 
 
-@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra-minor"])
-def test_prelaunch_usage_does_not_inherit_another_models_price(model: str) -> None:
+def test_prelaunch_usage_does_not_inherit_another_models_price() -> None:
     from review_suite_local import compute_cost_usd, load_roster
 
+    model = "gpt-6-astra-minor"
     usage = {"input_tokens": 100, "output_tokens": 10}
     roster = load_roster(SCRIPT_DIR.parent / "references" / "roster.json")
     variant = next(v for v in roster["variants"] if v["model"] == model)
@@ -98,6 +98,24 @@ def test_prelaunch_usage_does_not_inherit_another_models_price(model: str) -> No
     assert compute_cost_usd(variant, usage) is None
     assert _price_from_usage(model, usage) is None
     assert review_costs._price_from_total_tokens(model, 110) is None
+
+
+@pytest.mark.parametrize(
+    "model,expected", [("gpt-6-sol", 0.000279), ("gpt-6-luna", 0.00001395)]
+)
+def test_gpt6_usage_prices_match_roster_and_ledger(model: str, expected: float) -> None:
+    from review_suite_local import compute_cost_usd, load_roster
+
+    usage = {
+        "input_tokens": 100,
+        "cached_input_tokens": 20,
+        "cache_write_tokens": 30,
+        "output_tokens": 10,
+    }
+    roster = load_roster(SCRIPT_DIR.parent / "references" / "roster.json")
+    variant = next(v for v in roster["variants"] if v["model"] == model)
+    assert compute_cost_usd(variant, usage) == pytest.approx(expected)
+    assert _price_from_usage(model, usage) == pytest.approx(expected)
 
 
 def test_rollout_usage_line_preserves_cache_write_tokens() -> None:
