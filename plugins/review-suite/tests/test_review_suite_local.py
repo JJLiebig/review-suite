@@ -3165,7 +3165,13 @@ def test_build_reroll_slot_payload_pins_top_acting_champion(
     assert payload["selection_fallback_reason"] == "champion_pool_unavailable"
 
 
-def test_configured_reroll_preserves_four_model_cohort() -> None:
+@pytest.mark.parametrize(
+    "block_reason",
+    ["selected_model_at_capacity", "missing_reviewer_output", "opencode_review_failed"],
+)
+def test_configured_reroll_preserves_four_model_cohort_without_cooldown(
+    block_reason: str,
+) -> None:
     variants = [_variant(name) for name in ("a", "b", "c", "d")]
     runs = [
         {
@@ -3177,9 +3183,7 @@ def test_configured_reroll_preserves_four_model_cohort() -> None:
             if slot == "charlie"
             else "completed",
             "grade_blocked": slot == "charlie",
-            "grade_block_reason": "selected_model_at_capacity"
-            if slot == "charlie"
-            else None,
+            "grade_block_reason": block_reason if slot == "charlie" else None,
             "reviewer_output": "" if slot == "charlie" else "No findings.",
         }
         for slot, variant in zip(("alpha", "bravo", "charlie", "delta"), variants)
@@ -3211,7 +3215,11 @@ def test_configured_reroll_preserves_four_model_cohort() -> None:
     assert payload["rating_pool_id"] == "fresh-pool"
 
 
-def test_configured_reroll_replaces_timed_out_variant() -> None:
+@pytest.mark.parametrize(
+    "block_reason",
+    ["review_timed_out", "missing_reviewer_output", "opencode_review_failed"],
+)
+def test_configured_reroll_replaces_cooling_variant(block_reason: str) -> None:
     variants = [_variant(name) for name in ("a", "b", "c", "d", "e")]
     outsider = _variant("f")
     previously_excluded = _variant("g")
@@ -3223,7 +3231,7 @@ def test_configured_reroll_replaces_timed_out_variant() -> None:
             "reasoning_effort": variant["reasoning_effort"],
             "review_status": "timeout" if slot == "charlie" else "completed",
             "grade_blocked": slot == "charlie",
-            "grade_block_reason": "review_timed_out" if slot == "charlie" else None,
+            "grade_block_reason": block_reason if slot == "charlie" else None,
             "reviewer_output": "" if slot == "charlie" else "No findings.",
         }
         for slot, variant in zip(("alpha", "bravo", "charlie", "delta"), variants)
