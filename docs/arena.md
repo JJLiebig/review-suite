@@ -12,11 +12,12 @@ half a group, bootstrap rounds mix under-sampled and established candidates
 evenly. New candidates join the existing pool at 1500 Elo without resetting
 established ratings.
 
-The roster also prepares `gpt-6-sol`, `gpt-6-luna`, and `gpt-6-astra-minor`
-for launch. Their low/medium/high/xhigh/max efforts and review task assignments
-provisionally follow Sol, Luna, and Astra respectively, including disabled Luna low;
-confirm provider support before enabling these candidates. Prices are unknown and omitted, so their
-costs remain unpriced. Existing model defaults and rating pool IDs are unchanged.
+The roster includes `gpt-6-sol` and `gpt-6-luna` with the supported
+low/medium/high/xhigh/max efforts. Review task assignments follow Sol and Luna,
+including disabled Luna low. `gpt-6-astra-minor` remains disabled and excluded
+from the pools until the model resolves; its efforts provisionally follow Astra.
+Prices are unknown and omitted, so costs remain unpriced.
+Existing model defaults and rating pool IDs are unchanged.
 Pinned user `variant_ids` overrides must include the new candidates to sample them.
 
 ## Configuration

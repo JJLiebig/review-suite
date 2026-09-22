@@ -509,7 +509,7 @@
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "low",
       "task_classes": ["phase_review", "pr_review"],
-      "state": "active",
+      "state": "disabled",
       "bootstrap_target_samples": 10
     },
     {
@@ -517,7 +517,7 @@
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "medium",
       "task_classes": ["phase_review", "pr_review"],
-      "state": "active",
+      "state": "disabled",
       "bootstrap_target_samples": 10
     },
     {
@@ -525,7 +525,7 @@
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "high",
       "task_classes": ["pr_review"],
-      "state": "active",
+      "state": "disabled",
       "bootstrap_target_samples": 10
     },
     {
@@ -533,7 +533,7 @@
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "xhigh",
       "task_classes": ["pr_review"],
-      "state": "active",
+      "state": "disabled",
       "bootstrap_target_samples": 10
     },
     {
@@ -541,7 +541,7 @@
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "max",
       "task_classes": ["pr_review"],
-      "state": "active",
+      "state": "disabled",
       "bootstrap_target_samples": 10
     }
   ]
