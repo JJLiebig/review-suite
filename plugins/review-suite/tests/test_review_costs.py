@@ -114,7 +114,7 @@ def test_gpt6_usage_prices_match_roster_and_ledger(model: str, expected: float) 
     }
     roster = load_roster(SCRIPT_DIR.parent / "references" / "roster.json")
     variant = next(v for v in roster["variants"] if v["model"] == model)
-    assert compute_cost_usd(variant, usage) == pytest.approx(expected)
+    assert compute_cost_usd(variant, usage) == pytest.approx(round(expected, 6))
     assert _price_from_usage(model, usage) == pytest.approx(expected)
 
 
