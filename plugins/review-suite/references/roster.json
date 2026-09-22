@@ -473,7 +473,7 @@
       "id": "gpt-6-luna-low",
       "model": "gpt-6-luna",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["phase_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.1, "cached_input_per_million_usd": 0.01, "cache_write_input_per_million_usd": 0.125, "output_per_million_usd": 0.5 }
