@@ -614,8 +614,9 @@ def test_driver_stdio_roundtrips_unicode(monkeypatch) -> None:
     assert proc.stdout == text
 
 
-def test_driver_main_emits_error_class_metadata_on_provider_failure(
-    monkeypatch, tmp_path: Path, capsys
+@pytest.mark.parametrize("recovered_output", [False, True])
+def test_driver_main_preserves_recovered_output_or_reports_provider_failure(
+    monkeypatch, tmp_path: Path, capsys, recovered_output: bool
 ) -> None:
     error_event = json.dumps(
         {
@@ -630,6 +631,24 @@ def test_driver_main_emits_error_class_metadata_on_provider_failure(
 
     def fake_run(command, *args, **kwargs):
         if command[:3] == ["opencode", "session", "export"]:
+            if recovered_output:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "messages": [
+                                {
+                                    "type": "assistant",
+                                    "finish": "stop",
+                                    "content": [
+                                        {"type": "text", "text": "Review result: clean"}
+                                    ],
+                                }
+                            ]
+                        }
+                    ),
+                )
             return subprocess.CompletedProcess(command, 1, "")
         return subprocess.CompletedProcess(command, 1, error_event)
 
@@ -655,10 +674,12 @@ def test_driver_main_emits_error_class_metadata_on_provider_failure(
         ],
     )
 
-    assert opencode_driver_module.main() == 1
+    assert opencode_driver_module.main() == (0 if recovered_output else 1)
 
-    metadata = parse_opencode_review_metadata(capsys.readouterr().err)
-    assert metadata["error_class"] == "capacity"
+    captured = capsys.readouterr()
+    assert captured.out == ("Review result: clean\n" if recovered_output else "")
+    metadata = parse_opencode_review_metadata(captured.err)
+    assert metadata.get("error_class") == (None if recovered_output else "capacity")
     assert metadata["error_name"] == "ProviderError"
     assert metadata["error_message"] == "429 Too Many Requests"
 

@@ -2935,7 +2935,12 @@ def build_reroll_slot_payload(
             "reasoning_effort": replacement_source["reasoning_effort"],
         }
         excluded_variant_ids = set(prior_excluded_variant_ids)
-        if unsupported_variant_ids or block_reason == "review_timed_out":
+        cooling = _active_cooldowns(operational_state, str(round_payload["task_class"]))
+        if (
+            unsupported_variant_ids
+            or block_reason == "review_timed_out"
+            or str(replacement_source["variant_id"]) in cooling
+        ):
             rating_pool_variant_ids = {
                 str(variant_id)
                 for variant_id in round_payload.get("rating_pool_variant_ids", [])

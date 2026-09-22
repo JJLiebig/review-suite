@@ -546,7 +546,7 @@ def main() -> int:
                     error_message=error_message or None,
                 )
             )
-        if proc.returncode != 0:
+        if proc.returncode != 0 and not reviewer_output:
             if proc.stdout:
                 print(f"[opencode stdout]\n{_truncate(proc.stdout)}", file=sys.stderr)
             return proc.returncode
