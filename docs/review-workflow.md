@@ -12,7 +12,7 @@ Review Normal:
 Optional Arena (26 variants / 13 loops) -> Cleanup once (Astra medium) -> Final signoff (2x Astra medium) -> GitHub review -> Done
 
 Review Deep:
-Review (2x Astra medium) -> Optional Arena (33 variants / 13 loops) -> Cleanup once (Astra medium) -> Final signoff (2x Astra xhigh) -> GitHub review -> Done
+Review (2x Astra medium) -> Optional Arena (32 variants / 13 loops) -> Cleanup once (Astra medium) -> Final signoff (2x Astra xhigh) -> GitHub review -> Done
 
 ```
 
