@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -2825,6 +2826,37 @@ def test_configured_selection_evenly_bootstraps_drop_in_candidates() -> None:
         records.append(payload)
 
     assert set("efghi") <= sampled
+
+
+@pytest.mark.parametrize(
+    "pool_name,task_class",
+    [("arena_phase", "phase_review"), ("arena_deep", "pr_review")],
+)
+def test_shipped_pools_can_select_after_the_initial_schedule(
+    pool_name: str, task_class: str
+) -> None:
+    references = SCRIPT_DIR.parent / "references"
+    pool = tomllib.loads((references / "arena_settings.toml").read_text())["arena"][
+        "pools"
+    ][pool_name]
+    roster = review_suite_local.load_roster(references / "roster.json")
+    records = [
+        {"task_class": task_class, "rating_pool_id": pool["rating_pool_id"], "runs": []}
+        for _ in pool["variant_groups"]
+    ]
+    payload = select_pair(
+        roster=roster,
+        operational_state=review_suite_local.default_operational_state(),
+        records=records,
+        task_class=task_class,
+        review_cwd=None,
+        seed=None,
+        rating_pool_id=pool["rating_pool_id"],
+        variant_groups=pool["variant_groups"],
+        variant_ids=pool["variant_ids"],
+    )
+    assert len(payload["runs"]) == 4
+    assert payload["selection_pairing"] == "configured_balanced"
 
 
 def test_balanced_configured_selection_preserves_reviewer_slot_limit() -> None:

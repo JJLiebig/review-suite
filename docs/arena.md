@@ -12,6 +12,18 @@ half a group, bootstrap rounds mix under-sampled and established candidates
 evenly. New candidates join the existing pool at 1500 Elo without resetting
 established ratings.
 
+The roster includes `gpt-6-sol` and `gpt-6-luna` with the supported
+low/medium/high/xhigh/max efforts. Review task assignments follow Sol and Luna,
+including disabled Luna low. `gpt-6-astra-minor` remains disabled and excluded
+from the pools until the model resolves; its efforts provisionally follow Astra.
+Sol and Luna rates follow the [launch announcement](https://openai.com/index/introducing-gpt-6-sol-and-luna/):
+$2/$10 and $0.10/$0.50 per million input/output tokens respectively.
+Cached reads use 0.1x input and cache writes 1.25x input under the
+[GPT-5.6-and-later caching policy](https://developers.openai.com/api/docs/guides/prompt-caching).
+Astra Minor remains unpriced.
+Existing model defaults and rating pool IDs are unchanged.
+Pinned user `variant_ids` overrides must include the new candidates to sample them.
+
 ## Configuration
 
 Arena is disabled by default and is not needed for ordinary reviews.
