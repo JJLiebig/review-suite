@@ -39,6 +39,7 @@ from review_suite_local import default_state_dir
 
 DEFAULT_BOT_LOGIN = "chatgpt-codex-connector[bot]"
 DEFAULT_REQUEST_BODY = "@codex review"
+REVIEW_SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
 EXISTING_RESPONSE_SETTLE_SECONDS = 20
 DEFAULT_POLL_SECONDS = 3
 DEFAULT_TIMEOUT_MINUTES = 30
@@ -396,6 +397,7 @@ def collect_cycle_items(
         item
         for item in issue_comments
         if str((item.get("user") or {}).get("login") or "") == bot_login
+        and not str(item.get("body") or "").startswith(REVIEW_SUMMARY_MARKER)
     ]
     review_comments = [
         item
