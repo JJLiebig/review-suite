@@ -70,6 +70,49 @@ def test_build_request_body_keeps_public_comment_plain() -> None:
     )
 
 
+def test_collect_cycle_items_ignores_codex_progress_summary(monkeypatch) -> None:
+    summary = {
+        "id": 1,
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": "<!-- codex-pull-request-review-summary -->\n## Codex Review Summary\n| 📝 Code Review | ⏳ In progress |",
+        "created_at": "2026-04-20T10:01:00Z",
+    }
+    final_review = {
+        "id": 2,
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": "### Codex Review\n\nReviewed commit: `deadbeef`",
+        "submitted_at": "2026-04-20T10:02:00Z",
+    }
+    quoted_marker = {
+        "id": 3,
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "body": "Codex Review: Check `<!-- codex-pull-request-review-summary -->`.",
+        "created_at": "2026-04-20T10:03:00Z",
+    }
+    comments = [summary]
+    reviews = []
+    monkeypatch.setattr("review_github.get_issue_comments", lambda *args: comments)
+    monkeypatch.setattr("review_github.get_review_comments", lambda *args: [])
+    monkeypatch.setattr("review_github.get_reviews", lambda *args: reviews)
+    kwargs = {
+        "owner": "example-owner",
+        "repo": "sample-web",
+        "pr_number": 87,
+        "bot_login": "chatgpt-codex-connector[bot]",
+        "head_sha": "deadbeef",
+        "anchor_since": datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc),
+    }
+
+    assert review_github.collect_cycle_items(**kwargs) == []
+    summary["body"] = summary["body"].replace("In progress", "Completed")
+    comments.append(quoted_marker)
+    reviews.append(final_review)
+    assert [item["body"] for item in review_github.collect_cycle_items(**kwargs)] == [
+        quoted_marker["body"],
+        final_review["body"]
+    ]
+
+
 def test_request_body_matching_is_exact_after_whitespace_normalization() -> None:
     assert review_github.request_body_matches(
         request_body=" @codex   review ",
