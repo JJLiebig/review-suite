@@ -2,7 +2,7 @@
 # All jobs use normal except final deep signoff, which uses deep.
 
 [normal]
-model = "gpt-6-astra"
+model = "gpt-6-sol"
 reasoning = "medium"
 
 [deep]
@@ -13,3 +13,11 @@ reasoning = "xhigh"
 # [jobs.deslop]
 # model = "gpt-5.6-luna"
 # Jobs: plan, deslop, followup, normal_signoff, deep_signoff. service_tier may also be set (fast/flex).
+
+[jobs.deslop]
+model = "gpt-6-astra"
+reasoning = "medium"
+
+[jobs.plan]
+model = "gpt-6-astra"
+reasoning = "medium"
