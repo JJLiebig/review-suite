@@ -53,6 +53,13 @@ FOLDER_REPO_OVERRIDES = {
 }
 DEFAULT_CODEX_SQLITE_FILENAME = "state_5.sqlite"
 MODEL_PRICING_PER_MILLION = {
+    # Launch rates: user screenshot, 2026-09-29; cache writes: OpenAI prompt-caching guide.
+    "gpt-6.1-sol": {
+        "input": 2.00,
+        "output": 10.00,
+        "cached_input": 0.10,
+        "cache_write": 2.50,
+    },
     "gpt-6-sol": {
         "input": 2.00,
         "output": 10.00,
