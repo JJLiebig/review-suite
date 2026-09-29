@@ -18,6 +18,38 @@
   "task_classes": {"phase_review": {}, "pr_review": {}},
   "variants": [
     {
+      "id": "gpt-6.1-sol-low",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "low",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "disabled",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "gpt-6.1-sol-medium",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "medium",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "disabled",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "gpt-6.1-sol-high",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "task_classes": ["pr_review"],
+      "state": "disabled",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "gpt-6.1-sol-xhigh",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "xhigh",
+      "task_classes": ["pr_review"],
+      "state": "disabled",
+      "bootstrap_target_samples": 10
+    },
+    {
       "id": "gpt-5.3-codex-low",
       "model": "gpt-5.3-codex",
       "reasoning_effort": "low",
