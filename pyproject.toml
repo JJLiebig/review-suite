@@ -2,7 +2,7 @@
 name = "review-suite"
 version = "0.1.0"
 description = "Codex plugin for stateful local and GitHub review workflows."
-requires-python = ">=3.14.6"
+requires-python = ">=3.14.7"
 license = "MIT"
 readme = "README.md"
 
@@ -10,12 +10,12 @@ readme = "README.md"
 dev = [
   "pytest",
   "pytest-xdist",
-  "ruff>=0.15.19",
+  "ruff>=0.16.8",
 ]
 
 [tool.uv]
 exclude-newer = "1 week"
-required-version = ">=0.11.26"
+required-version = ">=0.12.17"
 
 [tool.pytest.ini_options]
 addopts = "-n auto --dist=worksteal"
@@ -25,4 +25,6 @@ testpaths = ["plugins/review-suite/tests"]
 target-version = "py314"
 
 [tool.ruff.lint]
+# Ruff 0.16 expanded defaults; keep the repository's existing checks.
+select = ["E4", "E7", "E9", "F"]
 ignore = ["E402"]
