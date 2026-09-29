@@ -53,6 +53,12 @@ FOLDER_REPO_OVERRIDES = {
 }
 DEFAULT_CODEX_SQLITE_FILENAME = "state_5.sqlite"
 MODEL_PRICING_PER_MILLION = {
+    # Source: user-provided GPT-6.1 Sol pricing screenshot, 2026-09-29.
+    "gpt-6.1-sol": {
+        "input": 2.00,
+        "output": 10.00,
+        "cached_input": 0.10,
+    },
     "gpt-6-sol": {
         "input": 2.00,
         "output": 10.00,
