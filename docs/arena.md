@@ -19,6 +19,11 @@ Sol and Luna rates follow the [launch announcement](https://openai.com/index/int
 $2/$10 and $0.10/$0.50 per million input/output tokens respectively.
 Cached reads use 0.1x input and cache writes 1.25x input under the
 [GPT-5.6-and-later caching policy](https://developers.openai.com/api/docs/guides/prompt-caching).
+GPT-6.1 Sol uses the same effort allocation as GPT-6 Sol: phase low/medium;
+PR medium/high/xhigh/max. Its [launch pricing](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+is $2 input, $0.10 cached input, and $10 output per million tokens; cache writes
+use the policy above ($2.50 per million). It is enabled for rollout, but the
+local ChatGPT-account availability check rejected the model on 2026-09-29.
 Astra Minor remains unpriced.
 Existing model defaults and rating pool IDs are unchanged.
 Pinned user `variant_ids` overrides must include the new candidates to sample them.

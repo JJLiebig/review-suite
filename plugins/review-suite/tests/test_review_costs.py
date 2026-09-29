@@ -101,7 +101,7 @@ def test_prelaunch_usage_does_not_inherit_another_models_price() -> None:
 
 
 @pytest.mark.parametrize(
-    "model,expected", [("gpt-6.1-sol", 0.000262), ("gpt-6-sol", 0.000279), ("gpt-6-luna", 0.00001395)]
+    "model,expected", [("gpt-6.1-sol", 0.000277), ("gpt-6-sol", 0.000279), ("gpt-6-luna", 0.00001395)]
 )
 def test_gpt6_usage_prices_match_roster_and_ledger(model: str, expected: float) -> None:
     from review_suite_local import compute_cost_usd, load_roster
