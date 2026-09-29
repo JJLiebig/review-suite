@@ -24,7 +24,7 @@ The marketplace exposes those workflows as separate skills: `review`,
 `npx` runs the public skills CLI package; Review Suite itself is installed from
 GitHub and needs no npm login or publish step.
 
-Both routes need Python 3.14.6+ and Git. The skills CLI route also needs
+Both routes need Python 3.14.7+ and Git. The skills CLI route also needs
 Node.js/npm to run `npx`. Review Suite's default reviewer, plan review,
 simplification review, and follow-up review require an authenticated Codex CLI.
 Selected local review models can instead use an authenticated OpenCode CLI; see
@@ -101,7 +101,7 @@ non-model settings and keeps the original as a backup.
 
 ## Development
 
-Development also requires `uv`. Run checks relevant to the changed files:
+Development also requires `uv` 0.12.17+. Run checks relevant to the changed files:
 
 ```powershell
 uv sync

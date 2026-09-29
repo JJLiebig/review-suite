@@ -6,7 +6,7 @@ description: Run Review Suite local review, plan review, simplification review, 
 # Review Suite
 
 This skill includes the Review Suite Python engine at `plugins/review-suite/`.
-Use a Python 3.14.6+ interpreter and resolve paths relative to this `SKILL.md`:
+Use a Python 3.14.7+ interpreter and resolve paths relative to this `SKILL.md`:
 
 | Task | Read the existing workflow | Entry point |
 | --- | --- | --- |
