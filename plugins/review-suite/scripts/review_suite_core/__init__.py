@@ -25,7 +25,10 @@ from .costing import (
     price_usage_tokens,
     run_total_tokens,
 )
-from .opencode_driver import parse_opencode_review_metadata
+from .opencode_driver import (
+    parse_opencode_review_metadata,
+    parse_review_backend_metadata,
+)
 from .opencode_runtime import (
     default_opencode_reasoning_effort,
     opencode_reasoning_efforts,
@@ -67,6 +70,7 @@ from .process_runtime import (
     wait_for_captured_child_process,
 )
 from .review_backend import (
+    CLAUDE_MODEL_PREFIX,
     OPENCODE_MODEL_PREFIX,
     prepare_review_launch,
 )
@@ -103,6 +107,7 @@ from .workflow_state import (
 prepare_codex_review_launch = prepare_review_launch
 
 __all__ = [
+    "CLAUDE_MODEL_PREFIX",
     "DEFAULT_PROGRESS_INTERVAL_SECONDS",
     "DEFAULT_TIMEOUT_SECONDS",
     "EFFECTIVE_BASE_METADATA_KEYS",
@@ -152,6 +157,7 @@ __all__ = [
     "opencode_reasoning_efforts",
     "parse_model_label",
     "parse_opencode_review_metadata",
+    "parse_review_backend_metadata",
     "prepare_codex_review_launch",
     "prepare_review_launch",
     "price_usage_tokens",

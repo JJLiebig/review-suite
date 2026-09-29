@@ -21,6 +21,7 @@ sys.dont_write_bytecode = _previous_dont_write_bytecode
 
 from review_suite_core import (
     AxiArgumentParser,
+    CLAUDE_MODEL_PREFIX,
     current_branch,
     current_head,
     cwd_path_from_normalized,
@@ -2087,14 +2088,18 @@ def _config_with_model_override(
                     effort = validate_opencode_reasoning_effort(opencode_name, effort)
                 except ValueError:
                     effort = default_opencode_reasoning_effort(opencode_name)
-        tier = None if chosen_model.startswith(OPENCODE_MODEL_PREFIX) else existing_tier
+        tier = (
+            None
+            if chosen_model.startswith((OPENCODE_MODEL_PREFIX, CLAUDE_MODEL_PREFIX))
+            else existing_tier
+        )
         defaults[ref] = "-".join([chosen_model, effort] + ([tier] if tier else []))
         section = merged.get(group)
         if isinstance(section, dict):
             section["model"] = chosen_model
             if reasoning:
                 section["reasoning"] = reasoning
-            if chosen_model.startswith(OPENCODE_MODEL_PREFIX):
+            if chosen_model.startswith((OPENCODE_MODEL_PREFIX, CLAUDE_MODEL_PREFIX)):
                 section.pop("service_tier", None)
     orchestrator["stable_defaults"] = defaults
     return merged

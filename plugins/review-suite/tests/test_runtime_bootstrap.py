@@ -397,7 +397,7 @@ def test_runtime_loads_split_settings_with_existing_user_overrides(
             "assert config['arena']['enabled'] is True; "
             "assert config['arena']['pools']['arena_phase']['variant_groups']; "
             "assert config['orchestrator']['stable_defaults']['normal_arena_loops'] == 2; "
-            "assert config['normal']['model'] == 'gpt-6-astra'",
+            "assert config['normal']['model'] == 'gpt-6-sol'",
             str(runtime / "scripts"),
             str(state),
         ],

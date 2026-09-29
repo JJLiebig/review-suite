@@ -553,6 +553,86 @@
       "task_classes": ["pr_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10
+    },
+    {
+      "id": "claude-opus-5.5-low",
+      "model": "claude::claude-opus-5-5",
+      "reasoning_effort": "low",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "claude-opus-5.5-medium",
+      "model": "claude::claude-opus-5-5",
+      "reasoning_effort": "medium",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "claude-opus-5.5-high",
+      "model": "claude::claude-opus-5-5",
+      "reasoning_effort": "high",
+      "task_classes": ["pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "claude-opus-5.5-xhigh",
+      "model": "claude::claude-opus-5-5",
+      "reasoning_effort": "xhigh",
+      "task_classes": ["pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "claude-opus-5.5-max",
+      "model": "claude::claude-opus-5-5",
+      "reasoning_effort": "max",
+      "task_classes": ["pr_review"],
+      "state": "disabled",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "claude-sonnet-5.5-low",
+      "model": "claude::claude-sonnet-5-5",
+      "reasoning_effort": "low",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "claude-sonnet-5.5-medium",
+      "model": "claude::claude-sonnet-5-5",
+      "reasoning_effort": "medium",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "claude-sonnet-5.5-high",
+      "model": "claude::claude-sonnet-5-5",
+      "reasoning_effort": "high",
+      "task_classes": ["pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "claude-sonnet-5.5-xhigh",
+      "model": "claude::claude-sonnet-5-5",
+      "reasoning_effort": "xhigh",
+      "task_classes": ["pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "claude-sonnet-5.5-max",
+      "model": "claude::claude-sonnet-5-5",
+      "reasoning_effort": "max",
+      "task_classes": ["pr_review"],
+      "state": "disabled",
+      "bootstrap_target_samples": 10
     }
   ]
 }

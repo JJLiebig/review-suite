@@ -6,13 +6,13 @@ Shipped defaults, without personal overrides. Arena is optional and **disabled b
 
 ```text
 Review Fast:
-Final signoff (2x Astra medium) -> Done
+Final signoff (2x gpt-6-sol medium) -> Done
 
 Review Normal:
-Optional Arena (26 variants / 13 loops) -> Cleanup once (Astra medium) -> Final signoff (2x Astra medium) -> GitHub review -> Done
+Optional Arena (30 variants / 13 loops) -> Cleanup once (Astra medium) -> Final signoff (2x gpt-6-sol medium) -> GitHub review -> Done
 
 Review Deep:
-Review (2x Astra medium) -> Optional Arena (32 variants / 13 loops) -> Cleanup once (Astra medium) -> Final signoff (2x Astra xhigh) -> GitHub review -> Done
+Review (2x gpt-6-sol medium) -> Optional Arena (40 variants / 13 loops) -> Cleanup once (Astra medium) -> Final signoff (2x Astra xhigh) -> GitHub review -> Done
 
 ```
 

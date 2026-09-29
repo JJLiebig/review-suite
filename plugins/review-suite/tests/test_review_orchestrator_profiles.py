@@ -20,6 +20,7 @@ from review_suite_core.orchestrator_profiles import (
     load_orchestrator_profiles,
     resolve_orchestrator_profile,
 )
+from review_suite_local import default_roster_path, eligible_variants, load_roster
 
 
 def _step_summary(
@@ -188,6 +189,17 @@ def test_arena_enabled_inserts_only_configured_arena_steps(
 def test_default_arena_pool_schedules_are_balanced(tmp_path: Path) -> None:
     config = load_config(tmp_path / "state")
     pools = config["arena"]["pools"]
+    roster = load_roster(default_roster_path())
+    for pool_name, task_class in (
+        ("arena_phase", "phase_review"),
+        ("arena_deep", "pr_review"),
+    ):
+        claude_variants = {
+            variant["id"]
+            for variant in eligible_variants(roster, task_class)
+            if variant["model"].startswith("claude::")
+        }
+        assert claude_variants <= set(pools[pool_name]["variant_ids"])
     assert {pool["rating_pool_id"] for pool in pools.values()} == {
         "discovery-phase-gpt-5.6-v1",
         "discovery-deep-gpt-5.6-v1",
