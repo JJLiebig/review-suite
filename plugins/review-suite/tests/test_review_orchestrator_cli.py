@@ -624,7 +624,7 @@ def test_model_override_accepts_codex_model_and_reasoning_only(tmp_path: Path) -
     config = review.load_config(tmp_path / "state")
     resolved = review._config_with_model_override(config, {"reasoning": "high"})
     defaults = resolved["orchestrator"]["stable_defaults"]
-    assert defaults["signoff_normal_model"] == "gpt-6-astra-high"
+    assert defaults["signoff_normal_model"] == "gpt-6-sol-high"
     assert defaults["signoff_deep_model"] == "gpt-6-astra-high"
 
 
