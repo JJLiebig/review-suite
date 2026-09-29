@@ -21,8 +21,8 @@
       "id": "gpt-6.1-sol-low",
       "model": "gpt-6.1-sol",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review", "pr_review"],
-      "state": "disabled",
+      "task_classes": ["phase_review"],
+      "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.1, "output_per_million_usd": 10.0 }
     },
@@ -31,7 +31,7 @@
       "model": "gpt-6.1-sol",
       "reasoning_effort": "medium",
       "task_classes": ["phase_review", "pr_review"],
-      "state": "disabled",
+      "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.1, "output_per_million_usd": 10.0 }
     },
@@ -40,7 +40,7 @@
       "model": "gpt-6.1-sol",
       "reasoning_effort": "high",
       "task_classes": ["pr_review"],
-      "state": "disabled",
+      "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.1, "output_per_million_usd": 10.0 }
     },
@@ -49,7 +49,16 @@
       "model": "gpt-6.1-sol",
       "reasoning_effort": "xhigh",
       "task_classes": ["pr_review"],
-      "state": "disabled",
+      "state": "active",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.1, "output_per_million_usd": 10.0 }
+    },
+    {
+      "id": "gpt-6.1-sol-max",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "max",
+      "task_classes": ["pr_review"],
+      "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.1, "output_per_million_usd": 10.0 }
     },
