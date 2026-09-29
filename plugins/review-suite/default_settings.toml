@@ -2,7 +2,7 @@
 # All jobs use normal except final deep signoff, which uses deep.
 
 [normal]
-model = "gpt-6-sol"
+model = "gpt-6.1-sol"
 reasoning = "medium"
 
 [deep]
