@@ -116,7 +116,7 @@ def test_claude_result_detects_model_switch() -> None:
     assert result["model_mismatch"] is True
 
 
-def test_claude_roster_is_disabled_and_unpriced() -> None:
+def test_claude_roster_matches_arena_review_sizes_and_subscription_cost() -> None:
     from review_suite_local import eligible_variants, load_roster
 
     roster = load_roster(SCRIPT_DIR.parent / "references" / "roster.json")
@@ -124,18 +124,19 @@ def test_claude_roster_is_disabled_and_unpriced() -> None:
         variant for variant in roster["variants"] if variant["id"].startswith("claude-")
     ]
     assert len(claude) == 10
-    assert all(
-        variant["state"] == "disabled" and "pricing" not in variant
-        for variant in claude
-    )
-    assert all(
-        not variant["id"].startswith("claude-")
-        for variant in eligible_variants(roster, "phase_review")
-    )
-    assert all(
-        not variant["id"].startswith("claude-")
-        for variant in eligible_variants(roster, "pr_review")
-    )
+    assert all("pricing" not in variant for variant in claude)
+    for model in ("opus", "sonnet"):
+        prefix = f"claude-{model}-5.5-"
+        assert {
+            variant["id"].removeprefix(prefix)
+            for variant in eligible_variants(roster, "phase_review")
+            if variant["id"].startswith(prefix)
+        } == {"low", "medium"}
+        assert {
+            variant["id"].removeprefix(prefix)
+            for variant in eligible_variants(roster, "pr_review")
+            if variant["id"].startswith(prefix)
+        } == {"low", "medium", "high", "xhigh"}
 
 
 def test_claude_driver_uses_subscription_and_read_only_tools(
