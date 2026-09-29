@@ -242,6 +242,8 @@ def build_correctness_review_contract() -> str:
         "Reviewer output is advisory risk input, not authoritative product direction.\n"
         "Return every concrete finding you can support; do not stop after the first issue.\n"
         "For each finding, include severity, file path and line number when available, violated invariant or owner/source of truth when clear, and fix suggestion.\n"
+        "Explain the triggering input or scenario, expected behavior, actual behavior, and affected code path for each finding; support the failure with concrete code or test evidence.\n"
+        "When a finding relies on a repository-specific rule, verify the applicable project instruction file and cite its path and smallest supporting line range in the finding; respect scoped precedence and explicit user instructions, and do not invent rules or findings merely because an instruction file exists.\n"
         "A finding is only valid when it identifies a concrete correctness, regression, integration, security, accessibility, or maintainability risk against stated requirements, docs, code invariants, or explicit contracts.\n"
         "Do not treat UX preference, product-scope speculation, backwards-compat speculation, or alternative product direction as a blocking finding.\n"
         "Do not assume backwards compatibility, legacy behavior, broad fallback behavior, or support for unsupported inputs unless the task, docs, or diff explicitly requires it.\n"

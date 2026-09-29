@@ -384,7 +384,7 @@ def test_runtime_loads_split_settings_with_existing_user_overrides(
     state = tmp_path / "state"
     state.mkdir()
     (state / "settings.toml").write_text(
-        "[arena]\nenabled = true\n[orchestrator.stable_defaults]\nnormal_arena_loops = 2\n",
+        '[normal]\nmodel = "gpt-6-sol"\n[arena]\nenabled = true\n[orchestrator.stable_defaults]\nnormal_arena_loops = 2\n',
         encoding="utf-8",
     )
     result = subprocess.run(
