@@ -7,9 +7,11 @@ from .lens_runtime import (
     prepare_codex_review_launch as _prepare_codex_review_launch,
 )
 from .opencode_runtime import prepare_opencode_review_launch
+from .claude_runtime import prepare_claude_review_launch
 
 
 OPENCODE_MODEL_PREFIX = "opencode::"
+CLAUDE_MODEL_PREFIX = "claude::"
 
 
 def split_review_backend_model(model: str) -> tuple[str, str]:
@@ -22,6 +24,13 @@ def split_review_backend_model(model: str) -> tuple[str, str]:
         if not separator or not provider.strip() or not provider_model.strip():
             raise ValueError("OpenCode review models must use opencode::provider/model")
         return "opencode", resolved
+    if model_name.startswith(CLAUDE_MODEL_PREFIX):
+        resolved = model_name[len(CLAUDE_MODEL_PREFIX) :].strip()
+        if resolved not in {"claude-opus-5-5", "claude-sonnet-5-5"}:
+            raise ValueError(
+                "Claude review model must be claude::claude-opus-5-5 or claude::claude-sonnet-5-5"
+            )
+        return "claude", resolved
     return "codex", model_name
 
 
@@ -57,4 +66,6 @@ def prepare_review_launch(
     }
     if backend == "opencode":
         return prepare_opencode_review_launch(**kwargs)
+    if backend == "claude":
+        return prepare_claude_review_launch(**kwargs)
     return _prepare_codex_review_launch(**kwargs)

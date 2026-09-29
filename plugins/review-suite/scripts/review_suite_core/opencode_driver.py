@@ -105,7 +105,9 @@ def _git_diff_command(args: argparse.Namespace) -> list[str]:
     ]
 
 
-def _write_target_patch(args: argparse.Namespace, review_root: Path) -> Path:
+def _write_target_patch(
+    args: argparse.Namespace, review_root: Path, patch_dir: Path | None = None
+) -> Path:
     proc = subprocess.run(
         _git_diff_command(args),
         cwd=review_root,
@@ -124,6 +126,7 @@ def _write_target_patch(args: argparse.Namespace, review_root: Path) -> Path:
         encoding="utf-8",
         prefix="review-suite-opencode-target-",
         suffix=".patch",
+        dir=patch_dir,
         delete=False,
     )
     try:
@@ -328,6 +331,20 @@ def parse_opencode_review_metadata(text: str) -> dict[str, Any]:
         raw_payload = line[len(REVIEW_METADATA_PREFIX) :].strip()
         try:
             payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            metadata = payload
+    return metadata
+
+
+def parse_review_backend_metadata(text: str) -> dict[str, Any]:
+    metadata = parse_opencode_review_metadata(text)
+    for line in str(text or "").splitlines():
+        if not line.startswith("[review-suite] claude-metadata: "):
+            continue
+        try:
+            payload = json.loads(line.split(": ", 1)[1])
         except json.JSONDecodeError:
             continue
         if isinstance(payload, dict):

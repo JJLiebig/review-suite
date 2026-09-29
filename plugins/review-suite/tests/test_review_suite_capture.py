@@ -1362,6 +1362,62 @@ def test_collect_completed_review_capture_uses_opencode_metadata(
     assert capture["cooldown_eligible"] is False
 
 
+def test_collect_completed_review_capture_uses_claude_subscription_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stdout_path = tmp_path / "review.stdout.txt"
+    stderr_path = tmp_path / "review.stderr.txt"
+    stdout_path.write_text("Review result: clean\n", encoding="utf-8")
+    metadata = {
+        "session_id": "claude-session",
+        "actual_model": "claude-opus-5-5",
+        "actual_models": ["claude-opus-5-5"],
+        "usage": {
+            "input_tokens": 40,
+            "cached_input_tokens": 20,
+            "output_tokens": 10,
+            "total_tokens": 50,
+        },
+    }
+    stderr_path.write_text(
+        "[review-suite] claude-metadata: " + json.dumps(metadata) + "\n",
+        encoding="utf-8",
+    )
+
+    def fail_codex_lookup(**_kwargs: object) -> None:
+        raise AssertionError("Claude reviews must not query Codex threads")
+
+    monkeypatch.setattr(review_suite_local, "find_thread_by_id", fail_codex_lookup)
+    monkeypatch.setattr(
+        review_suite_local, "find_review_child_thread", fail_codex_lookup
+    )
+    capture = review_suite_local.collect_completed_review_capture(
+        slot="review-1",
+        variant_id="claude-opus-5.5-medium",
+        variant={
+            "id": "claude-opus-5.5-medium",
+            "model": "claude::claude-opus-5-5",
+            "reasoning_effort": "medium",
+            "state": "disabled",
+        },
+        title="review-suite::round::review-1",
+        command=["python", "claude_driver.py"],
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        started_at=None,
+        sqlite_path=tmp_path / "state.sqlite",
+        review_cwd=tmp_path,
+    )
+    assert capture["review_status"] == "completed"
+    assert capture["actual_model"] == "claude-opus-5-5"
+    assert capture["usage"]["cached_input_tokens"] == 20
+    assert capture["cost_usd"] is None
+    assert (
+        review_suite_local.compact_benchmark_run(capture)["actual_model"]
+        == "claude-opus-5-5"
+    )
+
+
 def test_collect_completed_review_capture_marks_opencode_failure_cooldown_eligible(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

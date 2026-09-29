@@ -31,6 +31,7 @@ from rollout_capture import (
     rollout_activity_summary,
 )
 from review_suite_core import (
+    CLAUDE_MODEL_PREFIX,
     core_usage_tokens,
     EFFECTIVE_BASE_METADATA_KEYS,
     current_head,
@@ -46,7 +47,7 @@ from review_suite_core import (
     normalize_cwd,
     normalize_service_tier,
     OPENCODE_MODEL_PREFIX,
-    parse_opencode_review_metadata,
+    parse_review_backend_metadata,
     prepare_codex_review_launch,
     price_usage_tokens,
     run_total_tokens,
@@ -699,6 +700,7 @@ COOLDOWN_BLOCK_REASONS = {
     "selected_model_at_capacity",
     "selected_model_unavailable",
     "opencode_review_failed",
+    "claude_review_failed",
     "review_timed_out",
     "review_transport_stalled",
 }
@@ -3328,13 +3330,18 @@ def _classify_review_result(
             "grade_blocked": True,
             "grade_block_reason": "selected_model_at_capacity",
         }
-    opencode_metadata = parse_opencode_review_metadata(stderr_text)
-    opencode_error = str(opencode_metadata.get("error_class") or "").strip().lower()
-    if (not output or interrupted) and opencode_error:
-        reason = OPENCODE_ERROR_BLOCK_REASONS.get(opencode_error)
-        review_status = OPENCODE_ERROR_REVIEW_STATUSES.get(opencode_error)
+    backend_metadata = parse_review_backend_metadata(stderr_text)
+    backend_error = str(backend_metadata.get("error_class") or "").strip().lower()
+    claude_error = "[review-suite] claude-metadata: " in stderr_text
+    if (not output or interrupted) and backend_error:
+        reason = OPENCODE_ERROR_BLOCK_REASONS.get(backend_error)
+        review_status = OPENCODE_ERROR_REVIEW_STATUSES.get(backend_error)
+        if claude_error and backend_error == "failed":
+            reason, review_status = "claude_review_failed", "claude_failed"
+        elif claude_error and backend_error == "unavailable":
+            review_status = "claude_unavailable"
         if reason and review_status:
-            if opencode_error == "capacity":
+            if backend_error == "capacity":
                 return {
                     "review_status": review_status,
                     "status_summary": "selected_model_at_capacity",
@@ -3344,14 +3351,16 @@ def _classify_review_result(
             detail = " / ".join(
                 part
                 for part in (
-                    str(opencode_metadata.get("error_name") or "").strip(),
-                    str(opencode_metadata.get("error_message") or "").strip(),
+                    str(backend_metadata.get("error_name") or "").strip(),
+                    str(backend_metadata.get("error_message") or "").strip(),
                 )
                 if part
             )
             summary = OPENCODE_ERROR_STATUS_SUMMARIES.get(
-                opencode_error, "OpenCode review failed before a usable result."
+                backend_error, "OpenCode review failed before a usable result."
             )
+            if claude_error:
+                summary = summary.replace("OpenCode", "Claude Code")
             if detail:
                 summary = f"{summary} ({detail})"
             return {
@@ -3527,13 +3536,16 @@ def collect_completed_review_capture(
         stderr_path=stderr_path,
         final_message_path=final_message_path,
     )
-    metadata = parse_opencode_review_metadata(stderr_text)
+    metadata = parse_review_backend_metadata(stderr_text)
     opencode_backend = (
         str(variant.get("model") or "").strip().startswith(OPENCODE_MODEL_PREFIX)
     )
+    claude_backend = (
+        str(variant.get("model") or "").strip().startswith(CLAUDE_MODEL_PREFIX)
+    )
     session_id = extract_session_id(stderr_text)
     thread = None
-    if not opencode_backend and session_id:
+    if not (opencode_backend or claude_backend) and session_id:
         for attempt in range(6):
             candidate = find_thread_by_id(sqlite_path=sqlite_path, thread_id=session_id)
             if (
@@ -3552,7 +3564,7 @@ def collect_completed_review_capture(
     enriched = enrich_thread_record(thread) if thread else {}
     if not reviewer_output and enriched.get("reviewer_output"):
         reviewer_output = enriched["reviewer_output"]
-    if opencode_backend:
+    if opencode_backend or claude_backend:
         metadata_usage = metadata.get("usage")
         usage = dict(metadata_usage) if isinstance(metadata_usage, dict) else {}
         captured_cost = metadata.get("cost_usd")
@@ -3607,6 +3619,14 @@ def collect_completed_review_capture(
         "rollout_path": rollout_path,
         "tokens_used": tokens_used,
         "usage": usage,
+        **(
+            {
+                "actual_model": metadata.get("actual_model"),
+                "actual_models": metadata.get("actual_models"),
+            }
+            if claude_backend
+            else {}
+        ),
         "cost_usd": cost_usd,
         "reviewer_output": reviewer_output,
         "stderr": stderr_text,
@@ -3618,7 +3638,9 @@ def collect_completed_review_capture(
         "reviewer_output_ref": (
             f"rollout://{thread_id}/{variant_id}" if thread_id else None
         ),
-        "cooldown_eligible": bool(opencode_backend and classification["grade_blocked"]),
+        "cooldown_eligible": bool(
+            (opencode_backend or claude_backend) and classification["grade_blocked"]
+        ),
     }
 
 
@@ -4308,6 +4330,10 @@ def compact_benchmark_run(run: dict[str, Any]) -> dict[str, Any]:
         compacted["tokens_used"] = int(run["tokens_used"])
     if not compacted["service_tier"]:
         compacted.pop("service_tier", None)
+    if run.get("actual_model"):
+        compacted["actual_model"] = run["actual_model"]
+    if run.get("actual_models"):
+        compacted["actual_models"] = list(run["actual_models"])
     reviewer_output = run.get("reviewer_output")
     if reviewer_output:
         compacted["reviewer_output"] = reviewer_output

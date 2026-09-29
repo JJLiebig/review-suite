@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import sys
 from pathlib import Path
@@ -22,6 +23,8 @@ from review_suite_core.review_backend import (
     prepare_review_launch,
     split_review_backend_model,
 )
+from review_suite_core import claude_driver
+from review_suite_core.claude_driver import parse_claude_result
 
 
 def test_plain_model_uses_codex_backend() -> None:
@@ -33,6 +36,230 @@ def test_prefixed_model_uses_opencode_backend() -> None:
         "opencode",
         "opencode-go/deepseek-v4.1-flash",
     )
+
+
+def test_claude_model_uses_claude_backend() -> None:
+    assert split_review_backend_model("claude::claude-opus-5-5") == (
+        "claude",
+        "claude-opus-5-5",
+    )
+    with pytest.raises(ValueError, match="Claude review model"):
+        split_review_backend_model("claude::opus")
+
+
+def test_claude_launch_is_explicit_and_subscription_scoped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "api-key-must-not-leak")
+    launch = prepare_review_launch(
+        tool_name="review-suite",
+        model="claude::claude-sonnet-5-5",
+        reasoning_effort="xhigh",
+        title="test",
+        review_root=tmp_path,
+        base="main",
+        prompt="Review result: clean",
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+    assert launch.command[1].endswith("claude_driver.py")
+    assert launch.command[launch.command.index("--model") + 1] == "claude-sonnet-5-5"
+    assert launch.command[launch.command.index("--effort") + 1] == "xhigh"
+    assert "ANTHROPIC_API_KEY" not in launch.env
+    assert "Review Suite instructions:" in launch.stdin_text
+    assert launch.effective_reasoning_effort == "xhigh"
+
+
+def test_claude_result_reports_actual_model_and_subscription_usage() -> None:
+    result = parse_claude_result(
+        json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-1",
+                "result": "Review result: clean",
+                "total_cost_usd": 0.41,
+                "modelUsage": {
+                    "claude-opus-5-5": {
+                        "inputTokens": 100,
+                        "cacheReadInputTokens": 200,
+                        "cacheCreationInputTokens": 30,
+                        "outputTokens": 40,
+                    }
+                },
+            }
+        ),
+        "claude-opus-5-5",
+    )
+    assert result["actual_model"] == "claude-opus-5-5"
+    assert result["usage"] == {
+        "input_tokens": 330,
+        "cached_input_tokens": 200,
+        "cache_write_tokens": 30,
+        "output_tokens": 40,
+        "total_tokens": 370,
+    }
+    assert result["model_mismatch"] is False
+    assert "cost_usd" not in result
+
+
+def test_claude_result_detects_model_switch() -> None:
+    result = parse_claude_result(
+        json.dumps(
+            {
+                "subtype": "success",
+                "result": "Review result: clean",
+                "modelUsage": {"claude-sonnet-5-5": {"inputTokens": 1}},
+            }
+        ),
+        "claude-opus-5-5",
+    )
+    assert result["model_mismatch"] is True
+
+
+def test_claude_roster_is_disabled_and_unpriced() -> None:
+    from review_suite_local import eligible_variants, load_roster
+
+    roster = load_roster(SCRIPT_DIR.parent / "references" / "roster.json")
+    claude = [
+        variant for variant in roster["variants"] if variant["id"].startswith("claude-")
+    ]
+    assert len(claude) == 10
+    assert all(
+        variant["state"] == "disabled" and "pricing" not in variant
+        for variant in claude
+    )
+    assert all(
+        not variant["id"].startswith("claude-")
+        for variant in eligible_variants(roster, "phase_review")
+    )
+    assert all(
+        not variant["id"].startswith("claude-")
+        for variant in eligible_variants(roster, "pr_review")
+    )
+
+
+def test_claude_driver_uses_subscription_and_read_only_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> object:
+        commands.append(command)
+        if command[1:] == ["--safe-mode", "--restricted", "auth", "status"]:
+            return type(
+                "Result",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": json.dumps(
+                        {
+                            "loggedIn": True,
+                            "authMethod": "claude.ai",
+                            "apiProvider": "firstParty",
+                        }
+                    ),
+                    "stderr": "",
+                },
+            )()
+        assert "--safe-mode" in command
+        assert "--restricted" in command
+        assert command[command.index("--tools") + 1] == "Read,Glob,Grep"
+        assert command[command.index("--permission-mode") + 1] == "dontAsk"
+        assert "--dangerously-skip-permissions" not in command
+        patch_dir = Path(command[command.index("--add-dir") + 1])
+        assert patch_dir.is_dir()
+        assert "Target patch file:" in str(kwargs["input"])
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "subtype": "success",
+                        "result": "Review result: clean",
+                        "modelUsage": {
+                            "claude-opus-5-5": {"inputTokens": 10, "outputTokens": 5}
+                        },
+                    }
+                ),
+                "stderr": "",
+            },
+        )()
+
+    def fake_patch(_args: object, _root: Path, patch_dir: Path) -> Path:
+        path = patch_dir / "target.patch"
+        path.write_text("diff --git a/x b/x", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(claude_driver.shutil, "which", lambda _name: "claude")
+    monkeypatch.setattr(claude_driver.subprocess, "run", fake_run)
+    monkeypatch.setattr(claude_driver, "_write_target_patch", fake_patch)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Review result: clean"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "claude_driver.py",
+            "--model",
+            "claude-opus-5-5",
+            "--effort",
+            "high",
+            "--dir",
+            str(tmp_path),
+            "--base",
+            "main",
+        ],
+    )
+    assert claude_driver.main() == 0
+    assert len(commands) == 2
+    output = capsys.readouterr()
+    assert output.out == "Review result: clean\n"
+    assert '"actual_model":"claude-opus-5-5"' in output.err
+    assert "cost_usd" not in output.err
+
+
+def test_claude_driver_rejects_api_login_before_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_run(command: list[str], **_kwargs: object) -> object:
+        assert command[1:] == ["--safe-mode", "--restricted", "auth", "status"]
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "loggedIn": True,
+                        "authMethod": "api_key",
+                        "apiProvider": "firstParty",
+                    }
+                ),
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(claude_driver.shutil, "which", lambda _name: "claude")
+    monkeypatch.setattr(claude_driver.subprocess, "run", fake_run)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Review result: clean"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "claude_driver.py",
+            "--model",
+            "claude-opus-5-5",
+            "--effort",
+            "high",
+            "--dir",
+            str(tmp_path),
+            "--base",
+            "main",
+        ],
+    )
+    assert claude_driver.main() == 2
+    assert "subscription login is required" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
