@@ -149,6 +149,25 @@ def test_claude_saved_usage_reprices_roster_summary_and_cost_ledger(
     ) == pytest.approx(expected)
 
 
+@pytest.mark.parametrize(
+    "actual,expected",
+    [({"actual_model": "claude-sonnet-5-5"}, 0.00076),
+     ({"actual_models": ["claude-sonnet-5-5"]}, 0.00076),
+     ({"actual_models": ["claude-opus-5-5", "claude-sonnet-5-5"]}, 0.0)],
+)
+def test_claude_ledger_uses_actual_model_and_does_not_guess_mixed_usage(
+    actual: dict[str, object], expected: float,
+) -> None:
+    run = {
+        "variant_id": "claude-opus-5.5-medium",
+        "model": "claude::claude-opus-5-5",
+        "usage": {"input_tokens": 330, "cached_input_tokens": 200,
+                  "cache_write_tokens": 30, "output_tokens": 40},
+        **actual,
+    }
+    assert review_costs._run_cost(run) == pytest.approx(expected)
+
+
 def test_rollout_usage_line_preserves_cache_write_tokens() -> None:
     line = json.dumps(
         {

@@ -207,6 +207,12 @@ def _run_tokens(run: dict[str, Any]) -> int:
 
 
 def _run_model_name(run: dict[str, Any]) -> str:
+    actual_models = run.get("actual_models")
+    if isinstance(actual_models, list) and actual_models:
+        return _normalize_model_name(actual_models[0]) if len(actual_models) == 1 else ""
+    actual_model = _normalize_model_name(run.get("actual_model"))
+    if actual_model:
+        return actual_model
     model_name = _normalize_model_name(run.get("model"))
     if model_name:
         return model_name
