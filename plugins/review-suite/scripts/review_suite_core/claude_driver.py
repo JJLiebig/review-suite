@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,7 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from review_suite_core.claude_runtime import CLAUDE_REVIEW_SYSTEM_PROMPT
+from review_suite_core.costing import price_usage_tokens
 from review_suite_core.opencode_driver import (
     _write_target_patch,
     classify_opencode_error,
@@ -40,6 +42,56 @@ def _field(usage: dict[str, Any], snake: str, camel: str) -> int:
     return _number(usage.get(snake, usage.get(camel)))
 
 
+def _model_usage(item: dict[str, Any]) -> dict[str, int]:
+    cached = _field(item, "cache_read_input_tokens", "cacheReadInputTokens")
+    written = _field(item, "cache_creation_input_tokens", "cacheCreationInputTokens")
+    return {
+        "input_tokens": _field(item, "input_tokens", "inputTokens") + cached + written,
+        "cached_input_tokens": cached,
+        "cache_write_tokens": written,
+        "output_tokens": _field(item, "output_tokens", "outputTokens"),
+    }
+
+
+def _cost(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if math.isfinite(value) and value >= 0:
+            return float(value)
+    return None
+
+
+def _result_cost(payload: dict[str, Any], model_usage: dict[str, Any]) -> float | None:
+    cost = _cost(payload.get("total_cost_usd"))
+    if cost is not None:
+        return cost
+    costs = [
+        _cost(item.get("costUSD")) if isinstance(item, dict) else None
+        for item in model_usage.values()
+    ]
+    if all(cost is not None for cost in costs):
+        cost = _cost(sum(costs))
+        if cost is not None:
+            return cost
+    roster_path = Path(__file__).resolve().parents[2] / "references" / "roster.json"
+    roster = json.loads(roster_path.read_text(encoding="utf-8"))
+    pricing = {
+        variant["model"].removeprefix("claude::"): variant.get("pricing", {})
+        for variant in roster["variants"]
+        if variant["model"].startswith("claude::")
+    }
+    # ponytail: missing CLI costs use the subscription's default 1h cache rate;
+    # prefer native estimates for mixed TTLs, fast mode, and usage credits.
+    estimates = [
+        price_usage_tokens(pricing.get(model, {}), _model_usage(item))
+        if isinstance(item, dict)
+        else None
+        for model, item in model_usage.items()
+    ]
+    return (
+        _cost(sum(estimates)) if all(cost is not None for cost in estimates) else None
+    )
+
+
 def parse_claude_result(stdout: str, requested_model: str) -> dict[str, Any]:
     payload = json.loads(stdout)
     if not isinstance(payload, dict):
@@ -62,15 +114,8 @@ def parse_claude_result(stdout: str, requested_model: str) -> dict[str, Any]:
         item = model_usage[model]
         if not isinstance(item, dict):
             continue
-        usage["input_tokens"] += _field(item, "input_tokens", "inputTokens")
-        usage["cached_input_tokens"] += _field(
-            item, "cache_read_input_tokens", "cacheReadInputTokens"
-        )
-        usage["cache_write_tokens"] += _field(
-            item, "cache_creation_input_tokens", "cacheCreationInputTokens"
-        )
-        usage["output_tokens"] += _field(item, "output_tokens", "outputTokens")
-    usage["input_tokens"] += usage["cached_input_tokens"] + usage["cache_write_tokens"]
+        for key, value in _model_usage(item).items():
+            usage[key] += value
     usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
     result = str(payload.get("result") or "").strip()
     return {
@@ -78,6 +123,7 @@ def parse_claude_result(stdout: str, requested_model: str) -> dict[str, Any]:
         "actual_model": actual_models[0] if len(actual_models) == 1 else None,
         "actual_models": actual_models,
         "usage": usage,
+        "cost_usd": _result_cost(payload, model_usage),
         "result": result,
         "error": bool(payload.get("is_error"))
         or str(payload.get("subtype") or "") != "success",
@@ -209,6 +255,7 @@ def main() -> int:
         _metadata(
             session_id=result["session_id"],
             usage=result["usage"],
+            cost_usd=result["cost_usd"],
             actual_model=result["actual_model"],
             actual_models=result["actual_models"],
             error_class=error_class,

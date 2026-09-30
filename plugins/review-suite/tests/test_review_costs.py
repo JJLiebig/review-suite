@@ -118,6 +118,37 @@ def test_gpt6_usage_prices_match_roster_and_ledger(model: str, expected: float) 
     assert _price_from_usage(model, usage) == pytest.approx(expected)
 
 
+@pytest.mark.parametrize(
+    "model,variant_id,expected",
+    [
+        ("claude-opus-5-5", "claude-opus-5.5-medium", 0.00148),
+        ("claude-sonnet-5-5", "claude-sonnet-5.5-medium", 0.00076),
+    ],
+)
+def test_claude_saved_usage_reprices_roster_summary_and_cost_ledger(
+    model: str,
+    variant_id: str,
+    expected: float,
+) -> None:
+    from review_suite_local import compute_cost_usd, load_roster
+
+    usage = {
+        "input_tokens": 330,
+        "cached_input_tokens": 200,
+        "cache_write_tokens": 30,
+        "output_tokens": 40,
+    }
+    roster = load_roster(SCRIPT_DIR.parent / "references" / "roster.json")
+    variant = next(v for v in roster["variants"] if v["id"] == variant_id)
+    assert compute_cost_usd(variant, usage) == pytest.approx(expected)
+    assert review_costs._run_cost(
+        {"model": f"claude::{model}", "usage": usage}
+    ) == pytest.approx(expected)
+    assert review_costs._run_cost(
+        {"variant_id": variant_id, "usage": usage}
+    ) == pytest.approx(expected)
+
+
 def test_rollout_usage_line_preserves_cache_write_tokens() -> None:
     line = json.dumps(
         {

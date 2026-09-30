@@ -99,7 +99,66 @@ def test_claude_result_reports_actual_model_and_subscription_usage() -> None:
         "total_tokens": 370,
     }
     assert result["model_mismatch"] is False
-    assert "cost_usd" not in result
+    assert result["cost_usd"] == 0.41
+
+
+@pytest.mark.parametrize("native_cost", [0, 0.41])
+def test_claude_native_cost_wins_over_model_estimate(native_cost: float) -> None:
+    result = parse_claude_result(
+        json.dumps(
+            {
+                "subtype": "success",
+                "total_cost_usd": native_cost,
+                "modelUsage": {"claude-opus-5-5": {"costUSD": 9, "inputTokens": 100}},
+            }
+        ),
+        "claude-opus-5-5",
+    )
+    assert result["cost_usd"] == native_cost
+
+
+@pytest.mark.parametrize("native_cost", [None, -1, True, float("nan"), float("inf")])
+def test_claude_missing_or_invalid_cost_uses_actual_model_usage(
+    native_cost: object,
+) -> None:
+    result = parse_claude_result(
+        json.dumps(
+            {
+                "subtype": "success",
+                "total_cost_usd": native_cost,
+                "modelUsage": {
+                    "claude-sonnet-5-5": {
+                        "inputTokens": 100,
+                        "cacheReadInputTokens": 200,
+                        "cacheCreationInputTokens": 30,
+                        "outputTokens": 40,
+                    }
+                },
+            }
+        ),
+        "claude-opus-5-5",
+    )
+    assert result["cost_usd"] == pytest.approx(0.00076)
+    assert result["model_mismatch"] is True
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_claude_model_cost_requires_complete_breakdown(complete: bool) -> None:
+    result = parse_claude_result(
+        json.dumps(
+            {
+                "subtype": "success",
+                "modelUsage": {
+                    "claude-opus-5-5": {"costUSD": 0.2},
+                    "claude-unknown": {"costUSD": 0.3}
+                    if complete
+                    else {"inputTokens": 100},
+                },
+            }
+        ),
+        "claude-opus-5-5",
+    )
+    assert result["cost_usd"] == (pytest.approx(0.5) if complete else None)
 
 
 def test_claude_result_detects_model_switch() -> None:
@@ -116,7 +175,7 @@ def test_claude_result_detects_model_switch() -> None:
     assert result["model_mismatch"] is True
 
 
-def test_claude_roster_matches_arena_review_sizes_and_subscription_cost() -> None:
+def test_claude_roster_matches_arena_review_sizes() -> None:
     from review_suite_local import eligible_variants, load_roster
 
     roster = load_roster(SCRIPT_DIR.parent / "references" / "roster.json")
@@ -124,7 +183,6 @@ def test_claude_roster_matches_arena_review_sizes_and_subscription_cost() -> Non
         variant for variant in roster["variants"] if variant["id"].startswith("claude-")
     ]
     assert len(claude) == 10
-    assert all("pricing" not in variant for variant in claude)
     for model in ("opus", "sonnet"):
         prefix = f"claude-{model}-5.5-"
         assert {
@@ -217,7 +275,9 @@ def test_claude_driver_uses_subscription_and_read_only_tools(
     output = capsys.readouterr()
     assert output.out == "Review result: clean\n"
     assert '"actual_model":"claude-opus-5-5"' in output.err
-    assert "cost_usd" not in output.err
+    assert json.loads(output.err.split("claude-metadata: ", 1)[1])[
+        "cost_usd"
+    ] == pytest.approx(0.00014)
 
 
 def test_claude_driver_rejects_api_login_before_review(
