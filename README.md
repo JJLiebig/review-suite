@@ -79,6 +79,14 @@ preference for future cycles in one repository, use `--set-no-arena` or
 `--clear-no-arena` with `--cd <repo-root>`; existing cycles keep their frozen
 plan.
 
+Claude review costs use the CLI's API-equivalent estimate, including cache reads
+and writes; they are not subscription charges. If the CLI omits pricing, supported
+Claude 5.5 models use [published list rates](https://claude.com/pricing) with the
+[subscription default of one-hour cache writes](https://code.claude.com/docs/en/prompt-caching).
+This fallback is an estimate: usage credits, cache TTL overrides, and fast mode
+can change the rate. Historical summaries can reprice missing costs from saved
+usage; original review records remain unchanged.
+
 ## Settings
 
 [Shipped defaults](plugins/review-suite/default_settings.toml) apply unless

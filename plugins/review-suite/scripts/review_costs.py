@@ -53,6 +53,14 @@ FOLDER_REPO_OVERRIDES = {
 }
 DEFAULT_CODEX_SQLITE_FILENAME = "state_5.sqlite"
 MODEL_PRICING_PER_MILLION = {
+    # Claude 5.5 list rates, 2026-09-30: https://claude.com/pricing
+    # Subscription reviews default to 1h cache writes; native CLI estimates win.
+    "claude-opus-5-5": {
+        "input": 4.00, "output": 20.00, "cached_input": 0.20, "cache_write": 8.00,
+    },
+    "claude-sonnet-5-5": {
+        "input": 2.00, "output": 10.00, "cached_input": 0.20, "cache_write": 4.00,
+    },
     # Launch rates: user screenshot, 2026-09-29; cache writes: OpenAI prompt-caching guide.
     "gpt-6.1-sol": {
         "input": 2.00,
@@ -111,6 +119,10 @@ MODEL_PRICING_PER_MILLION = {
     "o4-mini": {"input": 1.10, "output": 4.40, "cached_input": 0.275},
 }
 MODEL_ALIASES = {
+    "claude::claude-opus-5-5": "claude-opus-5-5",
+    "claude::claude-sonnet-5-5": "claude-sonnet-5-5",
+    "claude-opus-5.5": "claude-opus-5-5",
+    "claude-sonnet-5.5": "claude-sonnet-5-5",
     "codex-mini-latest": "o4-mini",
     "gpt 5.6 sol": "gpt-5.6-sol",
     "gpt-5.6 sol": "gpt-5.6-sol",
@@ -195,6 +207,12 @@ def _run_tokens(run: dict[str, Any]) -> int:
 
 
 def _run_model_name(run: dict[str, Any]) -> str:
+    actual_models = run.get("actual_models")
+    if isinstance(actual_models, list) and actual_models:
+        return _normalize_model_name(actual_models[0]) if len(actual_models) == 1 else ""
+    actual_model = _normalize_model_name(run.get("actual_model"))
+    if actual_model:
+        return actual_model
     model_name = _normalize_model_name(run.get("model"))
     if model_name:
         return model_name

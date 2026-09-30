@@ -1370,6 +1370,7 @@ def test_collect_completed_review_capture_uses_claude_subscription_metadata(
     stdout_path.write_text("Review result: clean\n", encoding="utf-8")
     metadata = {
         "session_id": "claude-session",
+        "cost_usd": 0.41,
         "actual_model": "claude-opus-5-5",
         "actual_models": ["claude-opus-5-5"],
         "usage": {
@@ -1411,7 +1412,7 @@ def test_collect_completed_review_capture_uses_claude_subscription_metadata(
     assert capture["review_status"] == "completed"
     assert capture["actual_model"] == "claude-opus-5-5"
     assert capture["usage"]["cached_input_tokens"] == 20
-    assert capture["cost_usd"] is None
+    assert capture["cost_usd"] == 0.41
     assert (
         review_suite_local.compact_benchmark_run(capture)["actual_model"]
         == "claude-opus-5-5"

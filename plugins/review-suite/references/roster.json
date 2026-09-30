@@ -605,7 +605,8 @@
       "reasoning_effort": "low",
       "task_classes": ["phase_review", "pr_review"],
       "state": "active",
-      "bootstrap_target_samples": 10
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 4.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 8.0, "output_per_million_usd": 20.0 }
     },
     {
       "id": "claude-opus-5.5-medium",
@@ -613,7 +614,8 @@
       "reasoning_effort": "medium",
       "task_classes": ["phase_review", "pr_review"],
       "state": "active",
-      "bootstrap_target_samples": 10
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 4.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 8.0, "output_per_million_usd": 20.0 }
     },
     {
       "id": "claude-opus-5.5-high",
@@ -621,7 +623,8 @@
       "reasoning_effort": "high",
       "task_classes": ["pr_review"],
       "state": "active",
-      "bootstrap_target_samples": 10
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 4.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 8.0, "output_per_million_usd": 20.0 }
     },
     {
       "id": "claude-opus-5.5-xhigh",
@@ -629,7 +632,8 @@
       "reasoning_effort": "xhigh",
       "task_classes": ["pr_review"],
       "state": "active",
-      "bootstrap_target_samples": 10
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 4.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 8.0, "output_per_million_usd": 20.0 }
     },
     {
       "id": "claude-opus-5.5-max",
@@ -637,7 +641,8 @@
       "reasoning_effort": "max",
       "task_classes": ["pr_review"],
       "state": "disabled",
-      "bootstrap_target_samples": 10
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 4.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 8.0, "output_per_million_usd": 20.0 }
     },
     {
       "id": "claude-sonnet-5.5-low",
@@ -645,7 +650,8 @@
       "reasoning_effort": "low",
       "task_classes": ["phase_review", "pr_review"],
       "state": "active",
-      "bootstrap_target_samples": 10
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 4.0, "output_per_million_usd": 10.0 }
     },
     {
       "id": "claude-sonnet-5.5-medium",
@@ -653,7 +659,8 @@
       "reasoning_effort": "medium",
       "task_classes": ["phase_review", "pr_review"],
       "state": "active",
-      "bootstrap_target_samples": 10
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 4.0, "output_per_million_usd": 10.0 }
     },
     {
       "id": "claude-sonnet-5.5-high",
@@ -661,7 +668,8 @@
       "reasoning_effort": "high",
       "task_classes": ["pr_review"],
       "state": "active",
-      "bootstrap_target_samples": 10
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 4.0, "output_per_million_usd": 10.0 }
     },
     {
       "id": "claude-sonnet-5.5-xhigh",
@@ -669,7 +677,8 @@
       "reasoning_effort": "xhigh",
       "task_classes": ["pr_review"],
       "state": "active",
-      "bootstrap_target_samples": 10
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 4.0, "output_per_million_usd": 10.0 }
     },
     {
       "id": "claude-sonnet-5.5-max",
@@ -677,7 +686,8 @@
       "reasoning_effort": "max",
       "task_classes": ["pr_review"],
       "state": "disabled",
-      "bootstrap_target_samples": 10
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 4.0, "output_per_million_usd": 10.0 }
     }
   ]
 }
