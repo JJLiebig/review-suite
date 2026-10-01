@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from dataclasses import asdict
@@ -1349,7 +1350,7 @@ def test_runner_does_not_retry_failed_deslop_for_aborted_cycle(
 
 @pytest.mark.parametrize("superseded_before_launch", [False, True])
 def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
-    monkeypatch, tmp_path: Path, clean_worktree, superseded_before_launch: bool,
+    monkeypatch, tmp_path: Path, clean_worktree, request, superseded_before_launch: bool,
 ) -> None:
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda *args: True)
@@ -1365,6 +1366,10 @@ def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
     state_dir = tmp_path / "state"
     fixed = save_cycle(state_dir, fixed)
     launches: list[str] = []
+    test_pid = os.getpid()
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    request.addfinalizer(lambda: (holder.terminate(), holder.wait(timeout=10)) if holder.poll() is None else None)
+    monkeypatch.setattr(orchestrator_runner.os, "getpid", lambda: holder.pid)
 
     def launch(**kwargs):
         if superseded_before_launch:
@@ -1396,11 +1401,10 @@ def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
         assert running["stage"] == "followup-pending"
         assert running["active_findings"] == fixed["active_findings"]
         assert running["review_progress"] == fixed["review_progress"]
-        child = subprocess.Popen([sys.executable, "-c", "pass"])
-        child.wait(timeout=10)
-        running["pending_action"]["wrapper_pid"] = child.pid
-        save_cycle(state_dir, running)
+        holder.terminate()
+        holder.wait(timeout=10)
         assert record_contract_replan(running, conflict="acceptance")["convergence"]["decision"] == "REPLAN"
+        monkeypatch.setattr(orchestrator_runner.os, "getpid", lambda: test_pid)
         # Normal recovery uses the same pre-launch ownership path, with no new lifecycle branch.
         with pytest.raises(InterruptedError):
             orchestrator_runner.run_one_expensive_step(running, state_dir=state_dir)
