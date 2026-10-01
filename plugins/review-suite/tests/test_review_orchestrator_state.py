@@ -39,6 +39,7 @@ from review_suite_core.orchestrator_state import (
     record_contract_replan,
     record_convergence_decision,
     record_findings_decision,
+    record_fixes_validated,
     record_followup_clean,
     record_github_result,
 )
@@ -96,8 +97,9 @@ def test_contract_replan_reservation_preserves_convergence_under_late_writes(
     intervening_decision: str | None,
 ) -> None:
     state_dir = tmp_path / "state"
+    before_findings = mark_decision_pending(_cycle(tmp_path), round_id="old-round", lane="review_t1")
     source = record_findings_decision(
-        mark_decision_pending(_cycle(tmp_path), round_id="old-round", lane="review_t1"),
+        before_findings,
         round_id="old-round",
         lane="review_t1",
         reviewed_head="head-1",
@@ -122,7 +124,11 @@ def test_contract_replan_reservation_preserves_convergence_under_late_writes(
         assert load_cycle_by_key(state_dir, successor["cycle_key"]) is None
     else:
         reserve_cycle_successor(state_dir, source=replanned, successor=successor)
+        archived = load_cycle_by_key(state_dir, stale["cycle_key"])
         saved = save_cycle(state_dir, stale)
+        assert saved == archived
+        assert save_cycle(state_dir, before_findings) == archived
+        assert save_cycle(state_dir, record_fixes_validated(stale, head="head-2", note="focused tests passed")) == archived
         assert saved["convergence"] == replanned["convergence"]
         assert saved["convergence"]["decision"] == "REPLAN"
         assert saved["superseded_by"]["review"]

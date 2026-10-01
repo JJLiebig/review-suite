@@ -185,6 +185,8 @@ def save_cycle(
     with orchestrator_store_lock(state_dir=state_dir, name=ORCHESTRATOR_CYCLES_LOCK):
         cycle_key = str(state.get("cycle_key") or "").strip()
         current = load_cycle_by_key(state_dir, cycle_key) if cycle_key else None
+        if current and dict(current.get("superseded_by") or {}).get("review"):
+            return current
         payload = deepcopy(state)
         if claim_followup and current is not None:
             from review_suite_local import _process_is_running
@@ -227,7 +229,6 @@ def save_cycle(
         incoming_convergence = dict(payload.get("convergence") or {})
         if (
             current
-            and not current.get("superseded_by")
             and incoming_convergence.get("status") == "DECISION_REQUIRED"
             and incoming_convergence.get("reason") == "contract_conflict"
             and incoming_convergence != current.get("convergence")
@@ -239,17 +240,6 @@ def save_cycle(
             raise ValueError(
                 "source findings changed before contract conflict was recorded; inspect its status and follow the current action"
             )
-        if current and str(
-            dict(current.get("superseded_by") or {}).get("review") or ""
-        ):
-            for key in (
-                "stage",
-                "pending_action",
-                "recovery",
-                "superseded_by",
-                "convergence",
-            ):
-                payload[key] = deepcopy(current.get(key))
         return _save_cycle_unlocked(state_dir, payload)
 
 
