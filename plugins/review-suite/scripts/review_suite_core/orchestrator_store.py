@@ -185,8 +185,6 @@ def save_cycle(
     with orchestrator_store_lock(state_dir=state_dir, name=ORCHESTRATOR_CYCLES_LOCK):
         cycle_key = str(state.get("cycle_key") or "").strip()
         current = load_cycle_by_key(state_dir, cycle_key) if cycle_key else None
-        if current and dict(current.get("superseded_by") or {}).get("review"):
-            return current
         payload = deepcopy(state)
         if claim_followup and current is not None:
             from review_suite_local import _process_is_running
@@ -207,6 +205,8 @@ def save_cycle(
                     "follow-up wrapper is already running; wait for its owning review command"
                 )
             payload["convergence"] = deepcopy(current["convergence"])
+        if current and dict(current.get("superseded_by") or {}).get("review"):
+            return current
         if current and current.get("stage") == "followup-pending":
             from review_suite_local import _process_is_running
 
