@@ -33,6 +33,7 @@ from review_suite_core.orchestrator_state import (
     record_clean_decision,
     record_findings_decision,
     record_contract_replan,
+    record_contract_conflict,
 )
 from review_suite_core.orchestrator_store import load_cycle_by_key, orchestrator_store_lock, save_cycle
 from review_suite_local import write_round
@@ -140,6 +141,9 @@ def _stub_followup(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
         reviewed_head = str(
             scope.get("reviewed_head") if isinstance(scope, dict) else "head-2"
         )
+        if callable(on_round_started := kwargs.get("on_round_started")):
+            on_round_started({"round_id": round_id, "reviewed_head": reviewed_head,
+                              "round_state_dir": "state/orchestrator/review-rounds"})
         return {
             "round_id": round_id,
             "lane": "review-followup",
@@ -1386,6 +1390,9 @@ def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
             stale_saved = save_cycle(state_dir, fixed)
             with pytest.raises(ValueError, match="follow-up wrapper is running"):
                 record_contract_replan(stale_saved, conflict="acceptance")
+            stale_conflict = record_contract_conflict(source, conflict="scope")
+            with pytest.raises(ValueError, match="follow-up wrapper is running"):
+                save_cycle(state_dir, stale_conflict)
         launches.append("followup-round")
         raise InterruptedError("wrapper interrupted after launch")
 
@@ -1460,6 +1467,7 @@ def test_runner_runs_real_followup_once_from_followup_pending(
     fixed["identity"]["base_upstream"] = "origin/main"
     fixed["identity"]["base_ref_stale"] = True
     fixed["review_brief"] = "# Goal\n\nStay scoped."
+    save_cycle(tmp_path / "state", fixed)
 
     result = orchestrator_runner.run_one_expensive_step(
         fixed, state_dir=tmp_path / "state"
@@ -1468,6 +1476,7 @@ def test_runner_runs_real_followup_once_from_followup_pending(
     assert result.ran_step is True
     assert result.step == "review-followup"
     assert result.state["stage"] == STAGE_DECISION_PENDING
+    assert save_cycle(tmp_path / "state", result.state)["stage"] == STAGE_DECISION_PENDING
     assert result.state["pending_action"] == {
         "kind": "decision",
         "round_id": "followup-round-1",

@@ -1341,10 +1341,18 @@ def _run_followup_review_once(
                     raise ValueError(
                         "source review changed before follow-up launch; inspect its status and follow the current action"
                     )
-                if _process_is_running(dict(current.get("pending_action") or {}).get("wrapper_pid")):
-                    raise ValueError("follow-up wrapper is already running; wait for its owning review command")
+                if _process_is_running(
+                    dict(current.get("pending_action") or {}).get("wrapper_pid")
+                ):
+                    raise ValueError(
+                        "follow-up wrapper is already running; wait for its owning review command"
+                    )
                 owned = dict(state)
-                owned["pending_action"] = {**dict(state.get("pending_action") or {}), "wrapper_pid": os.getpid()}
+                owned["pending_action"] = {
+                    **dict(state.get("pending_action") or {}),
+                    "wrapper_pid": os.getpid(),
+                    "round_id": str(round_info["round_id"]),
+                }
                 owned["convergence"] = current["convergence"]
                 save_cycle(state_dir, owned)
 

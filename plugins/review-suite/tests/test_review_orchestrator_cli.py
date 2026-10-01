@@ -2657,9 +2657,11 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert review_calls[1]["step_total"] == 4
 
 
+@pytest.mark.parametrize("invocation_wsl", [False, True])
 def test_restart_brief_supersedes_invalid_cycle_with_fresh_same_mode_ladder(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    invocation_wsl: bool,
 ) -> None:
     _stub_deslop(monkeypatch)
     _use_compact_normal_profile(monkeypatch, tmp_path / "state", include_deep=True)
@@ -2724,6 +2726,7 @@ def test_restart_brief_supersedes_invalid_cycle_with_fresh_same_mode_ladder(
             replacement_brief,
             "--reason",
             "the frozen brief was a file path",
+            *(["--wsl"] if invocation_wsl else []),
             "--state-dir",
             str(state_dir),
         ],
@@ -2733,6 +2736,7 @@ def test_restart_brief_supersedes_invalid_cycle_with_fresh_same_mode_ladder(
     assert exit_code == 0
     assert new_id != old_id
     assert len(review_calls) == 2
+    assert review_calls[-1]["allow_unsafe_windows_wsl_fallback"] is invocation_wsl
     old_saved = _cycle_payload(state_dir, old_id)
     new_state = _cycle_payload(state_dir, new_id)
     assert old_saved["stage"] == "aborted"

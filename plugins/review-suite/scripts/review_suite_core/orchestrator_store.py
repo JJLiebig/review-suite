@@ -184,12 +184,25 @@ def save_cycle(state_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
         cycle_key = str(state.get("cycle_key") or "").strip()
         current = load_cycle_by_key(state_dir, cycle_key) if cycle_key else None
         payload = deepcopy(state)
-        if current and current.get("stage") == "followup-pending" and payload.get("stage") in {"fix-pending", "followup-pending"}:
+        if current and current.get("stage") == "followup-pending":
             from review_suite_local import _process_is_running
 
-            if _process_is_running(dict(current.get("pending_action") or {}).get("wrapper_pid")):
-                for key in ("stage", "pending_action"):
-                    payload[key] = deepcopy(current[key])
+            if _process_is_running(
+                dict(current.get("pending_action") or {}).get("wrapper_pid")
+            ):
+                if payload.get("stage") in {"fix-pending", "followup-pending"}:
+                    for key in ("stage", "pending_action"):
+                        payload[key] = deepcopy(current[key])
+                elif not (
+                    payload.get("stage") == "decision-pending"
+                    and dict(payload.get("pending_action") or {}).get("lane")
+                    == "review-followup"
+                    and dict(payload.get("pending_action") or {}).get("round_id")
+                    == dict(current.get("pending_action") or {}).get("round_id")
+                ):
+                    raise ValueError(
+                        "follow-up wrapper is running; finish or stop its owning review command before changing convergence"
+                    )
         if current and str(
             dict(current.get("superseded_by") or {}).get("review") or ""
         ):

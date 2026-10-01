@@ -2450,6 +2450,7 @@ def _restart_review_brief(
         timeout_seconds=1,
     ):
         current = load_cycle_by_key(state_dir, state["cycle_key"]) or state
+        current = _copy_runtime_options(current, state)
         replacement = _reserve_review_brief_restart(
             current, state_dir=state_dir, **kwargs
         )
