@@ -65,7 +65,6 @@ from review_suite_local import (
 )
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows-native process check")
 def test_process_is_running_uses_no_subprocess(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -78,7 +77,6 @@ def test_process_is_running_uses_no_subprocess(
     assert _process_is_running(os.getpid()) is True
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows-native process check")
 def test_process_is_running_tracks_child_exit() -> None:
     child = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(30)"],

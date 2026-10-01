@@ -35,14 +35,20 @@ from review_suite_core.orchestrator_state import (
     no_work_stage_is_idle,
     record_clean_decision,
     record_contract_conflict,
+    record_contract_replan,
     record_convergence_decision,
     record_findings_decision,
     record_followup_clean,
     record_github_result,
 )
+from review_suite_core.orchestrator_store import (
+    load_cycle_by_key,
+    reserve_cycle_successor,
+    save_cycle,
+)
 
 
-def _cycle(tmp_path: Path, *, mode: str = "normal") -> dict[str, object]:
+def _cycle(tmp_path: Path, *, mode: str = "normal", restart_token: str | None = None) -> dict[str, object]:
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
     return create_cycle(
@@ -55,7 +61,39 @@ def _cycle(tmp_path: Path, *, mode: str = "normal") -> dict[str, object]:
         effective_mode=mode,
         selection="auto",
         effective_selection="stable",
+        restart_token=restart_token,
     )
+
+
+@pytest.mark.parametrize("intervening_decision", [None, "RESLICE"])
+def test_contract_replan_reservation_preserves_convergence_under_late_writes(
+    tmp_path: Path, intervening_decision: str | None,
+) -> None:
+    state_dir = tmp_path / "state"
+    source = record_findings_decision(
+        mark_decision_pending(_cycle(tmp_path), round_id="old-round", lane="review_t1"),
+        round_id="old-round", lane="review_t1", reviewed_head="head-1",
+    )
+    stale = save_cycle(state_dir, source)
+    replanned = abort_cycle(record_contract_replan(stale, conflict="acceptance"), reason="approved")
+    replanned["superseded_by"] = {"kind": "contract-replan", "reason": "approved"}
+    successor = _cycle(tmp_path, restart_token="contract-replan")
+    if intervening_decision:
+        current = record_convergence_decision(
+            record_contract_conflict(stale, conflict="scope"), decision=intervening_decision,
+        )
+        saved = save_cycle(state_dir, current)
+        with pytest.raises(ValueError, match="contract replan requires active findings"):
+            reserve_cycle_successor(state_dir, source=replanned, successor=successor)
+        assert load_cycle_by_key(state_dir, stale["cycle_key"]) == saved
+        assert load_cycle_by_key(state_dir, successor["cycle_key"]) is None
+    else:
+        reserve_cycle_successor(state_dir, source=replanned, successor=successor)
+        saved = save_cycle(state_dir, stale)
+        assert saved["convergence"] == replanned["convergence"]
+        assert saved["convergence"]["decision"] == "REPLAN"
+        assert saved["superseded_by"]["review"]
+        assert saved["active_findings"] == stale["active_findings"]
 
 
 def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(

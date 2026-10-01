@@ -4090,17 +4090,18 @@ def _process_is_running(pid: int | None) -> bool:
                     return False
                 break
     except FileNotFoundError:
-        return False
+        if sys.platform == "linux":
+            return False
     except OSError:
         pass
     try:
         os.kill(normalized_pid, 0)
     except ProcessLookupError:
         return False
-    except OSError:
-        return False
     except PermissionError:
         return True
+    except OSError:
+        return False
     return True
 
 

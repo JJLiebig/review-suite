@@ -9,6 +9,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .orchestrator_state import record_contract_replan
+
 if os.name == "nt":
     import msvcrt
 else:
@@ -185,7 +187,7 @@ def save_cycle(state_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
         if current and str(
             dict(current.get("superseded_by") or {}).get("review") or ""
         ):
-            for key in ("stage", "pending_action", "recovery", "superseded_by"):
+            for key in ("stage", "pending_action", "recovery", "superseded_by", "convergence"):
                 payload[key] = deepcopy(current.get(key))
         return _save_cycle_unlocked(state_dir, payload)
 
@@ -223,12 +225,19 @@ def reserve_cycle_successor(
                     f"source review cycle already has a different successor: {existing_id}"
                 )
             return load_cycle_by_public_id(state_dir, existing_id), False
+        replanned = None
+        if dict(source.get("superseded_by") or {}).get("kind") == "contract-replan":
+            if any(source.get(key) != current.get(key) for key in ("identity", "active_findings")):
+                raise ValueError("source review changed during contract replan; inspect its status and retry")
+            replanned = record_contract_replan(
+                current, conflict=source["convergence"]["conflict"]
+            )
         saved_successor = _save_cycle_unlocked(state_dir, successor)
         saved_source = deepcopy(current)
         for key in ("stage", "pending_action", "recovery", "superseded_by"):
             saved_source[key] = deepcopy(source.get(key))
-        if dict(source.get("superseded_by") or {}).get("kind") == "contract-replan":
-            saved_source["convergence"] = deepcopy(source["convergence"])
+        if replanned is not None:
+            saved_source["convergence"] = deepcopy(replanned["convergence"])
         redirect = dict(saved_source.get("superseded_by") or {})
         redirect["review"] = str(saved_successor["public_id"])
         redirect["cycle_key"] = str(saved_successor["cycle_key"])
