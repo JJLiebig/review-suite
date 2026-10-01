@@ -309,7 +309,7 @@ def _stub_review_with_terminal(
 
 
 def _stub_followup(
-    monkeypatch: pytest.MonkeyPatch, *round_ids: str
+    monkeypatch: pytest.MonkeyPatch, *round_ids: str, terminal_command: str | None = None
 ) -> list[dict[str, object]]:
     calls: list[dict[str, object]] = []
     ids = list(round_ids) or ["followup-round-1"]
@@ -321,6 +321,9 @@ def _stub_followup(
         reviewed_head = str(
             scope.get("reviewed_head") if isinstance(scope, dict) else "head-2"
         )
+        on_round_started = kwargs.get("on_round_started")
+        if callable(on_round_started):
+            on_round_started({"round_id": round_id, "reviewed_head": reviewed_head})
         return {
             "round_id": round_id,
             "lane": "review-followup",
@@ -333,7 +336,8 @@ def _stub_followup(
                 {
                     "slot": "alpha",
                     "status": "completed",
-                    "summary": "No findings.",
+                    "summary": f"Review result: {terminal_command}" if terminal_command else "No findings.",
+                    "terminal_command": terminal_command,
                     "ref": f"rollout://{round_id}/alpha",
                     "blocked": False,
                     "block": None,
@@ -1766,6 +1770,7 @@ def test_review_brief_is_frozen_and_public_output_reports_coverage(
         "emit_error",
         lambda message, **kwargs: errors.append(str(message)) or 2,
     )
+
     monkeypatch.setattr(
         sys,
         "argv",
@@ -2656,9 +2661,11 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert review_calls[1]["step_total"] == 4
 
 
+@pytest.mark.parametrize("invocation_wsl", [False, True])
 def test_restart_brief_supersedes_invalid_cycle_with_fresh_same_mode_ladder(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    invocation_wsl: bool,
 ) -> None:
     _stub_deslop(monkeypatch)
     _use_compact_normal_profile(monkeypatch, tmp_path / "state", include_deep=True)
@@ -2723,6 +2730,7 @@ def test_restart_brief_supersedes_invalid_cycle_with_fresh_same_mode_ladder(
             replacement_brief,
             "--reason",
             "the frozen brief was a file path",
+            *(["--wsl"] if invocation_wsl else []),
             "--state-dir",
             str(state_dir),
         ],
@@ -2732,6 +2740,7 @@ def test_restart_brief_supersedes_invalid_cycle_with_fresh_same_mode_ladder(
     assert exit_code == 0
     assert new_id != old_id
     assert len(review_calls) == 2
+    assert review_calls[-1]["allow_unsafe_windows_wsl_fallback"] is invocation_wsl
     old_saved = _cycle_payload(state_dir, old_id)
     new_state = _cycle_payload(state_dir, new_id)
     assert old_saved["stage"] == "aborted"
@@ -2826,10 +2835,147 @@ def test_restart_brief_cannot_reset_accepted_findings(
     assert review.main() == 2
     assert errors[-1] == (
         "cannot replace review brief after findings or convergence activity; "
-        "follow the existing review action"
+        "follow the existing review action, or add --contract-conflict <dimension> "
+        "with --reason <approved contract change> to replan"
     )
     assert _cycle_payload(state_dir, public_id) == before
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+
+
+@pytest.mark.parametrize("followup_pending", [False, True, "abandoned"])
+def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    followup_pending: bool | str,
+) -> None:
+    _use_compact_normal_profile(monkeypatch, tmp_path / "state", include_deep=True)
+    review_calls = _stub_review(monkeypatch, "old-round", "new-round")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/contract-replan")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--skip-deslop",
+            "--mode",
+            "deep",
+            "--review-brief",
+            "Original contract",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    old_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", old_id, "--decision", "findings"])
+    _commit_file(repo, "app.txt", "approved contract\n", "approved product change")
+    before = _cycle_payload(state_dir, old_id)
+    if followup_pending:
+        before = review.mark_fix_detected(before, head=_git(repo, "rev-parse", "HEAD"))
+        review.save_cycle(state_dir, before)
+        assert before["stage"] == "followup-pending"
+        if followup_pending == "abandoned":
+            child = subprocess.Popen([sys.executable, "-c", "pass"])
+            child.wait(timeout=10)
+            before["pending_action"]["wrapper_pid"] = child.pid
+            review.save_cycle(state_dir, before)
+    reason = (
+        "User approved changed acceptance; old findings target the obsolete contract"
+    )
+    argv = [
+        "review.py",
+        "--id",
+        old_id,
+        "--restart-brief",
+        "Approved contract",
+        "--contract-conflict",
+        "acceptance",
+        "--reason",
+        reason,
+    ]
+    errors: list[str] = []
+    monkeypatch.setattr(
+        review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2
+    )
+
+    monkeypatch.setattr(sys, "argv", argv[:-2])
+    assert review.main() == 2
+    assert "--reason is required" in errors[-1]
+    assert _cycle_payload(state_dir, old_id) == before
+
+    # A still-running follow-up is not safely supersedable, even if its wrapper was lost.
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    live_round = {
+        "round_id": "live-followup",
+        "review_scope": {"source_round_id": "old-round"},
+        "runs": [{"slot": "alpha", "pid": os.getpid()}],
+    }
+    write_round(round_state_dir, live_round)
+    monkeypatch.setattr(sys, "argv", argv)
+    assert review.main() == 2
+    assert "follow-up reviewer is running" in errors[-1]
+    assert _cycle_payload(state_dir, old_id) == before
+
+    live_round["runs"][0]["review_status"] = "completed"
+    write_round(round_state_dir, live_round)
+    # Plain creation with a new brief still cannot silently abandon accepted findings.
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review.py",
+            "--skip-deslop",
+            "--mode",
+            "deep",
+            "--review-brief",
+            "Approved contract",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+        ],
+    )
+    assert review.main() == 2
+    assert "review brief is frozen" in errors[-1]
+    assert _cycle_payload(state_dir, old_id) == before
+
+    exit_code, restarted = _run_review(monkeypatch, argv[1:])
+    assert exit_code == 0
+    new_id = str(restarted["review"])
+    assert new_id != old_id
+    old_saved = _cycle_payload(state_dir, old_id)
+    new_saved = _cycle_payload(state_dir, new_id)
+    for key in ("review_brief", "rounds", "active_findings", "decisions", "validation"):
+        assert old_saved[key] == before[key]
+    assert (
+        old_saved["convergence"]["accepted_findings_heads"]
+        == before["convergence"]["accepted_findings_heads"]
+    )
+    assert old_saved["convergence"]["decision"] == "REPLAN"
+    assert old_saved["convergence"]["conflict"] == "acceptance"
+    assert old_saved["convergence"]["decisions"] == [
+        {"decision": "REPLAN", "reason": "contract_conflict"}
+    ]
+    assert old_saved["superseded_by"]["review"] == new_id
+    assert old_saved["superseded_by"]["reason"] == reason
+    assert old_saved["stage"] == "aborted"
+    assert new_saved["review_brief"] == "Approved contract"
+    assert new_saved["mode"] == before["mode"]
+    assert new_saved["identity"]["head"] == _git(repo, "rev-parse", "HEAD")
+    assert new_saved["restart"]["supersedes"] == old_id
+    assert new_saved["restart"]["kind"] == "contract-replan"
+    assert new_saved["validation"] == dict.fromkeys(
+        ("review_green", "focused", "full_suite", "ci"), "unknown"
+    )
+    assert new_saved["convergence"]["accepted_findings_heads"] == []
+    assert new_saved["decisions"] == []
+    assert len(review_calls) == 2
 
 
 def test_contract_conflict_and_one_use_continue_are_durable(
@@ -5462,6 +5608,38 @@ def test_clean_followup_note_does_not_leak_to_later_review_steps(
         "step_index": 1,
         "step": "final-sweep",
     }
+
+
+@pytest.mark.parametrize("verdict,remaining", [("clean", False), ("clean", True), ("findings", False)])
+def test_followup_automatic_verdict_releases_owned_round(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, verdict: str, remaining: bool
+) -> None:
+    _stub_review(monkeypatch, "initial-round")
+    calls = _stub_followup(monkeypatch, "followup-round", terminal_command=verdict)
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    config = deepcopy(review.load_config(state_dir))
+    config["orchestrator"]["profiles"]["stable"]["deep"]["steps"] = [
+        {"name": "initial", "count": 1, "model_ref": "signoff_normal_model"}
+    ] + ([{"name": "remaining", "count": 1, "model_ref": "signoff_normal_model"}] if remaining else [])
+    monkeypatch.setattr(review, "load_config", lambda _: config)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/automatic-followup")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+    _, created = _run_review(monkeypatch, ["--mode", "deep", "--skip-deslop", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)])
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings"])
+    _commit_file(repo, "app.txt", "fixed\n", "fix")
+
+    code, _ = _run_review(monkeypatch, ["--id", public_id])
+
+    assert code == 0
+    completed = _cycle_payload(state_dir, public_id)
+    assert completed["stage"] == ("fix-pending" if verdict == "findings" else "created" if remaining else "review-green")
+    assert completed["decisions"][-1]["command"] == verdict
+    assert completed["decisions"][-1]["round_id"] == "followup-round"
+    assert "wrapper_pid" not in dict(completed.get("pending_action") or {})
+    assert len(calls) == 1
 
 
 def test_followup_findings_loops_back_to_fix_pending(

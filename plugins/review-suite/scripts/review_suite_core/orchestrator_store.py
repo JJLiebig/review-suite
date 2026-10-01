@@ -9,6 +9,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .orchestrator_state import convergence_summary, record_contract_replan
+
 if os.name == "nt":
     import msvcrt
 else:
@@ -177,16 +179,67 @@ def load_cycle_by_public_id(state_dir: Path, public_id: str) -> dict[str, Any]:
     return state
 
 
-def save_cycle(state_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
+def save_cycle(
+    state_dir: Path, state: dict[str, Any], *, claim_followup: bool = False
+) -> dict[str, Any]:
     with orchestrator_store_lock(state_dir=state_dir, name=ORCHESTRATOR_CYCLES_LOCK):
         cycle_key = str(state.get("cycle_key") or "").strip()
         current = load_cycle_by_key(state_dir, cycle_key) if cycle_key else None
         payload = deepcopy(state)
-        if current and str(
-            dict(current.get("superseded_by") or {}).get("review") or ""
+        if claim_followup and current is not None:
+            from review_suite_local import _process_is_running
+
+            if (
+                current.get("stage") not in {"fix-pending", "followup-pending"}
+                or convergence_summary(current)["status"] != "ACTIVE"
+                or dict(current.get("active_findings") or {}).get("round_id")
+                != dict(payload.get("active_findings") or {}).get("round_id")
+            ):
+                raise ValueError(
+                    "source review changed before follow-up launch; inspect its status and follow the current action"
+                )
+            if _process_is_running(
+                dict(current.get("pending_action") or {}).get("wrapper_pid")
+            ):
+                raise ValueError(
+                    "follow-up wrapper is already running; wait for its owning review command"
+                )
+            payload["convergence"] = deepcopy(current["convergence"])
+        if current and dict(current.get("superseded_by") or {}).get("review"):
+            return current
+        if current and current.get("stage") == "followup-pending":
+            from review_suite_local import _process_is_running
+
+            if _process_is_running(
+                dict(current.get("pending_action") or {}).get("wrapper_pid")
+            ):
+                if payload.get("stage") in {"fix-pending", "followup-pending"}:
+                    for key in ("stage", "pending_action"):
+                        payload[key] = deepcopy(current[key])
+                elif not (
+                    payload.get("stage") == "decision-pending"
+                    and dict(payload.get("pending_action") or {}).get("lane")
+                    == "review-followup"
+                    and dict(payload.get("pending_action") or {}).get("round_id")
+                    == dict(current.get("pending_action") or {}).get("round_id")
+                ):
+                    raise ValueError(
+                        "follow-up wrapper is running; finish or stop its owning review command before changing convergence"
+                    )
+        incoming_convergence = dict(payload.get("convergence") or {})
+        if (
+            current
+            and incoming_convergence.get("status") == "DECISION_REQUIRED"
+            and incoming_convergence.get("reason") == "contract_conflict"
+            and incoming_convergence != current.get("convergence")
+            and (
+                current.get("stage") != "fix-pending"
+                or current.get("active_findings") != payload.get("active_findings")
+            )
         ):
-            for key in ("stage", "pending_action", "recovery", "superseded_by"):
-                payload[key] = deepcopy(current.get(key))
+            raise ValueError(
+                "source findings changed before contract conflict was recorded; inspect its status and follow the current action"
+            )
         return _save_cycle_unlocked(state_dir, payload)
 
 
@@ -223,10 +276,24 @@ def reserve_cycle_successor(
                     f"source review cycle already has a different successor: {existing_id}"
                 )
             return load_cycle_by_public_id(state_dir, existing_id), False
+        replanned = None
+        if dict(source.get("superseded_by") or {}).get("kind") == "contract-replan":
+            if any(
+                source.get(key) != current.get(key)
+                for key in ("identity", "active_findings")
+            ):
+                raise ValueError(
+                    "source review changed during contract replan; inspect its status and retry"
+                )
+            replanned = record_contract_replan(
+                current, conflict=source["convergence"]["conflict"]
+            )
         saved_successor = _save_cycle_unlocked(state_dir, successor)
         saved_source = deepcopy(current)
         for key in ("stage", "pending_action", "recovery", "superseded_by"):
             saved_source[key] = deepcopy(source.get(key))
+        if replanned is not None:
+            saved_source["convergence"] = deepcopy(replanned["convergence"])
         redirect = dict(saved_source.get("superseded_by") or {})
         redirect["review"] = str(saved_successor["public_id"])
         redirect["cycle_key"] = str(saved_successor["cycle_key"])

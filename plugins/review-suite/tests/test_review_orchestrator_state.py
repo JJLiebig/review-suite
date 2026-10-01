@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -35,14 +36,45 @@ from review_suite_core.orchestrator_state import (
     no_work_stage_is_idle,
     record_clean_decision,
     record_contract_conflict,
+    record_contract_replan,
     record_convergence_decision,
     record_findings_decision,
+    record_fixes_validated,
     record_followup_clean,
     record_github_result,
 )
+from review_suite_core.orchestrator_store import (
+    load_cycle_by_key,
+    reserve_cycle_successor,
+    save_cycle,
+)
 
 
-def _cycle(tmp_path: Path, *, mode: str = "normal") -> dict[str, object]:
+@pytest.mark.parametrize("classify", [False, True])
+def test_late_contract_conflict_cannot_replace_completed_followup(tmp_path: Path, classify: bool) -> None:
+    state_dir = tmp_path / "state"
+    source = record_findings_decision(
+        mark_review_step_pending(_cycle(tmp_path, mode="deep"), round_id="old", lane="review_t1", step_index=0,
+                                 step_name="review", reviewed_head="head-1"),
+        round_id="old", lane="review_t1", reviewed_head="head-1",
+    )
+    save_cycle(state_dir, source)
+    stale_conflict = record_contract_conflict(source, conflict="acceptance")
+    owned = mark_fix_detected(source, head="head-2")
+    owned["pending_action"] = {**owned["pending_action"], "wrapper_pid": os.getpid(), "round_id": "new"}
+    save_cycle(state_dir, owned, claim_followup=True)
+    completed = mark_followup_review_pending(owned, round_id="new", reviewed_head="head-2", source_round_id="old")
+    saved = save_cycle(state_dir, completed)
+    if classify:
+        saved = save_cycle(state_dir, record_followup_clean(saved, round_id="new", reviewed_head="head-2"))
+    with pytest.raises(ValueError, match="source findings changed"):
+        save_cycle(state_dir, stale_conflict)
+    assert load_cycle_by_key(state_dir, source["cycle_key"]) == saved
+
+
+def _cycle(
+    tmp_path: Path, *, mode: str = "normal", restart_token: str | None = None
+) -> dict[str, object]:
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
     return create_cycle(
@@ -55,7 +87,52 @@ def _cycle(tmp_path: Path, *, mode: str = "normal") -> dict[str, object]:
         effective_mode=mode,
         selection="auto",
         effective_selection="stable",
+        restart_token=restart_token,
     )
+
+
+@pytest.mark.parametrize("intervening_decision", [None, "RESLICE"])
+def test_contract_replan_reservation_preserves_convergence_under_late_writes(
+    tmp_path: Path,
+    intervening_decision: str | None,
+) -> None:
+    state_dir = tmp_path / "state"
+    before_findings = mark_decision_pending(_cycle(tmp_path), round_id="old-round", lane="review_t1")
+    source = record_findings_decision(
+        before_findings,
+        round_id="old-round",
+        lane="review_t1",
+        reviewed_head="head-1",
+    )
+    stale = save_cycle(state_dir, source)
+    replanned = abort_cycle(
+        record_contract_replan(stale, conflict="acceptance"), reason="approved"
+    )
+    replanned["superseded_by"] = {"kind": "contract-replan", "reason": "approved"}
+    successor = _cycle(tmp_path, restart_token="contract-replan")
+    if intervening_decision:
+        current = record_convergence_decision(
+            record_contract_conflict(stale, conflict="scope"),
+            decision=intervening_decision,
+        )
+        saved = save_cycle(state_dir, current)
+        with pytest.raises(
+            ValueError, match="contract replan requires active findings"
+        ):
+            reserve_cycle_successor(state_dir, source=replanned, successor=successor)
+        assert load_cycle_by_key(state_dir, stale["cycle_key"]) == saved
+        assert load_cycle_by_key(state_dir, successor["cycle_key"]) is None
+    else:
+        reserve_cycle_successor(state_dir, source=replanned, successor=successor)
+        archived = load_cycle_by_key(state_dir, stale["cycle_key"])
+        saved = save_cycle(state_dir, stale)
+        assert saved == archived
+        assert save_cycle(state_dir, before_findings) == archived
+        assert save_cycle(state_dir, record_fixes_validated(stale, head="head-2", note="focused tests passed")) == archived
+        assert saved["convergence"] == replanned["convergence"]
+        assert saved["convergence"]["decision"] == "REPLAN"
+        assert saved["superseded_by"]["review"]
+        assert saved["active_findings"] == stale["active_findings"]
 
 
 def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(

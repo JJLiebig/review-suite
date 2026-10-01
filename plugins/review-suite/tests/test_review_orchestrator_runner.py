@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from dataclasses import asdict
@@ -31,7 +32,10 @@ from review_suite_core.orchestrator_state import (
     mark_review_step_running,
     record_clean_decision,
     record_findings_decision,
+    record_contract_replan,
+    record_contract_conflict,
 )
+from review_suite_core.orchestrator_store import load_cycle_by_key, orchestrator_store_lock, save_cycle
 from review_suite_local import write_round
 
 
@@ -137,6 +141,9 @@ def _stub_followup(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
         reviewed_head = str(
             scope.get("reviewed_head") if isinstance(scope, dict) else "head-2"
         )
+        if callable(on_round_started := kwargs.get("on_round_started")):
+            on_round_started({"round_id": round_id, "reviewed_head": reviewed_head,
+                              "round_state_dir": "state/orchestrator/review-rounds"})
         return {
             "round_id": round_id,
             "lane": "review-followup",
@@ -1345,6 +1352,86 @@ def test_runner_does_not_retry_failed_deslop_for_aborted_cycle(
     assert calls == []
 
 
+@pytest.mark.parametrize("superseded_before_launch", [False, True, "conflict"])
+def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
+    monkeypatch, tmp_path: Path, clean_worktree, request, superseded_before_launch: bool,
+) -> None:
+    monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
+    monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda *args: True)
+    monkeypatch.setattr(orchestrator_runner, "is_ancestor", lambda *args: True)
+    monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda *args, **kwargs: {"dirty_paths": []})
+    state = _cycle(tmp_path, mode="deep", deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
+    source = record_findings_decision(
+        mark_review_step_pending(state, round_id="old-round", lane="review_t1", step_index=0,
+                                 step_name="broad-discovery", reviewed_head="head-1"),
+        round_id="old-round", lane="review_t1", reviewed_head="head-1",
+    )
+    fixed = mark_fix_detected(source, head="head-2")
+    state_dir = tmp_path / "state"
+    fixed = save_cycle(state_dir, fixed)
+    if superseded_before_launch == "conflict":
+        save_cycle(state_dir, source)
+    launches: list[str] = []
+    test_pid = os.getpid()
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    request.addfinalizer(lambda: (holder.terminate(), holder.wait(timeout=10)) if holder.poll() is None else None)
+    monkeypatch.setattr(orchestrator_runner.os, "getpid", lambda: holder.pid)
+
+    def launch(**kwargs):
+        if superseded_before_launch == "conflict":
+            original_save = orchestrator_runner.save_cycle
+
+            def conflict_before_claim(state_dir, state, **options):
+                save_cycle(state_dir, record_contract_conflict(source, conflict="scope"))
+                return original_save(state_dir, state, **options)
+
+            monkeypatch.setattr(orchestrator_runner, "save_cycle", conflict_before_claim)
+        elif superseded_before_launch:
+            superseded = abort_cycle(fixed, reason="approved replan")
+            superseded["superseded_by"] = {"review": "rvw_successor"}
+            save_cycle(state_dir, superseded)
+        kwargs["on_round_started"]({"round_id": "followup-round", "reviewed_head": "head-2",
+                                   "round_state_dir": str(state_dir / "orchestrator/review-rounds")})
+        # Ownership is persisted before launch, but the mutex is not held during review.
+        with orchestrator_store_lock(state_dir=state_dir, name=f"followup-{fixed['cycle_key']}", timeout_seconds=0):
+            running = load_cycle_by_key(state_dir, fixed["cycle_key"])
+            with pytest.raises(ValueError, match="follow-up wrapper is running"):
+                record_contract_replan(running, conflict="acceptance")
+            stale_saved = save_cycle(state_dir, fixed)
+            with pytest.raises(ValueError, match="follow-up wrapper is running"):
+                record_contract_replan(stale_saved, conflict="acceptance")
+            stale_conflict = record_contract_conflict(source, conflict="scope")
+            with pytest.raises(ValueError, match="follow-up wrapper is running"):
+                save_cycle(state_dir, stale_conflict)
+        launches.append("followup-round")
+        raise InterruptedError("wrapper interrupted after launch")
+
+    monkeypatch.setattr(orchestrator_runner, "run_followup_review_step", launch)
+    if superseded_before_launch:
+        with pytest.raises(ValueError, match="source review changed before follow-up launch"):
+            orchestrator_runner.run_one_expensive_step(fixed, state_dir=state_dir)
+        assert launches == []
+        if superseded_before_launch == "conflict":
+            current = load_cycle_by_key(state_dir, fixed["cycle_key"])
+            assert current["convergence"]["status"] == "DECISION_REQUIRED"
+            assert current["convergence"]["conflict"] == "scope"
+    else:
+        with pytest.raises(InterruptedError):
+            orchestrator_runner.run_one_expensive_step(fixed, state_dir=state_dir)
+        running = load_cycle_by_key(state_dir, fixed["cycle_key"])
+        assert running["stage"] == "followup-pending"
+        assert running["active_findings"] == fixed["active_findings"]
+        assert running["review_progress"] == fixed["review_progress"]
+        holder.terminate()
+        holder.wait(timeout=10)
+        assert record_contract_replan(running, conflict="acceptance")["convergence"]["decision"] == "REPLAN"
+        monkeypatch.setattr(orchestrator_runner.os, "getpid", lambda: test_pid)
+        # Normal recovery uses the same pre-launch ownership path, with no new lifecycle branch.
+        with pytest.raises(InterruptedError):
+            orchestrator_runner.run_one_expensive_step(running, state_dir=state_dir)
+        assert launches == ["followup-round", "followup-round"]
+
+
 def test_runner_runs_real_followup_once_from_followup_pending(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1394,6 +1481,7 @@ def test_runner_runs_real_followup_once_from_followup_pending(
     fixed["identity"]["base_upstream"] = "origin/main"
     fixed["identity"]["base_ref_stale"] = True
     fixed["review_brief"] = "# Goal\n\nStay scoped."
+    save_cycle(tmp_path / "state", fixed)
 
     result = orchestrator_runner.run_one_expensive_step(
         fixed, state_dir=tmp_path / "state"
@@ -1402,6 +1490,7 @@ def test_runner_runs_real_followup_once_from_followup_pending(
     assert result.ran_step is True
     assert result.step == "review-followup"
     assert result.state["stage"] == STAGE_DECISION_PENDING
+    assert save_cycle(tmp_path / "state", result.state)["stage"] == STAGE_DECISION_PENDING
     assert result.state["pending_action"] == {
         "kind": "decision",
         "round_id": "followup-round-1",

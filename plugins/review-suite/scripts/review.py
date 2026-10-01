@@ -100,6 +100,7 @@ from review_suite_core.orchestrator_state import (
     abort_cycle,
     convergence_summary,
     record_contract_conflict,
+    record_contract_replan,
     record_convergence_decision,
 )
 from review_suite_core.orchestrator_store import (
@@ -115,6 +116,7 @@ from review_suite_local import (
     grade_rank_placeholders,
     latest_rerolled_round_payload,
     load_round,
+    rounds_dir,
     print_reviewer_output_section,
     round_has_live_reviewer_process,
     round_needs_caller_grade,
@@ -160,7 +162,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Replace a mistaken frozen review brief and start a fresh same-mode cycle.",
     )
     parser.add_argument(
-        "--contract-conflict", choices=tuple(sorted(CONTRACT_CONFLICTS))
+        "--contract-conflict",
+        choices=tuple(sorted(CONTRACT_CONFLICTS)),
+        help="Report a frozen-contract conflict; pair with --restart-brief and --reason for an approved contract replan.",
     )
     parser.add_argument(
         "--convergence-decision",
@@ -2349,7 +2353,12 @@ def _create_successor_cycle(
     return _apply_profile_resolution(replacement, resolution), False
 
 
-def _start_successor_cycle(
+def _start_successor_cycle(state: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    replacement = _reserve_successor_cycle(state, **kwargs)
+    return _resume_reserved_successor(replacement, state_dir=kwargs["state_dir"])
+
+
+def _reserve_successor_cycle(
     state: dict[str, Any],
     *,
     state_dir: Path,
@@ -2379,7 +2388,7 @@ def _start_successor_cycle(
         source=superseded,
         successor=replacement,
     )
-    return _resume_reserved_successor(saved_replacement, state_dir=state_dir)
+    return saved_replacement
 
 
 def _resume_reserved_successor(
@@ -2433,7 +2442,28 @@ def _restart_cycle(
 
 
 def _restart_review_brief(
-    state: dict[str, Any], *, state_dir: Path, review_brief: str, reason: str
+    state: dict[str, Any], *, state_dir: Path, **kwargs: Any
+) -> dict[str, Any]:
+    with orchestrator_store_lock(
+        state_dir=state_dir,
+        name=f"followup-{state['cycle_key']}",
+        timeout_seconds=1,
+    ):
+        current = load_cycle_by_key(state_dir, state["cycle_key"]) or state
+        current = _copy_runtime_options(current, state)
+        replacement = _reserve_review_brief_restart(
+            current, state_dir=state_dir, **kwargs
+        )
+    return _resume_reserved_successor(replacement, state_dir=state_dir)
+
+
+def _reserve_review_brief_restart(
+    state: dict[str, Any],
+    *,
+    state_dir: Path,
+    review_brief: str,
+    reason: str,
+    contract_conflict: str | None = None,
 ) -> dict[str, Any]:
     if not review_brief.strip():
         raise ValueError("--restart-brief cannot be blank")
@@ -2444,7 +2474,19 @@ def _restart_review_brief(
         raise ValueError("--restart-brief must differ from the frozen review brief")
 
     convergence = convergence_summary(state)
-    if (
+    if contract_conflict:
+        state = record_contract_replan(state, conflict=contract_conflict)
+        source_round_id = dict(state["active_findings"])["round_id"]
+        round_state_dir = state_dir / "orchestrator" / "review-rounds"
+        for path in rounds_dir(round_state_dir).glob("*.json"):
+            payload = load_round(round_state_dir, path.stem)
+            if dict(payload.get("review_scope") or {}).get(
+                "source_round_id"
+            ) == source_round_id and round_has_live_reviewer_process(payload):
+                raise ValueError(
+                    "cannot replan while a follow-up reviewer is running; wait for it to finish or stop the owning review command"
+                )
+    elif (
         state.get("stage")
         not in {
             STAGE_CREATED,
@@ -2458,7 +2500,8 @@ def _restart_review_brief(
     ):
         raise ValueError(
             "cannot replace review brief after findings or convergence activity; "
-            "follow the existing review action"
+            "follow the existing review action, or add --contract-conflict <dimension> "
+            "with --reason <approved contract change> to replan"
         )
 
     review_root, _, _, head, merge_base_head = _current_restart_identity(
@@ -2476,12 +2519,12 @@ def _restart_review_brief(
             "cannot replace review brief after review lineage changed; start a new review instead"
         )
 
-    return _start_successor_cycle(
+    return _reserve_successor_cycle(
         state,
         state_dir=state_dir,
         target_mode=_current_mode(state),
         reason=reason,
-        kind="review-brief-restart",
+        kind="contract-replan" if contract_conflict else "review-brief-restart",
         require_exact_identity=False,
         review_brief=review_brief,
     )
@@ -3176,9 +3219,23 @@ def main() -> int:
             or has_restart_brief
             or has_validation_status
         )
-        if convergence_action and (convergence_conflict or other_action):
+        contract_replan = bool(args.contract_conflict and has_restart_brief)
+        if (
+            convergence_action
+            and not contract_replan
+            and (convergence_conflict or other_action)
+        ):
             raise ValueError(
                 "convergence actions cannot be combined with another id action"
+            )
+        if contract_replan and (
+            args.convergence_decision
+            or args.restart_mode
+            or args.deslop_done
+            or args.wsl
+        ):
+            raise ValueError(
+                "contract replan cannot be combined with another id action"
             )
         if args.skip_deslop and args.id:
             raise ValueError(
@@ -3329,7 +3386,7 @@ def main() -> int:
                 return _show_findings(state, state_dir=state_dir)
             if args.show_status:
                 return _show_status(state, state_dir=state_dir)
-            if args.contract_conflict:
+            if args.contract_conflict and not has_restart_brief:
                 state = record_contract_conflict(
                     state, conflict=str(args.contract_conflict)
                 )
@@ -3374,6 +3431,7 @@ def main() -> int:
                     state_dir=state_dir,
                     review_brief=str(args.restart_brief),
                     reason=_restart_reason(args, option="--restart-brief"),
+                    contract_conflict=args.contract_conflict,
                 )
                 _render(state, state_dir=state_dir)
                 return 0

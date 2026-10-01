@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,7 @@ from .orchestrator_state import (
     next_review_profile_step,
     review_profile_has_next_step,
 )
+from .orchestrator_store import load_cycle_by_key, orchestrator_store_lock, save_cycle
 from .paths import cwd_path_from_normalized
 from .process_runtime import (
     CapturedChildProcess,
@@ -1317,6 +1319,22 @@ def _run_followup_review_once(
     if not prompt.strip():
         raise ValueError("follow-up review prompt must not be empty")
     model_config = lens_model_config(FOLLOWUP_REVIEW_LANE, state_dir=state_dir)
+
+    def on_round_started(round_info: dict[str, object]) -> None:
+        with orchestrator_store_lock(
+            state_dir=state_dir,
+            name=f"followup-{state['cycle_key']}",
+            timeout_seconds=1,
+        ):
+            if load_cycle_by_key(state_dir, state["cycle_key"]) is not None:
+                owned = dict(state)
+                owned["pending_action"] = {
+                    **dict(state.get("pending_action") or {}),
+                    "wrapper_pid": os.getpid(),
+                    "round_id": str(round_info["round_id"]),
+                }
+                save_cycle(state_dir, owned, claim_followup=True)
+
     review_result = run_followup_review_step(
         model=model_config.model,
         reasoning_effort=model_config.reasoning_effort,
@@ -1329,6 +1347,7 @@ def _run_followup_review_once(
         task_id=_task_id(state),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
         allow_unsafe_windows_wsl_fallback=_allow_unsafe_windows_wsl_fallback(state),
+        on_round_started=on_round_started,
     )
     round_id = str(review_result.get("round_id") or "").strip()
     if not round_id:
@@ -1340,8 +1359,12 @@ def _run_followup_review_once(
         reviewed_head=reviewed_head,
         source_round_id=source_round_id,
     )
+    completed = _attach_review_result(next_state, review_result)
+    if load_cycle_by_key(state_dir, state["cycle_key"]) is not None:
+        # Release this round's ownership before the CLI automatically classifies its verdict.
+        completed = save_cycle(state_dir, completed)
     return OrchestratorRunnerResult(
-        _attach_review_result(next_state, review_result),
+        completed,
         ran_step=True,
         step=FOLLOWUP_REVIEW_LANE,
     )

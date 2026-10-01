@@ -1447,6 +1447,7 @@ def run_orchestrator_followup_review_step(
     task_id: str | None,
     progress_interval_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
+    on_round_started: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     result = _run_orchestrator_manual_review_step(
         lane="review-followup",
@@ -1464,6 +1465,7 @@ def run_orchestrator_followup_review_step(
         progress_interval_seconds=progress_interval_seconds,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
         grading_required=False,
+        on_round_started=on_round_started,
     )
     result["kind"] = "followup"
     return result
