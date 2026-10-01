@@ -20,7 +20,6 @@ if str(SCRIPT_DIR) not in sys.path:
 import review
 import review_suite_arena
 from review_suite_core import orchestrator_runner, orchestrator_store
-from review_suite_core.orchestrator_state import mark_followup_review_running
 from review_suite_local import write_round
 
 
@@ -2876,10 +2875,7 @@ def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
         if followup_pending == "abandoned":
             child = subprocess.Popen([sys.executable, "-c", "pass"])
             child.wait(timeout=10)
-            before = mark_followup_review_running(
-                before, round_id="abandoned-followup", reviewed_head=_git(repo, "rev-parse", "HEAD"),
-                round_state_dir=str(state_dir / "orchestrator/review-rounds"), wrapper_pid=child.pid,
-            )
+            before["pending_action"]["wrapper_pid"] = child.pid
             review.save_cycle(state_dir, before)
     reason = (
         "User approved changed acceptance; old findings target the obsolete contract"

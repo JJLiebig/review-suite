@@ -1378,6 +1378,9 @@ def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
             running = load_cycle_by_key(state_dir, fixed["cycle_key"])
             with pytest.raises(ValueError, match="follow-up wrapper is running"):
                 record_contract_replan(running, conflict="acceptance")
+            stale_saved = save_cycle(state_dir, fixed)
+            with pytest.raises(ValueError, match="follow-up wrapper is running"):
+                record_contract_replan(stale_saved, conflict="acceptance")
         launches.append("followup-round")
         raise InterruptedError("wrapper interrupted after launch")
 
@@ -1390,17 +1393,18 @@ def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
         with pytest.raises(InterruptedError):
             orchestrator_runner.run_one_expensive_step(fixed, state_dir=state_dir)
         running = load_cycle_by_key(state_dir, fixed["cycle_key"])
-        assert running["stage"] == "running"
-        monkeypatch.setattr(orchestrator_runner, "resume_review_step", lambda **kwargs: {
-            "round_id": "followup-round", "reviewed_head": "head-2", "runs": [], "status": "completed",
-        })
-        recovered = orchestrator_runner.run_one_expensive_step(running, state_dir=state_dir)
-        assert recovered.state["stage"] == STAGE_DECISION_PENDING
-        assert recovered.state["pending_action"]["lane"] == "review-followup"
-        assert recovered.state["active_findings"]["round_id"] == "old-round"
-        assert recovered.state["active_findings"]["followup_round_id"] == "followup-round"
-        assert recovered.state["review_progress"] == fixed["review_progress"]
-        assert launches == ["followup-round"]
+        assert running["stage"] == "followup-pending"
+        assert running["active_findings"] == fixed["active_findings"]
+        assert running["review_progress"] == fixed["review_progress"]
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        child.wait(timeout=10)
+        running["pending_action"]["wrapper_pid"] = child.pid
+        save_cycle(state_dir, running)
+        assert record_contract_replan(running, conflict="acceptance")["convergence"]["decision"] == "REPLAN"
+        # Normal recovery uses the same pre-launch ownership path, with no new lifecycle branch.
+        with pytest.raises(InterruptedError):
+            orchestrator_runner.run_one_expensive_step(running, state_dir=state_dir)
+        assert launches == ["followup-round", "followup-round"]
 
 
 def test_runner_runs_real_followup_once_from_followup_pending(

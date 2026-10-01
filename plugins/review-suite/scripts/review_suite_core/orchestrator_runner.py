@@ -20,6 +20,7 @@ from review_suite_local import (
     load_round,
     payload_has_blocked_runs,
     round_needs_caller_grade,
+    _process_is_running,
 )
 
 from .axi_output import format_command, write_text
@@ -43,7 +44,6 @@ from .orchestrator_state import (
     mark_deslop_failed,
     mark_recovery_resolved,
     mark_followup_review_pending,
-    mark_followup_review_running,
     convergence_summary,
     mark_review_step_running,
     mark_review_step_pending,
@@ -1006,18 +1006,6 @@ def _collect_running_review_once(
         ).strip()
         or None
     )
-    if lane == FOLLOWUP_REVIEW_LANE:
-        next_state = mark_followup_review_pending(
-            state,
-            round_id=round_id,
-            reviewed_head=reviewed_head,
-            source_round_id=str(pending["source_round_id"]),
-        )
-        return OrchestratorRunnerResult(
-            _attach_review_result(next_state, review_result),
-            ran_step=True,
-            step=FOLLOWUP_REVIEW_LANE,
-        )
     next_state = mark_review_step_pending(
         state,
         round_id=round_id,
@@ -1353,15 +1341,12 @@ def _run_followup_review_once(
                     raise ValueError(
                         "source review changed before follow-up launch; inspect its status and follow the current action"
                     )
-                running = mark_followup_review_running(
-                    state,
-                    round_id=str(round_info["round_id"]),
-                    reviewed_head=str(round_info["reviewed_head"]),
-                    round_state_dir=str(round_info["round_state_dir"]),
-                    wrapper_pid=os.getpid(),
-                )
-                running["convergence"] = current["convergence"]
-                save_cycle(state_dir, running)
+                if _process_is_running(dict(current.get("pending_action") or {}).get("wrapper_pid")):
+                    raise ValueError("follow-up wrapper is already running; wait for its owning review command")
+                owned = dict(state)
+                owned["pending_action"] = {**dict(state.get("pending_action") or {}), "wrapper_pid": os.getpid()}
+                owned["convergence"] = current["convergence"]
+                save_cycle(state_dir, owned)
 
     review_result = run_followup_review_step(
         model=model_config.model,
