@@ -48,7 +48,9 @@ from review_suite_core.orchestrator_store import (
 )
 
 
-def _cycle(tmp_path: Path, *, mode: str = "normal", restart_token: str | None = None) -> dict[str, object]:
+def _cycle(
+    tmp_path: Path, *, mode: str = "normal", restart_token: str | None = None
+) -> dict[str, object]:
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
     return create_cycle(
@@ -67,23 +69,31 @@ def _cycle(tmp_path: Path, *, mode: str = "normal", restart_token: str | None = 
 
 @pytest.mark.parametrize("intervening_decision", [None, "RESLICE"])
 def test_contract_replan_reservation_preserves_convergence_under_late_writes(
-    tmp_path: Path, intervening_decision: str | None,
+    tmp_path: Path,
+    intervening_decision: str | None,
 ) -> None:
     state_dir = tmp_path / "state"
     source = record_findings_decision(
         mark_decision_pending(_cycle(tmp_path), round_id="old-round", lane="review_t1"),
-        round_id="old-round", lane="review_t1", reviewed_head="head-1",
+        round_id="old-round",
+        lane="review_t1",
+        reviewed_head="head-1",
     )
     stale = save_cycle(state_dir, source)
-    replanned = abort_cycle(record_contract_replan(stale, conflict="acceptance"), reason="approved")
+    replanned = abort_cycle(
+        record_contract_replan(stale, conflict="acceptance"), reason="approved"
+    )
     replanned["superseded_by"] = {"kind": "contract-replan", "reason": "approved"}
     successor = _cycle(tmp_path, restart_token="contract-replan")
     if intervening_decision:
         current = record_convergence_decision(
-            record_contract_conflict(stale, conflict="scope"), decision=intervening_decision,
+            record_contract_conflict(stale, conflict="scope"),
+            decision=intervening_decision,
         )
         saved = save_cycle(state_dir, current)
-        with pytest.raises(ValueError, match="contract replan requires active findings"):
+        with pytest.raises(
+            ValueError, match="contract replan requires active findings"
+        ):
             reserve_cycle_successor(state_dir, source=replanned, successor=successor)
         assert load_cycle_by_key(state_dir, stale["cycle_key"]) == saved
         assert load_cycle_by_key(state_dir, successor["cycle_key"]) is None

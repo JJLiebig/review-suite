@@ -31,7 +31,9 @@ from review_suite_core.orchestrator_state import (
     mark_review_step_running,
     record_clean_decision,
     record_findings_decision,
+    record_contract_replan,
 )
+from review_suite_core.orchestrator_store import load_cycle_by_key, orchestrator_store_lock, save_cycle
 from review_suite_local import write_round
 
 
@@ -1343,6 +1345,62 @@ def test_runner_does_not_retry_failed_deslop_for_aborted_cycle(
     assert result.ran_step is False
     assert result.state["stage"] == STAGE_ABORTED
     assert calls == []
+
+
+@pytest.mark.parametrize("superseded_before_launch", [False, True])
+def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
+    monkeypatch, tmp_path: Path, clean_worktree, superseded_before_launch: bool,
+) -> None:
+    monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
+    monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda *args: True)
+    monkeypatch.setattr(orchestrator_runner, "is_ancestor", lambda *args: True)
+    monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda *args, **kwargs: {"dirty_paths": []})
+    state = _cycle(tmp_path, mode="deep", deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
+    source = record_findings_decision(
+        mark_review_step_pending(state, round_id="old-round", lane="review_t1", step_index=0,
+                                 step_name="broad-discovery", reviewed_head="head-1"),
+        round_id="old-round", lane="review_t1", reviewed_head="head-1",
+    )
+    fixed = mark_fix_detected(source, head="head-2")
+    state_dir = tmp_path / "state"
+    fixed = save_cycle(state_dir, fixed)
+    launches: list[str] = []
+
+    def launch(**kwargs):
+        if superseded_before_launch:
+            superseded = abort_cycle(fixed, reason="approved replan")
+            superseded["superseded_by"] = {"review": "rvw_successor"}
+            save_cycle(state_dir, superseded)
+        kwargs["on_round_started"]({"round_id": "followup-round", "reviewed_head": "head-2",
+                                   "round_state_dir": str(state_dir / "orchestrator/review-rounds")})
+        # Ownership is persisted before launch, but the mutex is not held during review.
+        with orchestrator_store_lock(state_dir=state_dir, name=f"followup-{fixed['cycle_key']}", timeout_seconds=0):
+            running = load_cycle_by_key(state_dir, fixed["cycle_key"])
+            with pytest.raises(ValueError, match="contract replan requires active findings"):
+                record_contract_replan(running, conflict="acceptance")
+        launches.append("followup-round")
+        raise InterruptedError("wrapper interrupted after launch")
+
+    monkeypatch.setattr(orchestrator_runner, "run_followup_review_step", launch)
+    if superseded_before_launch:
+        with pytest.raises(ValueError, match="source review changed before follow-up launch"):
+            orchestrator_runner.run_one_expensive_step(fixed, state_dir=state_dir)
+        assert launches == []
+    else:
+        with pytest.raises(InterruptedError):
+            orchestrator_runner.run_one_expensive_step(fixed, state_dir=state_dir)
+        running = load_cycle_by_key(state_dir, fixed["cycle_key"])
+        assert running["stage"] == "running"
+        monkeypatch.setattr(orchestrator_runner, "resume_review_step", lambda **kwargs: {
+            "round_id": "followup-round", "reviewed_head": "head-2", "runs": [], "status": "completed",
+        })
+        recovered = orchestrator_runner.run_one_expensive_step(running, state_dir=state_dir)
+        assert recovered.state["stage"] == STAGE_DECISION_PENDING
+        assert recovered.state["pending_action"]["lane"] == "review-followup"
+        assert recovered.state["active_findings"]["round_id"] == "old-round"
+        assert recovered.state["active_findings"]["followup_round_id"] == "followup-round"
+        assert recovered.state["review_progress"] == fixed["review_progress"]
+        assert launches == ["followup-round"]
 
 
 def test_runner_runs_real_followup_once_from_followup_pending(

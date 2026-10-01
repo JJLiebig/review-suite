@@ -2353,7 +2353,12 @@ def _create_successor_cycle(
     return _apply_profile_resolution(replacement, resolution), False
 
 
-def _start_successor_cycle(
+def _start_successor_cycle(state: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    replacement = _reserve_successor_cycle(state, **kwargs)
+    return _resume_reserved_successor(replacement, state_dir=kwargs["state_dir"])
+
+
+def _reserve_successor_cycle(
     state: dict[str, Any],
     *,
     state_dir: Path,
@@ -2383,7 +2388,7 @@ def _start_successor_cycle(
         source=superseded,
         successor=replacement,
     )
-    return _resume_reserved_successor(saved_replacement, state_dir=state_dir)
+    return saved_replacement
 
 
 def _resume_reserved_successor(
@@ -2437,6 +2442,21 @@ def _restart_cycle(
 
 
 def _restart_review_brief(
+    state: dict[str, Any], *, state_dir: Path, **kwargs: Any
+) -> dict[str, Any]:
+    with orchestrator_store_lock(
+        state_dir=state_dir,
+        name=f"followup-{state['cycle_key']}",
+        timeout_seconds=1,
+    ):
+        current = load_cycle_by_key(state_dir, state["cycle_key"]) or state
+        replacement = _reserve_review_brief_restart(
+            current, state_dir=state_dir, **kwargs
+        )
+    return _resume_reserved_successor(replacement, state_dir=state_dir)
+
+
+def _reserve_review_brief_restart(
     state: dict[str, Any],
     *,
     state_dir: Path,
@@ -2498,7 +2518,7 @@ def _restart_review_brief(
             "cannot replace review brief after review lineage changed; start a new review instead"
         )
 
-    return _start_successor_cycle(
+    return _reserve_successor_cycle(
         state,
         state_dir=state_dir,
         target_mode=_current_mode(state),

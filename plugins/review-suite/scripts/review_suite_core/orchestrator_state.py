@@ -1687,6 +1687,32 @@ def mark_fix_detected(
     return next_state
 
 
+def mark_followup_review_running(
+    state: dict[str, Any],
+    *,
+    round_id: str,
+    reviewed_head: str,
+    round_state_dir: str,
+) -> dict[str, Any]:
+    next_state = mark_running(
+        state, round_id=round_id, lane="review-followup", reviewed_head=reviewed_head
+    )
+    source_round_id = _active_findings(next_state)["round_id"]
+    _set_stage(
+        next_state,
+        STAGE_RUNNING,
+        {
+            "kind": "collect-review-step",
+            "round_id": round_id,
+            "lane": "review-followup",
+            "step": "followup",
+            "round_state_dir": round_state_dir,
+            "source_round_id": source_round_id,
+        },
+    )
+    return next_state
+
+
 def mark_followup_review_pending(
     state: dict[str, Any],
     *,

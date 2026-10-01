@@ -31,6 +31,7 @@ from .lens_runtime import (
 from .orchestrator_state import (
     STAGE_CREATED,
     STAGE_DECISION_PENDING,
+    STAGE_FIX_PENDING,
     STAGE_FOLLOWUP_PENDING,
     STAGE_RETRY_REQUESTED,
     STAGE_RUNNING,
@@ -41,12 +42,15 @@ from .orchestrator_state import (
     mark_deslop_failed,
     mark_recovery_resolved,
     mark_followup_review_pending,
+    mark_followup_review_running,
+    convergence_summary,
     mark_review_step_running,
     mark_review_step_pending,
     mark_review_step_retry,
     next_review_profile_step,
     review_profile_has_next_step,
 )
+from .orchestrator_store import load_cycle_by_key, orchestrator_store_lock, save_cycle
 from .paths import cwd_path_from_normalized
 from .process_runtime import (
     CapturedChildProcess,
@@ -1001,6 +1005,18 @@ def _collect_running_review_once(
         ).strip()
         or None
     )
+    if lane == FOLLOWUP_REVIEW_LANE:
+        next_state = mark_followup_review_pending(
+            state,
+            round_id=round_id,
+            reviewed_head=reviewed_head,
+            source_round_id=str(pending["source_round_id"]),
+        )
+        return OrchestratorRunnerResult(
+            _attach_review_result(next_state, review_result),
+            ran_step=True,
+            step=FOLLOWUP_REVIEW_LANE,
+        )
     next_state = mark_review_step_pending(
         state,
         round_id=round_id,
@@ -1317,6 +1333,33 @@ def _run_followup_review_once(
     if not prompt.strip():
         raise ValueError("follow-up review prompt must not be empty")
     model_config = lens_model_config(FOLLOWUP_REVIEW_LANE, state_dir=state_dir)
+
+    def on_round_started(round_info: dict[str, object]) -> None:
+        with orchestrator_store_lock(
+            state_dir=state_dir,
+            name=f"followup-{state['cycle_key']}",
+            timeout_seconds=1,
+        ):
+            current = load_cycle_by_key(state_dir, state["cycle_key"])
+            if current is not None:
+                if (
+                    current.get("stage") not in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}
+                    or convergence_summary(current)["status"] != "ACTIVE"
+                    or dict(current.get("active_findings") or {}).get("round_id")
+                    != source_round_id
+                ):
+                    raise ValueError(
+                        "source review changed before follow-up launch; inspect its status and follow the current action"
+                    )
+                running = mark_followup_review_running(
+                    state,
+                    round_id=str(round_info["round_id"]),
+                    reviewed_head=str(round_info["reviewed_head"]),
+                    round_state_dir=str(round_info["round_state_dir"]),
+                )
+                running["convergence"] = current["convergence"]
+                save_cycle(state_dir, running)
+
     review_result = run_followup_review_step(
         model=model_config.model,
         reasoning_effort=model_config.reasoning_effort,
@@ -1329,6 +1372,7 @@ def _run_followup_review_once(
         task_id=_task_id(state),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
         allow_unsafe_windows_wsl_fallback=_allow_unsafe_windows_wsl_fallback(state),
+        on_round_started=on_round_started,
     )
     round_id = str(review_result.get("round_id") or "").strip()
     if not round_id:

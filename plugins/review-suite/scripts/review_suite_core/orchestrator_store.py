@@ -187,7 +187,13 @@ def save_cycle(state_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
         if current and str(
             dict(current.get("superseded_by") or {}).get("review") or ""
         ):
-            for key in ("stage", "pending_action", "recovery", "superseded_by", "convergence"):
+            for key in (
+                "stage",
+                "pending_action",
+                "recovery",
+                "superseded_by",
+                "convergence",
+            ):
                 payload[key] = deepcopy(current.get(key))
         return _save_cycle_unlocked(state_dir, payload)
 
@@ -227,8 +233,13 @@ def reserve_cycle_successor(
             return load_cycle_by_public_id(state_dir, existing_id), False
         replanned = None
         if dict(source.get("superseded_by") or {}).get("kind") == "contract-replan":
-            if any(source.get(key) != current.get(key) for key in ("identity", "active_findings")):
-                raise ValueError("source review changed during contract replan; inspect its status and retry")
+            if any(
+                source.get(key) != current.get(key)
+                for key in ("identity", "active_findings")
+            ):
+                raise ValueError(
+                    "source review changed during contract replan; inspect its status and retry"
+                )
             replanned = record_contract_replan(
                 current, conflict=source["convergence"]["conflict"]
             )
