@@ -729,6 +729,24 @@ def record_convergence_decision(
     return next_state
 
 
+def record_contract_replan(state: dict[str, Any], *, conflict: str) -> dict[str, Any]:
+    if (
+        state.get("stage") not in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}
+        or not isinstance(state.get("active_findings"), dict)
+        or convergence_summary(state)["status"] != "ACTIVE"
+    ):
+        raise ValueError(
+            "contract replan requires active findings awaiting a fix or follow-up"
+        )
+    next_state = _copy_state(state)
+    _require_convergence_decision_inplace(
+        next_state,
+        reason="contract_conflict",
+        conflict=_required_text(conflict, field="conflict"),
+    )
+    return record_convergence_decision(next_state, decision="REPLAN")
+
+
 def _nonnegative_int(value: Any, *, field: str) -> int:
     try:
         number = int(value)

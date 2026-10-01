@@ -227,6 +227,8 @@ def reserve_cycle_successor(
         saved_source = deepcopy(current)
         for key in ("stage", "pending_action", "recovery", "superseded_by"):
             saved_source[key] = deepcopy(source.get(key))
+        if dict(source.get("superseded_by") or {}).get("kind") == "contract-replan":
+            saved_source["convergence"] = deepcopy(source["convergence"])
         redirect = dict(saved_source.get("superseded_by") or {})
         redirect["review"] = str(saved_successor["public_id"])
         redirect["cycle_key"] = str(saved_successor["cycle_key"])
