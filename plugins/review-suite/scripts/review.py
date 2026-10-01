@@ -1897,6 +1897,8 @@ def _continuation_head_match_kind(
     if recorded_head == head:
         return "exact"
     stage = str(state.get("stage") or "")
+    if stage == STAGE_RUNNING and dict(state.get("pending_action") or {}).get("lane") == FOLLOWUP_LANE:
+        return "changed"
     if stage == STAGE_CREATED:
         if dict(state.get("deslop") or {}).get("status") in {
             DESLOP_STATUS_DONE,

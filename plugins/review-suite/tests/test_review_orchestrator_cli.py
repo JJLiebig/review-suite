@@ -20,6 +20,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import review
 import review_suite_arena
 from review_suite_core import orchestrator_runner, orchestrator_store
+from review_suite_core.orchestrator_state import mark_followup_review_running
 from review_suite_local import write_round
 
 
@@ -2834,11 +2835,11 @@ def test_restart_brief_cannot_reset_accepted_findings(
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
 
 
-@pytest.mark.parametrize("followup_pending", [False, True])
+@pytest.mark.parametrize("followup_pending", [False, True, "abandoned"])
 def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    followup_pending: bool,
+    followup_pending: bool | str,
 ) -> None:
     _use_compact_normal_profile(monkeypatch, tmp_path / "state", include_deep=True)
     review_calls = _stub_review(monkeypatch, "old-round", "new-round")
@@ -2872,6 +2873,14 @@ def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
         before = review.mark_fix_detected(before, head=_git(repo, "rev-parse", "HEAD"))
         review.save_cycle(state_dir, before)
         assert before["stage"] == "followup-pending"
+        if followup_pending == "abandoned":
+            child = subprocess.Popen([sys.executable, "-c", "pass"])
+            child.wait(timeout=10)
+            before = mark_followup_review_running(
+                before, round_id="abandoned-followup", reviewed_head=_git(repo, "rev-parse", "HEAD"),
+                round_state_dir=str(state_dir / "orchestrator/review-rounds"), wrapper_pid=child.pid,
+            )
+            review.save_cycle(state_dir, before)
     reason = (
         "User approved changed acceptance; old findings target the obsolete contract"
     )

@@ -730,14 +730,30 @@ def record_convergence_decision(
 
 
 def record_contract_replan(state: dict[str, Any], *, conflict: str) -> dict[str, Any]:
+    pending = dict(state.get("pending_action") or {})
+    running_followup = (
+        state.get("stage") == STAGE_RUNNING and pending.get("lane") == "review-followup"
+    )
     if (
-        state.get("stage") not in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}
+        (
+            state.get("stage") not in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}
+            and not running_followup
+        )
         or not isinstance(state.get("active_findings"), dict)
         or convergence_summary(state)["status"] != "ACTIVE"
     ):
         raise ValueError(
             "contract replan requires active findings awaiting a fix or follow-up"
         )
+    if running_followup:
+        from review_suite_local import _process_is_running
+
+        if pending.get("wrapper_pid") is None or _process_is_running(
+            pending["wrapper_pid"]
+        ):
+            raise ValueError(
+                "cannot replan while the follow-up wrapper is running; finish or stop its owning review command"
+            )
     next_state = _copy_state(state)
     _require_convergence_decision_inplace(
         next_state,
@@ -1693,6 +1709,7 @@ def mark_followup_review_running(
     round_id: str,
     reviewed_head: str,
     round_state_dir: str,
+    wrapper_pid: int,
 ) -> dict[str, Any]:
     next_state = mark_running(
         state, round_id=round_id, lane="review-followup", reviewed_head=reviewed_head
@@ -1708,6 +1725,7 @@ def mark_followup_review_running(
             "step": "followup",
             "round_state_dir": round_state_dir,
             "source_round_id": source_round_id,
+            "wrapper_pid": wrapper_pid,
         },
     )
     return next_state

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -1343,7 +1344,8 @@ def _run_followup_review_once(
             current = load_cycle_by_key(state_dir, state["cycle_key"])
             if current is not None:
                 if (
-                    current.get("stage") not in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}
+                    current.get("stage")
+                    not in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}
                     or convergence_summary(current)["status"] != "ACTIVE"
                     or dict(current.get("active_findings") or {}).get("round_id")
                     != source_round_id
@@ -1356,6 +1358,7 @@ def _run_followup_review_once(
                     round_id=str(round_info["round_id"]),
                     reviewed_head=str(round_info["reviewed_head"]),
                     round_state_dir=str(round_info["round_state_dir"]),
+                    wrapper_pid=os.getpid(),
                 )
                 running["convergence"] = current["convergence"]
                 save_cycle(state_dir, running)

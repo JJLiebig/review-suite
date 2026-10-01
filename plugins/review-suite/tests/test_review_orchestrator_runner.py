@@ -1376,7 +1376,7 @@ def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
         # Ownership is persisted before launch, but the mutex is not held during review.
         with orchestrator_store_lock(state_dir=state_dir, name=f"followup-{fixed['cycle_key']}", timeout_seconds=0):
             running = load_cycle_by_key(state_dir, fixed["cycle_key"])
-            with pytest.raises(ValueError, match="contract replan requires active findings"):
+            with pytest.raises(ValueError, match="follow-up wrapper is running"):
                 record_contract_replan(running, conflict="acceptance")
         launches.append("followup-round")
         raise InterruptedError("wrapper interrupted after launch")
