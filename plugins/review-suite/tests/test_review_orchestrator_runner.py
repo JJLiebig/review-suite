@@ -1352,7 +1352,7 @@ def test_runner_does_not_retry_failed_deslop_for_aborted_cycle(
     assert calls == []
 
 
-@pytest.mark.parametrize("superseded_before_launch", [False, True])
+@pytest.mark.parametrize("superseded_before_launch", [False, True, "conflict"])
 def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
     monkeypatch, tmp_path: Path, clean_worktree, request, superseded_before_launch: bool,
 ) -> None:
@@ -1369,6 +1369,8 @@ def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
     fixed = mark_fix_detected(source, head="head-2")
     state_dir = tmp_path / "state"
     fixed = save_cycle(state_dir, fixed)
+    if superseded_before_launch == "conflict":
+        save_cycle(state_dir, source)
     launches: list[str] = []
     test_pid = os.getpid()
     holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
@@ -1376,7 +1378,15 @@ def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
     monkeypatch.setattr(orchestrator_runner.os, "getpid", lambda: holder.pid)
 
     def launch(**kwargs):
-        if superseded_before_launch:
+        if superseded_before_launch == "conflict":
+            original_save = orchestrator_runner.save_cycle
+
+            def conflict_before_claim(state_dir, state, **options):
+                save_cycle(state_dir, record_contract_conflict(source, conflict="scope"))
+                return original_save(state_dir, state, **options)
+
+            monkeypatch.setattr(orchestrator_runner, "save_cycle", conflict_before_claim)
+        elif superseded_before_launch:
             superseded = abort_cycle(fixed, reason="approved replan")
             superseded["superseded_by"] = {"review": "rvw_successor"}
             save_cycle(state_dir, superseded)
@@ -1401,6 +1411,10 @@ def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
         with pytest.raises(ValueError, match="source review changed before follow-up launch"):
             orchestrator_runner.run_one_expensive_step(fixed, state_dir=state_dir)
         assert launches == []
+        if superseded_before_launch == "conflict":
+            current = load_cycle_by_key(state_dir, fixed["cycle_key"])
+            assert current["convergence"]["status"] == "DECISION_REQUIRED"
+            assert current["convergence"]["conflict"] == "scope"
     else:
         with pytest.raises(InterruptedError):
             orchestrator_runner.run_one_expensive_step(fixed, state_dir=state_dir)

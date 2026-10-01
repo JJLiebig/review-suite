@@ -9,7 +9,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from .orchestrator_state import record_contract_replan
+from .orchestrator_state import convergence_summary, record_contract_replan
 
 if os.name == "nt":
     import msvcrt
@@ -179,11 +179,32 @@ def load_cycle_by_public_id(state_dir: Path, public_id: str) -> dict[str, Any]:
     return state
 
 
-def save_cycle(state_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
+def save_cycle(
+    state_dir: Path, state: dict[str, Any], *, claim_followup: bool = False
+) -> dict[str, Any]:
     with orchestrator_store_lock(state_dir=state_dir, name=ORCHESTRATOR_CYCLES_LOCK):
         cycle_key = str(state.get("cycle_key") or "").strip()
         current = load_cycle_by_key(state_dir, cycle_key) if cycle_key else None
         payload = deepcopy(state)
+        if claim_followup and current is not None:
+            from review_suite_local import _process_is_running
+
+            if (
+                current.get("stage") not in {"fix-pending", "followup-pending"}
+                or convergence_summary(current)["status"] != "ACTIVE"
+                or dict(current.get("active_findings") or {}).get("round_id")
+                != dict(payload.get("active_findings") or {}).get("round_id")
+            ):
+                raise ValueError(
+                    "source review changed before follow-up launch; inspect its status and follow the current action"
+                )
+            if _process_is_running(
+                dict(current.get("pending_action") or {}).get("wrapper_pid")
+            ):
+                raise ValueError(
+                    "follow-up wrapper is already running; wait for its owning review command"
+                )
+            payload["convergence"] = deepcopy(current["convergence"])
         if current and current.get("stage") == "followup-pending":
             from review_suite_local import _process_is_running
 
@@ -203,6 +224,21 @@ def save_cycle(state_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
                     raise ValueError(
                         "follow-up wrapper is running; finish or stop its owning review command before changing convergence"
                     )
+        incoming_convergence = dict(payload.get("convergence") or {})
+        if (
+            current
+            and not current.get("superseded_by")
+            and incoming_convergence.get("status") == "DECISION_REQUIRED"
+            and incoming_convergence.get("reason") == "contract_conflict"
+            and incoming_convergence != current.get("convergence")
+            and (
+                current.get("stage") != "fix-pending"
+                or current.get("active_findings") != payload.get("active_findings")
+            )
+        ):
+            raise ValueError(
+                "source findings changed before contract conflict was recorded; inspect its status and follow the current action"
+            )
         if current and str(
             dict(current.get("superseded_by") or {}).get("review") or ""
         ):

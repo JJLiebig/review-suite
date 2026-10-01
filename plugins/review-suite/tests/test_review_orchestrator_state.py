@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -46,6 +47,28 @@ from review_suite_core.orchestrator_store import (
     reserve_cycle_successor,
     save_cycle,
 )
+
+
+@pytest.mark.parametrize("classify", [False, True])
+def test_late_contract_conflict_cannot_replace_completed_followup(tmp_path: Path, classify: bool) -> None:
+    state_dir = tmp_path / "state"
+    source = record_findings_decision(
+        mark_review_step_pending(_cycle(tmp_path, mode="deep"), round_id="old", lane="review_t1", step_index=0,
+                                 step_name="review", reviewed_head="head-1"),
+        round_id="old", lane="review_t1", reviewed_head="head-1",
+    )
+    save_cycle(state_dir, source)
+    stale_conflict = record_contract_conflict(source, conflict="acceptance")
+    owned = mark_fix_detected(source, head="head-2")
+    owned["pending_action"] = {**owned["pending_action"], "wrapper_pid": os.getpid(), "round_id": "new"}
+    save_cycle(state_dir, owned, claim_followup=True)
+    completed = mark_followup_review_pending(owned, round_id="new", reviewed_head="head-2", source_round_id="old")
+    saved = save_cycle(state_dir, completed)
+    if classify:
+        saved = save_cycle(state_dir, record_followup_clean(saved, round_id="new", reviewed_head="head-2"))
+    with pytest.raises(ValueError, match="source findings changed"):
+        save_cycle(state_dir, stale_conflict)
+    assert load_cycle_by_key(state_dir, source["cycle_key"]) == saved
 
 
 def _cycle(

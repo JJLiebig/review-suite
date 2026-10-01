@@ -309,7 +309,7 @@ def _stub_review_with_terminal(
 
 
 def _stub_followup(
-    monkeypatch: pytest.MonkeyPatch, *round_ids: str
+    monkeypatch: pytest.MonkeyPatch, *round_ids: str, terminal_command: str | None = None
 ) -> list[dict[str, object]]:
     calls: list[dict[str, object]] = []
     ids = list(round_ids) or ["followup-round-1"]
@@ -321,6 +321,9 @@ def _stub_followup(
         reviewed_head = str(
             scope.get("reviewed_head") if isinstance(scope, dict) else "head-2"
         )
+        on_round_started = kwargs.get("on_round_started")
+        if callable(on_round_started):
+            on_round_started({"round_id": round_id, "reviewed_head": reviewed_head})
         return {
             "round_id": round_id,
             "lane": "review-followup",
@@ -333,7 +336,8 @@ def _stub_followup(
                 {
                     "slot": "alpha",
                     "status": "completed",
-                    "summary": "No findings.",
+                    "summary": f"Review result: {terminal_command}" if terminal_command else "No findings.",
+                    "terminal_command": terminal_command,
                     "ref": f"rollout://{round_id}/alpha",
                     "blocked": False,
                     "block": None,
@@ -5604,6 +5608,38 @@ def test_clean_followup_note_does_not_leak_to_later_review_steps(
         "step_index": 1,
         "step": "final-sweep",
     }
+
+
+@pytest.mark.parametrize("verdict,remaining", [("clean", False), ("clean", True), ("findings", False)])
+def test_followup_automatic_verdict_releases_owned_round(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, verdict: str, remaining: bool
+) -> None:
+    _stub_review(monkeypatch, "initial-round")
+    calls = _stub_followup(monkeypatch, "followup-round", terminal_command=verdict)
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    config = deepcopy(review.load_config(state_dir))
+    config["orchestrator"]["profiles"]["stable"]["deep"]["steps"] = [
+        {"name": "initial", "count": 1, "model_ref": "signoff_normal_model"}
+    ] + ([{"name": "remaining", "count": 1, "model_ref": "signoff_normal_model"}] if remaining else [])
+    monkeypatch.setattr(review, "load_config", lambda _: config)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/automatic-followup")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+    _, created = _run_review(monkeypatch, ["--mode", "deep", "--skip-deslop", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)])
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings"])
+    _commit_file(repo, "app.txt", "fixed\n", "fix")
+
+    code, _ = _run_review(monkeypatch, ["--id", public_id])
+
+    assert code == 0
+    completed = _cycle_payload(state_dir, public_id)
+    assert completed["stage"] == ("fix-pending" if verdict == "findings" else "created" if remaining else "review-green")
+    assert completed["decisions"][-1]["command"] == verdict
+    assert completed["decisions"][-1]["round_id"] == "followup-round"
+    assert "wrapper_pid" not in dict(completed.get("pending_action") or {})
+    assert len(calls) == 1
 
 
 def test_followup_findings_loops_back_to_fix_pending(

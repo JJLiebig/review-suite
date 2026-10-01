@@ -20,7 +20,6 @@ from review_suite_local import (
     load_round,
     payload_has_blocked_runs,
     round_needs_caller_grade,
-    _process_is_running,
 )
 
 from .axi_output import format_command, write_text
@@ -33,7 +32,6 @@ from .lens_runtime import (
 from .orchestrator_state import (
     STAGE_CREATED,
     STAGE_DECISION_PENDING,
-    STAGE_FIX_PENDING,
     STAGE_FOLLOWUP_PENDING,
     STAGE_RETRY_REQUESTED,
     STAGE_RUNNING,
@@ -44,7 +42,6 @@ from .orchestrator_state import (
     mark_deslop_failed,
     mark_recovery_resolved,
     mark_followup_review_pending,
-    convergence_summary,
     mark_review_step_running,
     mark_review_step_pending,
     mark_review_step_retry,
@@ -1329,32 +1326,14 @@ def _run_followup_review_once(
             name=f"followup-{state['cycle_key']}",
             timeout_seconds=1,
         ):
-            current = load_cycle_by_key(state_dir, state["cycle_key"])
-            if current is not None:
-                if (
-                    current.get("stage")
-                    not in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}
-                    or convergence_summary(current)["status"] != "ACTIVE"
-                    or dict(current.get("active_findings") or {}).get("round_id")
-                    != source_round_id
-                ):
-                    raise ValueError(
-                        "source review changed before follow-up launch; inspect its status and follow the current action"
-                    )
-                if _process_is_running(
-                    dict(current.get("pending_action") or {}).get("wrapper_pid")
-                ):
-                    raise ValueError(
-                        "follow-up wrapper is already running; wait for its owning review command"
-                    )
+            if load_cycle_by_key(state_dir, state["cycle_key"]) is not None:
                 owned = dict(state)
                 owned["pending_action"] = {
                     **dict(state.get("pending_action") or {}),
                     "wrapper_pid": os.getpid(),
                     "round_id": str(round_info["round_id"]),
                 }
-                owned["convergence"] = current["convergence"]
-                save_cycle(state_dir, owned)
+                save_cycle(state_dir, owned, claim_followup=True)
 
     review_result = run_followup_review_step(
         model=model_config.model,
@@ -1380,8 +1359,12 @@ def _run_followup_review_once(
         reviewed_head=reviewed_head,
         source_round_id=source_round_id,
     )
+    completed = _attach_review_result(next_state, review_result)
+    if load_cycle_by_key(state_dir, state["cycle_key"]) is not None:
+        # Release this round's ownership before the CLI automatically classifies its verdict.
+        completed = save_cycle(state_dir, completed)
     return OrchestratorRunnerResult(
-        _attach_review_result(next_state, review_result),
+        completed,
         ran_step=True,
         step=FOLLOWUP_REVIEW_LANE,
     )
