@@ -45,21 +45,20 @@ jobs:
       - name: Install Python
         run: uv python install 3.14.7
 
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: "1.58.0"
+
       - name: Install dependencies
         run: uv sync --locked
 
       - name: Check generated workflow
-        run: uv run --locked python scripts/generate-workflow.py --check
+        run: just workflow-check
 
       - parallel:
           - name: Run tests
-            run: uv run --locked pytest -n auto --dist=worksteal plugins/review-suite/tests -q
+            run: just test
 
-          - name: Syntax check scripts
-            shell: pwsh
-            run: |
-              $files = @(
-                Get-ChildItem -LiteralPath plugins/review-suite/scripts -Filter *.py -File
-                Get-ChildItem -LiteralPath plugins/review-suite/scripts/review_suite_core -Filter *.py -File
-              )
-              uv run --locked python -m py_compile @($files.FullName)
+          - name: Check Python lint and syntax
+            run: just lint
