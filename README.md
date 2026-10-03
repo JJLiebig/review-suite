@@ -109,7 +109,7 @@ non-model settings and keeps the original as a backup.
 
 ## Development
 
-Development requires `uv` 0.12.17+ and [just](https://just.systems/man/en/installation.html).
+Development requires `uv` 0.12.17+ and [just](https://just.systems/man/en/installation.html) 1.56+.
 Run setup once per clone to install the locked development dependencies and enable
 the workflow hook:
 
@@ -117,11 +117,17 @@ the workflow hook:
 just setup
 ```
 
-Setup is safe to repeat. Run checks relevant to the changed files:
+Setup is safe to repeat. Run `just` to list the available commands:
 
-```powershell
-uv run ruff check .
-```
+| Command | Purpose |
+| --- | --- |
+| `just test` | Run the full test suite |
+| `just lint` | Check Python lint and syntax |
+| `just workflow` | Regenerate the workflow diagram |
+| `just workflow-check` | Check for a stale workflow diagram |
+| `just check` | Run lint, workflow verification, and the full test suite |
+
+CI runs the same lint, workflow, and test recipes on Linux, Windows, and macOS.
 
 The pre-commit hook runs `uv run --locked python scripts/generate-workflow.py`
 when staged changes affect the shipped model/settings files or workflow generation
@@ -129,7 +135,8 @@ code, then stages `docs/review-workflow.md`. Other commits skip it. If workflow
 inputs or the diagram have unstaged edits, stage or stash those edits first so
 the generated diagram matches the commit. CI still checks for stale output.
 
-Run `uv run pytest` with the tests relevant to your change. After changing
+For focused validation, run `uv run --locked pytest` with the tests relevant to
+your change. After changing
 plugin files, `scripts/sync-installed-cache.ps1` refreshes the local marketplace
 cache and source mirror. Marketplace launchers copy the installed plugin to
 `~/.codex/plugin-runtimes/review-suite/` before running, so Windows file locks
