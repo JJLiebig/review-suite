@@ -113,8 +113,15 @@ Development also requires `uv` 0.12.17+. Run checks relevant to the changed file
 
 ```powershell
 uv sync
+git config --local core.hooksPath .githooks
 uv run ruff check .
 ```
+
+The pre-commit hook runs `uv run --locked python scripts/generate-workflow.py`
+when staged changes affect the shipped model/settings files or workflow generation
+code, then stages `docs/review-workflow.md`. Other commits skip it. If workflow
+inputs or the diagram have unstaged edits, stage or stash those edits first so
+the generated diagram matches the commit. CI still checks for stale output.
 
 Run `uv run pytest` with the tests relevant to your change. After changing
 plugin files, `scripts/sync-installed-cache.ps1` refreshes the local marketplace
