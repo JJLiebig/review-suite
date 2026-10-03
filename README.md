@@ -109,11 +109,17 @@ non-model settings and keeps the original as a backup.
 
 ## Development
 
-Development also requires `uv` 0.12.17+. Run checks relevant to the changed files:
+Development requires `uv` 0.12.17+ and [just](https://just.systems/man/en/installation.html).
+Run setup once per clone to install the locked development dependencies and enable
+the workflow hook:
 
 ```powershell
-uv sync
-git config --local core.hooksPath .githooks
+just setup
+```
+
+Setup is safe to repeat. Run checks relevant to the changed files:
+
+```powershell
 uv run ruff check .
 ```
 
