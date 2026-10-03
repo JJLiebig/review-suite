@@ -2894,7 +2894,7 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
                 )
                 for decision in convergence["recommendations"]
             },
-            "note": "The caller must commit one decision; Review Suite will not change scope automatically.",
+            "note": "At this checkpoint, reassess how to deliver the same feature and record an available decision: CONTINUE grants the one permitted extra fix/review round, REPLAN revises the implementation plan, and RESLICE splits the work into smaller reviewable changes.",
         }
     if stage == STAGE_ABORTED and isinstance(state.get("superseded_by"), dict):
         replacement = dict(state.get("superseded_by") or {})
