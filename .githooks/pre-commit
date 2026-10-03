@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+set -- \
+    scripts/generate-workflow.py \
+    plugins/review-suite/default_settings.toml \
+    plugins/review-suite/references/workflow_settings.toml \
+    plugins/review-suite/references/arena_settings.toml \
+    plugins/review-suite/scripts/review_suite_core/config.py \
+    plugins/review-suite/scripts/review_suite_core/model_labels.py \
+    plugins/review-suite/scripts/review_suite_core/orchestrator_profiles.py \
+    plugins/review-suite/scripts/review_suite_core/orchestrator_state.py
+
+if git diff --cached --quiet -- "$@"; then
+    exit 0
+fi
+
+if ! git diff --quiet -- "$@" docs/review-workflow.md; then
+    echo "Workflow inputs or diagram have unstaged edits. Stage or stash them, then retry the commit." >&2
+    exit 1
+fi
+
+uv run --locked python scripts/generate-workflow.py
+git add -- docs/review-workflow.md

@@ -109,12 +109,25 @@ non-model settings and keeps the original as a backup.
 
 ## Development
 
-Development also requires `uv` 0.12.17+. Run checks relevant to the changed files:
+Development requires `uv` 0.12.17+ and [just](https://just.systems/man/en/installation.html).
+Run setup once per clone to install the locked development dependencies and enable
+the workflow hook:
 
 ```powershell
-uv sync
+just setup
+```
+
+Setup is safe to repeat. Run checks relevant to the changed files:
+
+```powershell
 uv run ruff check .
 ```
+
+The pre-commit hook runs `uv run --locked python scripts/generate-workflow.py`
+when staged changes affect the shipped model/settings files or workflow generation
+code, then stages `docs/review-workflow.md`. Other commits skip it. If workflow
+inputs or the diagram have unstaged edits, stage or stash those edits first so
+the generated diagram matches the commit. CI still checks for stale output.
 
 Run `uv run pytest` with the tests relevant to your change. After changing
 plugin files, `scripts/sync-installed-cache.ps1` refreshes the local marketplace
