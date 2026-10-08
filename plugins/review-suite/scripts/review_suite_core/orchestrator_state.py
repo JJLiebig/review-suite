@@ -1937,8 +1937,8 @@ def correct_inferred_followup_decision(
     )
     next_state["rounds"] = deepcopy(rounds)
     next_state["decisions"] = deepcopy(decisions)
-    next_state["validation"] = dict.fromkeys(
-        ("focused", "full_suite", "ci", "review_green"), "unknown"
+    next_state["validation"].update(
+        dict.fromkeys(("focused", "full_suite", "ci"), "unknown")
     )
     return next_state
 

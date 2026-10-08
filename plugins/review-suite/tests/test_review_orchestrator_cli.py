@@ -2183,10 +2183,14 @@ def _legacy_clean_followup_checkpoint(tmp_path: Path) -> tuple[Path, Path, dict,
     return repo, state_dir, state, payload
 
 
+@pytest.mark.parametrize("final_step", [False, True])
 def test_explicit_clean_correction_retains_history_and_remaining_gates(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, final_step: bool,
 ) -> None:
     _, state_dir, before, _ = _legacy_clean_followup_checkpoint(tmp_path)
+    if final_step:
+        before["review_plan"]["steps"].pop()
+        before = review.save_cycle(state_dir, before)
     args = ["--id", before["public_id"], "--decision", "clean", "--reason",
             "Caller confirms head-change inference; test-only changes preserve behavior and relevant tests passed",
             "--state-dir", str(state_dir)]
@@ -2200,9 +2204,10 @@ def test_explicit_clean_correction_retains_history_and_remaining_gates(
     assert saved["convergence"]["continue_used"] is True
     assert review.convergence_summary(saved)["accepted_findings_heads"] == 3
     assert saved["active_findings"] is None
-    assert saved["stage"] == "created"
+    assert saved["stage"] == ("review-green" if final_step else "created")
     assert saved["review_progress"]["next_step_index"] == 3
-    assert saved["validation"] == dict.fromkeys(("focused", "full_suite", "ci", "review_green"), "unknown")
+    assert saved["validation"] == {"focused": "unknown", "full_suite": "unknown", "ci": "unknown",
+                                    "review_green": "passed" if final_step else "unknown"}
     correction = saved["decision_corrections"][0]
     assert correction["reason"] == args[5]
     assert correction["head"] == before["identity"]["head"]
@@ -2211,6 +2216,10 @@ def test_explicit_clean_correction_retains_history_and_remaining_gates(
     assert result["done"] is False
     assert _run_review(monkeypatch, args)[0] == 0
     assert _cycle_payload(state_dir, before["public_id"]) == saved
+    if final_step:
+        validated = review.record_validation_statuses(saved, focused="passed", full_suite="passed", ci="passed")
+        handed_off = review.record_github_result(validated, result="clean", reviewed_head=saved["identity"]["head"])
+        assert handed_off["github_review"]["status"] == "clean"
 
 
 @pytest.mark.parametrize("failure", ["findings", "contradiction", "caller", "production", "branch", "base", "contract", "later-round", "running", "reslice"])
