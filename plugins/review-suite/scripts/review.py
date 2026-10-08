@@ -1594,7 +1594,19 @@ def _auto_record_pending_decision_fix(
     if not reviewed_head or reviewed_head == current_head_value:
         return state
     if _stored_clean_review(_load_output_round_payload(state_dir, round_payload)):
-        return state
+        if not _is_material_fix_head(
+            state, head=current_head_value, reviewed_head=reviewed_head
+        ) or _test_docs_only_interdiff(state, reviewed_head, current_head_value):
+            return state
+        clean = _apply_decision_to_ready_state(
+            state, DECISION_CLEAN, state_dir=state_dir, require_grade=False
+        )
+        clean["validation"].update(
+            dict.fromkeys(("focused", "full_suite", "ci"), "unknown")
+        )
+        if clean["stage"] in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+            return mark_latest_profile_step_rerun_needed(clean, head=current_head_value)
+        return clean
     findings = _apply_decision_to_ready_state(
         state, DECISION_FINDINGS, state_dir=state_dir, require_grade=False
     )
@@ -1622,6 +1634,37 @@ def _stored_clean_review(payload: dict[str, Any]) -> bool:
                 output,
                 re.I,
             )
+        ):
+            return False
+    return True
+
+
+def _test_docs_only_interdiff(
+    state: dict[str, Any], reviewed_head: str, head: str
+) -> bool:
+    cwd = str(dict(state.get("identity") or {}).get("cwd") or "")
+    if not cwd:
+        return False
+    result = subprocess.run(
+        ["git", "diff", "--raw", "-z", "--no-renames", reviewed_head, head],
+        cwd=cwd_path_from_normalized(cwd),
+        capture_output=True,
+        check=False,
+    )
+    diff = result.stdout.decode("utf-8").rstrip("\0").split("\0")
+    if result.returncode or not diff or len(diff) % 2:
+        return False
+    for header, name in zip(diff[::2], diff[1::2]):
+        path = Path(name)
+        test_or_doc = (
+            "tests" in path.parts
+            and path.suffix == ".py"
+            or "docs" in path.parts
+            and path.suffix in {".md", ".rst"}
+        )
+        if not test_or_doc or any(
+            mode not in {"000000", "100644", "100755"}
+            for mode in header.lstrip(":").split()[:2]
         ):
             return False
     return True
@@ -1673,30 +1716,8 @@ def _correct_inferred_clean_decision(
             "source_round_id"
         ) == source_round_id and round_has_live_reviewer_process(candidate):
             raise ValueError("cannot correct while a follow-up reviewer is running")
-    result = subprocess.run(
-        ["git", "diff", "--raw", "-z", "--no-renames", reviewed_head, head],
-        cwd=review_root,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode:
-        raise ValueError("cannot inspect the correction interdiff")
-    diff = result.stdout.decode("utf-8").rstrip("\0").split("\0")
-    if not diff or len(diff) % 2:
+    if not _test_docs_only_interdiff(state, reviewed_head, head):
         raise ValueError("correction requires committed test/docs-only changes")
-    for header, name in zip(diff[::2], diff[1::2]):
-        path = Path(name)
-        test_or_doc = (
-            "tests" in path.parts
-            and path.suffix == ".py"
-            or "docs" in path.parts
-            and path.suffix in {".md", ".rst"}
-        )
-        if not test_or_doc or any(
-            mode not in {"000000", "100644", "100755"}
-            for mode in header.lstrip(":").split()[:2]
-        ):
-            raise ValueError("correction requires committed test/docs-only changes")
     digest = sha256(
         "\n\n".join(
             str(run.get("reviewer_output") or "") for run in payload["runs"]

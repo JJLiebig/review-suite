@@ -2127,23 +2127,41 @@ def test_pending_ungraded_arena_amend_still_records_findings(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("changed_path", ["tests/test_app.py", "app.py"])
 def test_changed_head_does_not_turn_completed_clean_output_into_findings(
-    tmp_path: Path, structured: bool,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, structured: bool, changed_path: str,
 ) -> None:
+    calls = _stub_review(monkeypatch, "clean-round", "new-head-round")
+    repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.py", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/clean-head-change")
+    reviewed = _commit_file(repo, "app.py", "feature\n", "feature")
+    _, opened = _run_review(monkeypatch, ["--mode", "fast", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)])
+    public_id = opened["review"]
     round_state_dir = state_dir / "orchestrator" / "review-rounds"
     write_round(round_state_dir, {
         "round_id": "clean-round", "status": "completed",
+        "review_scope": {"reviewed_head": reviewed},
         "runs": [{"review_status": "completed", "reviewer_output": "No findings. The fix is complete.",
                   "terminal_command": "clean" if structured else None}],
     })
-    state = {
-        "stage": "decision-pending",
-        "pending_action": {"kind": "decision", "round_id": "clean-round", "lane": "review-followup"},
-        "rounds": [{"round_id": "clean-round", "reviewed_head": "head-1", "round_state_dir": str(round_state_dir)}],
-        "decisions": [],
-    }
-    assert review._auto_record_pending_decision_fix(state, current_head_value="head-2", state_dir=state_dir) == state
+    current = _commit_file(repo, changed_path, "changed\n", "change after clean review")
+    _, result = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
+    saved = _cycle_payload(state_dir, public_id)
+    assert not saved["convergence"]["accepted_findings_heads"]
+    assert saved["decisions"][-1]["command"] == "clean"
+    if changed_path.startswith("tests/"):
+        assert result["done"] is True
+        assert len(calls) == 1
+    else:
+        assert result["status"] == "decision_not_pending"
+        assert saved["stage"] == "created"
+        assert saved["validation"]["review_green"] == "unknown"
+        _run_review(monkeypatch, ["--id", public_id])
+        assert len(calls) == 2
+        assert calls[-1]["review_scope"]["reviewed_head"] == current
 
 
 def _legacy_clean_followup_checkpoint(tmp_path: Path) -> tuple[Path, Path, dict, dict]:
@@ -2190,6 +2208,8 @@ def test_explicit_clean_correction_retains_history_and_remaining_gates(
     _, state_dir, before, _ = _legacy_clean_followup_checkpoint(tmp_path)
     if final_step:
         before["review_plan"]["steps"].pop()
+        before["deslop"] = {"status": "closed", "tracked": False,
+                            "reviewed_head": before["active_findings"]["reviewed_head"]}
         before = review.save_cycle(state_dir, before)
     args = ["--id", before["public_id"], "--decision", "clean", "--reason",
             "Caller confirms head-change inference; test-only changes preserve behavior and relevant tests passed",
@@ -2217,9 +2237,12 @@ def test_explicit_clean_correction_retains_history_and_remaining_gates(
     assert _run_review(monkeypatch, args)[0] == 0
     assert _cycle_payload(state_dir, before["public_id"]) == saved
     if final_step:
-        validated = review.record_validation_statuses(saved, focused="passed", full_suite="passed", ci="passed")
-        handed_off = review.record_github_result(validated, result="clean", reviewed_head=saved["identity"]["head"])
-        assert handed_off["github_review"]["status"] == "clean"
+        _run_review(monkeypatch, ["--id", before["public_id"], "--focused-validation", "passed", "--full-suite", "passed", "--ci", "passed"])
+        _, handed_off = _run_review(monkeypatch, ["--id", before["public_id"], "--github-result", "clean"])
+        final = _cycle_payload(state_dir, before["public_id"])
+        assert final["github_review"]["status"] == "clean"
+        assert final["github_review"]["reviewed_head"] == before["identity"]["head"]
+        assert handed_off["done"] is True
 
 
 @pytest.mark.parametrize("failure", ["findings", "contradiction", "caller", "production", "branch", "base", "contract", "later-round", "running", "reslice"])
