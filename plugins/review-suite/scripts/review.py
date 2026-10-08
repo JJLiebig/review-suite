@@ -1550,12 +1550,27 @@ def _apply_decision_to_ready_state(
     reviewed_tree = _reviewed_tree(state, reviewed_head)
     if decision == DECISION_CLEAN:
         if lane == FOLLOWUP_LANE:
-            return record_followup_clean(
+            next_state = record_followup_clean(
                 state, round_id=round_id, reviewed_head=reviewed_head
             )
-        next_state = record_clean_decision(
-            state, round_id=round_id, lane=lane, reviewed_head=reviewed_head
-        )
+        else:
+            next_state = record_clean_decision(
+                state, round_id=round_id, lane=lane, reviewed_head=reviewed_head
+            )
+        head = str(dict(state.get("identity") or {}).get("head") or "")
+        if (
+            reviewed_head
+            and head
+            and head != reviewed_head
+            and (
+                not _is_material_fix_head(state, head=head, reviewed_head=reviewed_head)
+                or _test_docs_only_interdiff(state, reviewed_head, head)
+            )
+        ):
+            next_state["review_heads"]["last_reviewed_head"] = head
+            next_state["validation"].update(
+                dict.fromkeys(("focused", "full_suite", "ci"), "unknown")
+            )
         return next_state
     if decision == DECISION_FINDINGS:
         if lane == FOLLOWUP_LANE:
@@ -1683,6 +1698,9 @@ def _correct_inferred_clean_decision(
         corrections
         and corrections[-1]["head"] == head
         and not state.get("active_findings")
+        and state.get("stage") in {STAGE_CREATED, STAGE_REVIEW_GREEN}
+        and (state.get("rounds") or [{}])[-1].get("round_id")
+        == corrections[-1]["round_id"]
     ):
         return state
     active = dict(state.get("active_findings") or {})

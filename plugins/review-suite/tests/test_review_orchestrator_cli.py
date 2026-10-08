@@ -2128,17 +2128,20 @@ def test_pending_ungraded_arena_amend_still_records_findings(tmp_path: Path) -> 
 
 @pytest.mark.parametrize("structured", [False, True])
 @pytest.mark.parametrize("changed_path", ["tests/test_app.py", "app.py"])
+@pytest.mark.parametrize("mode", ["fast", "normal"])
 def test_changed_head_does_not_turn_completed_clean_output_into_findings(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, structured: bool, changed_path: str,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, structured: bool, changed_path: str, mode: str,
 ) -> None:
+    _stub_deslop(monkeypatch)
     calls = _stub_review(monkeypatch, "clean-round", "new-head-round")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.py", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/clean-head-change")
     reviewed = _commit_file(repo, "app.py", "feature\n", "feature")
-    _, opened = _run_review(monkeypatch, ["--mode", "fast", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)])
+    _, opened = _run_review_after_cleanup(monkeypatch, ["--mode", mode, "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)])
     public_id = opened["review"]
     round_state_dir = state_dir / "orchestrator" / "review-rounds"
     write_round(round_state_dir, {
@@ -2153,8 +2156,17 @@ def test_changed_head_does_not_turn_completed_clean_output_into_findings(
     assert not saved["convergence"]["accepted_findings_heads"]
     assert saved["decisions"][-1]["command"] == "clean"
     if changed_path.startswith("tests/"):
-        assert result["done"] is True
         assert len(calls) == 1
+        assert saved["review_heads"]["last_reviewed_head"] == current
+        if mode == "normal":
+            assert result["done"] is False
+            assert saved["validation"]["ci"] == "unknown"
+            _run_review(monkeypatch, ["--id", public_id, "--focused-validation", "passed", "--full-suite", "passed", "--ci", "passed"])
+            _, handed_off = _run_review(monkeypatch, ["--id", public_id, "--github-result", "clean"])
+            assert handed_off["done"] is True
+            assert len(calls) == 1
+        else:
+            assert result["done"] is True
     else:
         assert result["status"] == "decision_not_pending"
         assert saved["stage"] == "created"
