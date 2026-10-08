@@ -20,6 +20,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import review
 import review_suite_arena
 from review_suite_core import orchestrator_runner, orchestrator_store
+from review_suite_core.orchestrator_state import mark_followup_review_pending, mark_review_step_pending
 from review_suite_local import write_round
 
 
@@ -192,7 +193,7 @@ def _review_discovery_config(config: dict[str, object]) -> dict[str, object]:
 
 
 def _stub_review(
-    monkeypatch: pytest.MonkeyPatch, *round_ids: str
+    monkeypatch: pytest.MonkeyPatch, *round_ids: str, output: str = "No findings."
 ) -> list[dict[str, object]]:
     load_config = review.load_config
     monkeypatch.setattr(
@@ -231,7 +232,7 @@ def _stub_review(
                 {
                     "slot": "alpha",
                     "status": "completed",
-                    "summary": "No findings.",
+                    "summary": output,
                     "ref": f"rollout://{round_id}/alpha",
                     "blocked": False,
                     "block": None,
@@ -2122,6 +2123,174 @@ def test_pending_ungraded_arena_amend_still_records_findings(tmp_path: Path) -> 
     assert fixed["decisions"][0]["command"] == "findings"
     assert fixed["decisions"][0]["reviewed_head"] == "head-1"
     assert fixed["review_heads"]["last_fix_head"] == "head-2"
+    assert fixed["decisions"][0]["source"] == "head-change-inference"
+
+
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("changed_path", ["tests/test_app.py", "app.py"])
+@pytest.mark.parametrize("mode", ["fast", "normal"])
+def test_changed_head_does_not_turn_completed_clean_output_into_findings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, structured: bool, changed_path: str, mode: str,
+) -> None:
+    _stub_deslop(monkeypatch)
+    calls = _stub_review(monkeypatch, "clean-round", "new-head-round")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.py", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/clean-head-change")
+    reviewed = _commit_file(repo, "app.py", "feature\n", "feature")
+    _, opened = _run_review_after_cleanup(monkeypatch, ["--mode", mode, "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)])
+    public_id = opened["review"]
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    write_round(round_state_dir, {
+        "round_id": "clean-round", "status": "completed",
+        "review_scope": {"reviewed_head": reviewed},
+        "runs": [{"review_status": "completed", "reviewer_output": "No findings. The fix is complete.",
+                  "terminal_command": "clean" if structured else None}],
+    })
+    current = _commit_file(repo, changed_path, "changed\n", "change after clean review")
+    _, result = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
+    saved = _cycle_payload(state_dir, public_id)
+    assert not saved["convergence"]["accepted_findings_heads"]
+    assert saved["decisions"][-1]["command"] == "clean"
+    if changed_path.startswith("tests/"):
+        assert len(calls) == 1
+        assert saved["review_heads"]["last_reviewed_head"] == current
+        if mode == "normal":
+            assert result["done"] is False
+            assert saved["validation"]["ci"] == "unknown"
+            _run_review(monkeypatch, ["--id", public_id, "--focused-validation", "passed", "--full-suite", "passed", "--ci", "passed"])
+            _, handed_off = _run_review(monkeypatch, ["--id", public_id, "--github-result", "clean"])
+            assert handed_off["done"] is True
+            assert len(calls) == 1
+        else:
+            assert result["done"] is True
+    else:
+        assert result["status"] == "decision_not_pending"
+        assert saved["stage"] == "created"
+        assert saved["validation"]["review_green"] == "unknown"
+        _run_review(monkeypatch, ["--id", public_id])
+        assert len(calls) == 2
+        assert calls[-1]["review_scope"]["reviewed_head"] == current
+
+
+def _legacy_clean_followup_checkpoint(tmp_path: Path) -> tuple[Path, Path, dict, dict]:
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    _init_repo(repo)
+    base = _commit_file(repo, "app.py", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/recovery")
+    first = _commit_file(repo, "app.py", "first\n", "first")
+    source_head = _commit_file(repo, "app.py", "second\n", "second")
+    state = review.create_cycle(cwd=repo, base="main", branch="feature/recovery", head=source_head,
+                                merge_base=base, requested_mode="deep", effective_mode="deep",
+                                selection="auto", effective_selection="stable", review_brief="Frozen contract")
+    state["review_plan"] = {"steps": [{"kind": "review", "name": f"review-{i}", "lane": "review_t1"} for i in range(4)]}
+    for index, head in enumerate((base, first)):
+        state = review.record_findings_decision(state, round_id=f"prior-{index}", lane="review_t1",
+                                               reviewed_head=head, reviewed_tree=_git(repo, "rev-parse", f"{head}^{{tree}}"))
+        state = review.record_followup_clean(state, round_id=f"prior-clean-{index}", reviewed_head=source_head)
+    state = mark_review_step_pending(state, round_id="source", lane="review_t1", step_index=2,
+                                           step_name="review-2", reviewed_head=source_head)
+    state = review.record_findings_decision(state, round_id="source", lane="review_t1", reviewed_head=source_head,
+                                           reviewed_tree=_git(repo, "rev-parse", f"{source_head}^{{tree}}"))
+    state = review.record_convergence_decision(state, decision="CONTINUE")
+    reviewed = _commit_file(repo, "app.py", "fixed\n", "fix")
+    state = review.mark_fix_detected(state, head=reviewed)
+    state = mark_followup_review_pending(state, round_id="clean-followup", reviewed_head=reviewed, source_round_id="source")
+    payload = {"round_id": "clean-followup", "status": "completed",
+               "review_scope": {"reviewed_head": reviewed, "source_round_id": "source"},
+               "runs": [{"review_status": "completed", "reviewer_output": "No findings. The fix is complete."}]}
+    write_round(state_dir / "orchestrator" / "review-rounds", payload)
+    state = review.record_followup_findings(state, round_id="clean-followup", reviewed_head=reviewed,
+                                           reviewed_tree=_git(repo, "rev-parse", f"{reviewed}^{{tree}}"))
+    state = review.record_convergence_decision(state, decision="REPLAN")
+    head = _commit_file(repo, "tests/test_app.py", "assert True\n", "test-only consolidation")
+    state["identity"]["head"] = head
+    state["review_heads"]["head"] = head
+    state = review.save_cycle(state_dir, state)
+    return repo, state_dir, state, payload
+
+
+@pytest.mark.parametrize("final_step", [False, True])
+def test_explicit_clean_correction_retains_history_and_remaining_gates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, final_step: bool,
+) -> None:
+    _, state_dir, before, _ = _legacy_clean_followup_checkpoint(tmp_path)
+    if final_step:
+        before["review_plan"]["steps"].pop()
+        before["deslop"] = {"status": "closed", "tracked": False,
+                            "reviewed_head": before["active_findings"]["reviewed_head"]}
+        before = review.save_cycle(state_dir, before)
+    args = ["--id", before["public_id"], "--decision", "clean", "--reason",
+            "Caller confirms head-change inference; test-only changes preserve behavior and relevant tests passed",
+            "--state-dir", str(state_dir)]
+    code, result = _run_review(monkeypatch, args)
+    assert code == 0
+    saved = _cycle_payload(state_dir, before["public_id"])
+    for key in ("rounds", "decisions", "review_brief", "deslop", "github_review"):
+        assert saved.get(key) == before.get(key)
+    assert saved["convergence"]["accepted_findings_heads"] == before["convergence"]["accepted_findings_heads"]
+    assert saved["convergence"]["decisions"] == before["convergence"]["decisions"]
+    assert saved["convergence"]["continue_used"] is True
+    assert review.convergence_summary(saved)["accepted_findings_heads"] == 3
+    assert saved["active_findings"] is None
+    assert saved["stage"] == ("review-green" if final_step else "created")
+    assert saved["review_progress"]["next_step_index"] == 3
+    assert saved["validation"] == {"focused": "unknown", "full_suite": "unknown", "ci": "unknown",
+                                    "review_green": "passed" if final_step else "unknown"}
+    correction = saved["decision_corrections"][0]
+    assert correction["reason"] == args[5]
+    assert correction["head"] == before["identity"]["head"]
+    assert correction["reviewed_head"] == before["active_findings"]["reviewed_head"]
+    assert len(correction["verdict_digest"]) == 64
+    assert result["done"] is False
+    assert _run_review(monkeypatch, args)[0] == 0
+    assert _cycle_payload(state_dir, before["public_id"]) == saved
+    if final_step:
+        _run_review(monkeypatch, ["--id", before["public_id"], "--focused-validation", "passed", "--full-suite", "passed", "--ci", "passed"])
+        _, handed_off = _run_review(monkeypatch, ["--id", before["public_id"], "--github-result", "clean"])
+        final = _cycle_payload(state_dir, before["public_id"])
+        assert final["github_review"]["status"] == "clean"
+        assert final["github_review"]["reviewed_head"] == before["identity"]["head"]
+        assert handed_off["done"] is True
+
+
+@pytest.mark.parametrize("failure", ["findings", "contradiction", "caller", "production", "branch", "base", "contract", "later-round", "running", "reslice"])
+def test_clean_correction_rejects_unproven_or_changed_review(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str,
+) -> None:
+    repo, state_dir, before, payload = _legacy_clean_followup_checkpoint(tmp_path)
+    if failure in {"findings", "contradiction"}:
+        payload["runs"][0]["reviewer_output"] = "[P1] Real defect." if failure == "findings" else "No findings.\n[P1] Real defect."
+        write_round(state_dir / "orchestrator" / "review-rounds", payload)
+    elif failure == "caller":
+        before["decisions"][-1]["source"] = "caller"
+    elif failure == "production":
+        _commit_file(repo, "app.py", "changed behavior\n", "production change")
+    elif failure == "branch":
+        _git(repo, "checkout", "-b", "different")
+    elif failure == "base":
+        _git(repo, "branch", "-f", "main", "HEAD")
+    elif failure == "contract":
+        before["convergence"].update(reason="contract_conflict", conflict="scope")
+    elif failure == "later-round":
+        before["rounds"].append({"round_id": "later", "lane": "review_t1"})
+    elif failure == "running":
+        write_round(state_dir / "orchestrator" / "review-rounds", {
+            "round_id": "live", "review_scope": {"source_round_id": "source"}, "runs": [{"pid": os.getpid()}],
+        })
+    elif failure == "reslice":
+        before["convergence"]["decision"] = "RESLICE"
+    before = review.save_cycle(state_dir, before)
+    errors = []
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2)
+    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", before["public_id"], "--decision", "clean", "--reason", "Explicit caller attestation"])
+    assert review.main() == 2
+    assert errors
+    assert _cycle_payload(state_dir, before["public_id"]) == before
 
 
 def test_wsl_flag_persists_to_orchestrated_steps(
@@ -2842,7 +3011,7 @@ def test_restart_brief_cannot_reset_accepted_findings(
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
 
 
-@pytest.mark.parametrize("followup_pending", [False, True, "abandoned"])
+@pytest.mark.parametrize("followup_pending", [False, True, "abandoned", "conflict", "replan"])
 def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2876,7 +3045,12 @@ def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
     _run_review(monkeypatch, ["--id", old_id, "--decision", "findings"])
     _commit_file(repo, "app.txt", "approved contract\n", "approved product change")
     before = _cycle_payload(state_dir, old_id)
-    if followup_pending:
+    if followup_pending in {"conflict", "replan"}:
+        before = review.record_contract_conflict(before, conflict="acceptance")
+        if followup_pending == "replan":
+            before = review.record_convergence_decision(before, decision="REPLAN")
+        review.save_cycle(state_dir, before)
+    elif followup_pending:
         before = review.mark_fix_detected(before, head=_git(repo, "rev-parse", "HEAD"))
         review.save_cycle(state_dir, before)
         assert before["stage"] == "followup-pending"
@@ -2924,26 +3098,19 @@ def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
 
     live_round["runs"][0]["review_status"] = "completed"
     write_round(round_state_dir, live_round)
-    # Plain creation with a new brief still cannot silently abandon accepted findings.
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "review.py",
-            "--skip-deslop",
-            "--mode",
-            "deep",
-            "--review-brief",
-            "Approved contract",
-            "--cd",
-            str(repo),
-            "--base",
-            "main",
-        ],
-    )
-    assert review.main() == 2
-    assert "review brief is frozen" in errors[-1]
-    assert _cycle_payload(state_dir, old_id) == before
+    if followup_pending != "replan":
+        # Plain creation with a new brief cannot abandon pending accepted findings.
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "review.py", "--skip-deslop", "--mode", "deep",
+                "--review-brief", "Approved contract", "--cd", str(repo), "--base", "main",
+            ],
+        )
+        assert review.main() == 2
+        assert "review brief is frozen" in errors[-1]
+        assert _cycle_payload(state_dir, old_id) == before
 
     exit_code, restarted = _run_review(monkeypatch, argv[1:])
     assert exit_code == 0
@@ -3123,7 +3290,7 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
 ) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
     review_calls = _stub_review(
-        monkeypatch, "round-1", "round-2", "round-3", "authorized-round"
+        monkeypatch, "round-1", "round-2", "round-3", "authorized-round", output="[P1] Concrete regression."
     )
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -4765,7 +4932,7 @@ def test_mode_rerun_after_pending_review_amend_reuses_existing_cycle(
     tmp_path: Path,
 ) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
-    review_calls = _stub_review(monkeypatch, "phase_review-round-1")
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1", output="[P1] Concrete regression.")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
@@ -4844,7 +5011,7 @@ def test_mode_rerun_allows_non_overlapping_merge_base_drift_without_rerunning_de
     tmp_path: Path,
 ) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
-    review_calls = _stub_review(monkeypatch, "phase_review-round-1")
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1", output="[P1] Concrete regression.")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _use_compact_normal_profile(monkeypatch, state_dir)
@@ -4976,7 +5143,7 @@ def test_mode_rerun_after_initial_review_commit_reuses_cycle(
 ) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
     review_calls = _stub_review(
-        monkeypatch, "phase_review-round-1", "phase_review-round-2"
+        monkeypatch, "phase_review-round-1", "phase_review-round-2", output="[P1] Concrete regression."
     )
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -5088,7 +5255,7 @@ def test_mode_rerun_after_initial_review_reset_reuses_cycle(
     tmp_path: Path,
 ) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
-    _stub_review(monkeypatch, "phase_review-round-1")
+    _stub_review(monkeypatch, "phase_review-round-1", output="[P1] Concrete regression.")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _use_compact_normal_profile(monkeypatch, state_dir)
@@ -5141,7 +5308,7 @@ def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
 ) -> None:
     _stub_deslop(monkeypatch)
     review_calls = _stub_review(
-        monkeypatch, "phase_review-round-1", "phase_review-round-2"
+        monkeypatch, "phase_review-round-1", "phase_review-round-2", output="[P1] Concrete regression."
     )
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -5993,7 +6160,7 @@ def test_stale_decision_renders_current_action_without_mutating_cycle(
 def test_stale_decision_persists_auto_resume_transition(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    review_calls = _stub_review(monkeypatch)
+    review_calls = _stub_review(monkeypatch, output="[P1] Concrete regression.")
 
     _stub_deslop(monkeypatch)
     repo = tmp_path / "repo"
