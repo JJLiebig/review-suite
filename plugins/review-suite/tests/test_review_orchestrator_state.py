@@ -91,7 +91,7 @@ def _cycle(
     )
 
 
-@pytest.mark.parametrize("intervening_decision", [None, "RESLICE"])
+@pytest.mark.parametrize("intervening_decision", [None, "RESLICE", "REPLAN", "BUDGET"])
 def test_contract_replan_reservation_preserves_convergence_under_late_writes(
     tmp_path: Path,
     intervening_decision: str | None,
@@ -113,8 +113,10 @@ def test_contract_replan_reservation_preserves_convergence_under_late_writes(
     if intervening_decision:
         current = record_convergence_decision(
             record_contract_conflict(stale, conflict="scope"),
-            decision=intervening_decision,
+            decision="REPLAN" if intervening_decision == "BUDGET" else intervening_decision,
         )
+        if intervening_decision == "BUDGET":
+            current["convergence"].update(reason="budget_exhausted", conflict=None)
         saved = save_cycle(state_dir, current)
         with pytest.raises(
             ValueError, match="contract replan requires active findings"

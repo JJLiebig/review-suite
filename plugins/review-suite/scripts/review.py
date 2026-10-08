@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from copy import deepcopy
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +101,7 @@ from review_suite_core.orchestrator_state import (
     mark_review_step_retry,
     abort_cycle,
     convergence_summary,
+    correct_inferred_followup_decision,
     record_contract_conflict,
     record_contract_replan,
     record_convergence_decision,
@@ -120,6 +123,7 @@ from review_suite_local import (
     print_reviewer_output_section,
     round_has_live_reviewer_process,
     round_needs_caller_grade,
+    terminal_review_command,
     unique_round_state_dirs,
 )
 
@@ -1589,10 +1593,121 @@ def _auto_record_pending_decision_fix(
     reviewed_head = str(round_payload.get("reviewed_head") or "").strip()
     if not reviewed_head or reviewed_head == current_head_value:
         return state
+    if _stored_clean_review(_load_output_round_payload(state_dir, round_payload)):
+        return state
     findings = _apply_decision_to_ready_state(
         state, DECISION_FINDINGS, state_dir=state_dir, require_grade=False
     )
+    findings["decisions"][-1]["source"] = "head-change-inference"
     return mark_fix_detected(findings, head=current_head_value)
+
+
+def _stored_clean_review(payload: dict[str, Any]) -> bool:
+    runs = payload.get("runs") or []
+    if not runs or payload.get("review_blocked") or _round_blocked_slots(payload):
+        return False
+    for run in runs:
+        output = str(run.get("reviewer_output") or "").strip()
+        command = str(
+            run.get("terminal_command") or terminal_review_command(output) or ""
+        )
+        if (
+            str(run.get("review_status") or run.get("status")) != "completed"
+            or command == DECISION_FINDINGS
+            or not (
+                command == DECISION_CLEAN or output.lower().startswith("no findings.")
+            )
+            or re.search(
+                r"\[P[0-3]\]|(?:full )?review comments?:|review (?:result|decision):\s*findings",
+                output,
+                re.I,
+            )
+        ):
+            return False
+    return True
+
+
+def _correct_inferred_clean_decision(
+    state: dict[str, Any], *, state_dir: Path, reason: str
+) -> dict[str, Any]:
+    review_root, _, _, head, merge_base_head = _current_restart_identity(
+        state, require_exact=False
+    )
+    if merge_base_head != state["identity"]["merge_base"]:
+        raise ValueError("correction requires the unchanged review merge-base")
+    corrections = state.get("decision_corrections") or []
+    if (
+        corrections
+        and corrections[-1]["head"] == head
+        and not state.get("active_findings")
+    ):
+        return state
+    active = dict(state.get("active_findings") or {})
+    round_record = _round_by_id(state, str(active.get("round_id") or ""))
+    payload = _load_output_round_payload(state_dir, round_record)
+    reviewed_head = str(active.get("reviewed_head") or "")
+    if (
+        not _stored_clean_review(payload)
+        or round_record.get("review_blocked")
+        or _round_blocked_slots(round_record)
+        or _pending_grade_payload(state, state_dir=state_dir) is not None
+        or dict(payload.get("review_scope") or {}).get("reviewed_head") != reviewed_head
+        or not is_ancestor(review_root, reviewed_head, head)
+    ):
+        raise ValueError(
+            "correction requires a completed stored clean review and its test/docs-only descendant"
+        )
+    decision = (state.get("decisions") or [{}])[-1]
+    if decision.get("source") not in {None, "head-change-inference"}:
+        raise ValueError("correction cannot replace a caller findings decision")
+    for record in state.get("rounds") or []:
+        if round_has_live_reviewer_process(
+            _load_output_round_payload(state_dir, record)
+        ):
+            raise ValueError("cannot correct while a reviewer is running")
+    source_round_id = str(round_record.get("source_round_id") or "")
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    for path in rounds_dir(round_state_dir).glob("*.json"):
+        candidate = load_round(round_state_dir, path.stem)
+        if dict(candidate.get("review_scope") or {}).get(
+            "source_round_id"
+        ) == source_round_id and round_has_live_reviewer_process(candidate):
+            raise ValueError("cannot correct while a follow-up reviewer is running")
+    result = subprocess.run(
+        ["git", "diff", "--raw", "-z", "--no-renames", reviewed_head, head],
+        cwd=review_root,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        raise ValueError("cannot inspect the correction interdiff")
+    diff = result.stdout.decode("utf-8").rstrip("\0").split("\0")
+    if not diff or len(diff) % 2:
+        raise ValueError("correction requires committed test/docs-only changes")
+    for header, name in zip(diff[::2], diff[1::2]):
+        path = Path(name)
+        test_or_doc = (
+            "tests" in path.parts
+            and path.suffix == ".py"
+            or "docs" in path.parts
+            and path.suffix in {".md", ".rst"}
+        )
+        if not test_or_doc or any(
+            mode not in {"000000", "100644", "100755"}
+            for mode in header.lstrip(":").split()[:2]
+        ):
+            raise ValueError("correction requires committed test/docs-only changes")
+    digest = sha256(
+        "\n\n".join(
+            str(run.get("reviewer_output") or "") for run in payload["runs"]
+        ).encode()
+    ).hexdigest()
+    next_state = _with_current_identity(
+        state, head=head, merge_base_head=merge_base_head
+    )
+    return correct_inferred_followup_decision(
+        next_state, head=head, reason=reason, verdict_digest=digest
+    )
 
 
 def _auto_record_structured_decision(
@@ -2584,9 +2699,12 @@ def _apply_decision(
             return ready_state
         ready_state = _resume_progress(ready_state, state_dir=state_dir)
     try:
-        return _apply_decision_to_ready_state(
+        result = _apply_decision_to_ready_state(
             ready_state, decision, state_dir=state_dir
         )
+        if decision == DECISION_FINDINGS:
+            result["decisions"][-1]["source"] = "caller"
+        return result
     except ValueError as exc:
         if (
             str(exc) == NO_DECISION_PENDING_MESSAGE
@@ -3242,10 +3360,14 @@ def main() -> int:
                 "--skip-deslop/--no-deslop can only be used when creating a review cycle"
             )
         if args.reason and not (
-            args.restart_mode or has_restart_brief or args.deslop_done
+            args.restart_mode
+            or has_restart_brief
+            or args.deslop_done
+            or args.id
+            and args.decision == DECISION_CLEAN
         ):
             raise ValueError(
-                "--reason requires --restart-mode, --restart-brief, or --deslop-done"
+                "--reason requires --restart-mode, --restart-brief, --deslop-done, or --id with --decision clean"
             )
         if args.deslop_done and not args.id:
             raise ValueError("--deslop-done requires --id")
@@ -3456,6 +3578,15 @@ def main() -> int:
                 _render(saved, state_dir=state_dir)
                 return 0
             if args.decision:
+                if args.reason:
+                    state = _correct_inferred_clean_decision(
+                        state, state_dir=state_dir, reason=args.reason
+                    )
+                    if has_validation_status:
+                        state = _record_validation_status(state, args)
+                    saved = save_cycle(state_dir, state)
+                    _render(saved, state_dir=state_dir)
+                    return 0
                 if has_validation_status:
                     state = _record_validation_status(state, args)
                 try:

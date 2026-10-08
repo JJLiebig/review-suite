@@ -602,9 +602,7 @@ def convergence_summary(state: dict[str, Any]) -> dict[str, Any]:
             "reason": convergence.get("reason"),
             "conflict": convergence.get("conflict"),
             "decision": convergence.get("decision"),
-            "accepted_findings_heads": len(
-                convergence.get("accepted_findings_heads") or []
-            ),
+            "accepted_findings_heads": len(_effective_findings_heads(state)),
             "accepted_findings_limit": DEFAULT_ACCEPTED_FINDINGS_LIMIT,
             "recommendations": sorted(
                 CONVERGENCE_DECISIONS
@@ -612,6 +610,20 @@ def convergence_summary(state: dict[str, Any]) -> dict[str, Any]:
             ),
         }
     )
+
+
+def _effective_findings_heads(state: dict[str, Any]) -> list[dict[str, Any]]:
+    corrected = {
+        item["accepted_findings_index"]
+        for item in state.get("decision_corrections", [])
+    }
+    return [
+        item
+        for index, item in enumerate(
+            dict(state.get("convergence") or {}).get("accepted_findings_heads") or []
+        )
+        if index not in corrected
+    ]
 
 
 def _require_convergence_decision_inplace(
@@ -639,12 +651,16 @@ def _record_accepted_findings_head_inplace(
     )
     heads = convergence["accepted_findings_heads"]
     if any(
-        isinstance(item, dict) and item.get("tree") == material_id for item in heads
+        isinstance(item, dict) and item.get("tree") == material_id
+        for item in _effective_findings_heads(state)
     ):
         return
     heads.append({"head": reviewed_head, "tree": material_id})
     continued_head = bool(convergence.pop("continue_pending", False))
-    if continued_head or len(heads) >= DEFAULT_ACCEPTED_FINDINGS_LIMIT:
+    if (
+        continued_head
+        or len(_effective_findings_heads(state)) >= DEFAULT_ACCEPTED_FINDINGS_LIMIT
+    ):
         _require_convergence_decision_inplace(state, reason="budget_exhausted")
 
 
@@ -731,10 +747,21 @@ def record_convergence_decision(
 
 def record_contract_replan(state: dict[str, Any], *, conflict: str) -> dict[str, Any]:
     pending = dict(state.get("pending_action") or {})
-    if (
-        state.get("stage") not in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}
-        or not isinstance(state.get("active_findings"), dict)
-        or convergence_summary(state)["status"] != "ACTIVE"
+    convergence = convergence_summary(state)
+    recorded_conflict = (
+        convergence.get("reason") == "contract_conflict"
+        and convergence.get("conflict") == conflict
+        and (
+            (state.get("stage"), convergence["status"])
+            == ("decision-required", "DECISION_REQUIRED")
+            or (state.get("stage"), convergence["status"], convergence.get("decision"))
+            == ("convergence-decided", "DECIDED", "REPLAN")
+        )
+    )
+    if not isinstance(state.get("active_findings"), dict) or not (
+        recorded_conflict
+        or state.get("stage") in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}
+        and convergence["status"] == "ACTIVE"
     ):
         raise ValueError(
             "contract replan requires active findings awaiting a fix or follow-up"
@@ -747,6 +774,8 @@ def record_contract_replan(state: dict[str, Any], *, conflict: str) -> dict[str,
                 "cannot replan while the follow-up wrapper is running; finish or stop its owning review command"
             )
     next_state = _copy_state(state)
+    if recorded_conflict:
+        return record_convergence_decision(next_state, decision="REPLAN")
     _require_convergence_decision_inplace(
         next_state,
         reason="contract_conflict",
@@ -1839,6 +1868,77 @@ def record_followup_findings(
     _set_stage(next_state, STAGE_FIX_PENDING)
     _record_accepted_findings_head_inplace(
         next_state, reviewed_head=head, reviewed_tree=reviewed_tree
+    )
+    return next_state
+
+
+def correct_inferred_followup_decision(
+    state: dict[str, Any], *, head: str, reason: str, verdict_digest: str
+) -> dict[str, Any]:
+    """Correct the latest inferred verdict while retaining its original audit records."""
+    active = _active_findings(state)
+    round_id = active["round_id"]
+    reviewed_head = active["reviewed_head"]
+    rounds = state.get("rounds") or []
+    decisions = state.get("decisions") or []
+    convergence = dict(state.get("convergence") or {})
+    heads = convergence.get("accepted_findings_heads") or []
+    if not (
+        convergence.get("reason") == "budget_exhausted"
+        and (
+            (state.get("stage"), convergence.get("status"))
+            == ("decision-required", "DECISION_REQUIRED")
+            or (
+                state.get("stage"),
+                convergence.get("status"),
+                convergence.get("decision"),
+            )
+            == ("convergence-decided", "DECIDED", "REPLAN")
+        )
+        and rounds
+        and decisions
+        and heads
+        and rounds[-1].get("round_id") == decisions[-1].get("round_id") == round_id
+        and rounds[-1].get("lane") == active.get("lane") == "review-followup"
+        and decisions[-1].get("command") == DECISION_FINDINGS
+        and decisions[-1].get("reviewed_head") == heads[-1].get("head") == reviewed_head
+        and rounds[-1].get("source_round_id") == active.get("previous_round_id")
+        and not any(
+            item.get("command") == DECISION_FINDINGS
+            and item.get("reviewed_head") == reviewed_head
+            for item in decisions[:-1]
+        )
+        and head != reviewed_head
+    ):
+        raise ValueError(
+            "correction requires the latest inferred clean follow-up at a budget checkpoint"
+        )
+    next_state = _copy_state(state)
+    correction = {
+        "round_id": round_id,
+        "reviewed_head": reviewed_head,
+        "head": head,
+        "reason": _required_text(reason, field="correction reason"),
+        "verdict_digest": _required_text(verdict_digest, field="stored verdict digest"),
+        "accepted_findings_index": len(heads) - 1,
+        "original_decision": deepcopy(decisions[-1]),
+        "original_convergence": convergence_summary(state),
+        "command": DECISION_CLEAN,
+    }
+    next_state.setdefault("decision_corrections", []).append(correction)
+    next_state["convergence"].update(
+        status="ACTIVE", decision=None, reason=None, conflict=None
+    )
+    # Reuse the clean transition, then restore the immutable original records.
+    next_state["decisions"].pop()
+    next_state["active_findings"]["round_id"] = rounds[-1]["source_round_id"]
+    next_state = record_followup_clean(
+        next_state, round_id=round_id, reviewed_head=reviewed_head
+    )
+    next_state["rounds"] = deepcopy(rounds)
+    next_state["decisions"] = deepcopy(decisions)
+    next_state["validation"] = dict.fromkeys(
+        ("focused", "full_suite", "ci", "review_green"), "unknown"
     )
     return next_state
 
