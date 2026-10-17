@@ -15,6 +15,7 @@ import rollout_capture  # noqa: E402
 import review_suite_core  # noqa: E402
 import review_suite_local  # noqa: E402
 from review_suite_core.opencode_driver import REVIEW_METADATA_PREFIX  # noqa: E402
+from review_suite_core.review_backend import prepare_review_launch  # noqa: E402
 
 
 THREAD_SCHEMA = """
@@ -1048,74 +1049,56 @@ def test_default_roster_includes_current_model_pricing() -> None:
             assert variant["pricing"] == expected_pricing[variant["model"]]
 
 
-def test_opencode_arena_candidates_are_registered(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "pool_name,task_class,efforts",
+    [
+        ("arena_phase", "phase_review", ("low", "high", "max")),
+        ("arena_deep", "pr_review", ("high", "max")),
+    ],
+)
+def test_opencode_arena_selection_launches_current_versions(
+    tmp_path: Path, pool_name: str, task_class: str, efforts: tuple[str, ...]
+) -> None:
     roster_path = Path(__file__).resolve().parents[1] / "references" / "roster.json"
     roster = review_suite_local.load_roster(roster_path)
-    index = review_suite_local.variant_index(roster)
-
-    opencode_layout = {
-        variant["id"]: (
-            variant["model"],
-            variant["reasoning_effort"],
-            variant["task_classes"],
-            variant["state"],
+    pool = review_suite_core.load_config(tmp_path / "state")["arena"]["pools"][pool_name]
+    candidates = {f"deepseek-v4.1-flash-1017-{effort}" for effort in efforts}
+    candidates.update(("glm-5.3-flash-high", "glm-5.3-flash-max"))
+    payload = review_suite_local.select_pair(
+        roster=roster,
+        operational_state=review_suite_local.default_operational_state(),
+        records=[
+            {"task_class": task_class, "rating_pool_id": pool["rating_pool_id"], "runs": []}
+            for _ in pool["variant_groups"]
+        ],
+        task_class=task_class,
+        review_cwd=tmp_path,
+        seed=0,
+        rating_pool_id=pool["rating_pool_id"],
+        variant_groups=pool["variant_groups"],
+        variant_ids=pool["variant_ids"],
+        excluded_variant_ids=set(pool["variant_ids"]) - candidates,
+    )
+    for run in payload["runs"]:
+        launch = prepare_review_launch(
+            tool_name="review-suite",
+            model=run["model"],
+            reasoning_effort=run["reasoning_effort"],
+            title="review-suite::test",
+            review_root=tmp_path,
+            base="main",
+            allow_unsafe_windows_wsl_fallback=False,
         )
-        for variant in index.values()
-        if variant.get("model", "").startswith("opencode::opencode-go/")
-    }
-    assert opencode_layout == {
-        "deepseek-v4.1-flash-low": (
-            "opencode::opencode-go/deepseek-v4.1-flash",
-            "low",
-            ["phase_review"],
-            "active",
-        ),
-        "deepseek-v4.1-flash-high": (
-            "opencode::opencode-go/deepseek-v4.1-flash",
-            "high",
-            ["phase_review", "pr_review"],
-            "active",
-        ),
-        "deepseek-v4.1-flash-max": (
-            "opencode::opencode-go/deepseek-v4.1-flash",
-            "max",
-            ["phase_review", "pr_review"],
-            "active",
-        ),
-        "glm-5.3-flash-low": (
-            "opencode::opencode-go/glm-5.3-flash",
-            "low",
-            ["phase_review"],
-            "active",
-        ),
-        "glm-5.3-flash-high": (
-            "opencode::opencode-go/glm-5.3-flash",
-            "high",
-            ["phase_review", "pr_review"],
-            "active",
-        ),
-        "glm-5.3-flash-max": (
-            "opencode::opencode-go/glm-5.3-flash",
-            "max",
-            ["phase_review", "pr_review"],
-            "active",
-        ),
-    }
-
-    config = review_suite_core.load_config(tmp_path / "state")
-    phase_ids = config["arena"]["pools"]["arena_phase"]["variant_ids"]
-    deep_ids = config["arena"]["pools"]["arena_deep"]["variant_ids"]
-    for variant_id in phase_ids + deep_ids:
-        assert variant_id in index
-    assert set(opencode_layout) <= set(phase_ids)
-    assert {
-        "deepseek-v4.1-flash-high",
-        "deepseek-v4.1-flash-max",
-        "glm-5.3-flash-high",
-        "glm-5.3-flash-max",
-    } <= set(deep_ids)
-    assert "deepseek-v4.1-flash-low" not in deep_ids
-    assert "glm-5.3-flash-low" not in deep_ids
+        assert launch.command[launch.command.index("--model") + 1] == run[
+            "model"
+        ].removeprefix("opencode::")
+        assert launch.command[launch.command.index("--variant") + 1] == run[
+            "reasoning_effort"
+        ]
+    assert any(
+        run["variant_id"].startswith("deepseek-v4.1-flash-1017-")
+        for run in payload["runs"]
+    )
 
 
 def test_collect_round_results_preserves_foreign_review_cwd_for_capture(
