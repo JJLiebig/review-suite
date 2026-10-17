@@ -296,7 +296,7 @@
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "low",
       "task_classes": ["phase_review"],
-      "state": "active",
+      "state": "disabled",
       "bootstrap_target_samples": 10
     },
     {
@@ -304,11 +304,35 @@
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "high",
       "task_classes": ["phase_review", "pr_review"],
-      "state": "active",
+      "state": "disabled",
       "bootstrap_target_samples": 10
     },
     {
       "id": "deepseek-v4.1-flash-max",
+      "model": "opencode::opencode-go/deepseek-v4.1-flash",
+      "reasoning_effort": "max",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "disabled",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "deepseek-v4.1-flash-1017-low",
+      "model": "opencode::opencode-go/deepseek-v4.1-flash",
+      "reasoning_effort": "low",
+      "task_classes": ["phase_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "deepseek-v4.1-flash-1017-high",
+      "model": "opencode::opencode-go/deepseek-v4.1-flash",
+      "reasoning_effort": "high",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "deepseek-v4.1-flash-1017-max",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "max",
       "task_classes": ["phase_review", "pr_review"],

@@ -28,6 +28,12 @@ Astra Minor remains unpriced.
 Existing model defaults and rating pool IDs are unchanged.
 Pinned user `variant_ids` overrides must include the new candidates to sample them.
 
+DeepSeek V4.1 Flash 1017 uses separate `deepseek-v4.1-flash-1017-*` variants
+at low/high/max effort (low is phase-only). The earlier variants are disabled;
+their ratings remain in history. The [1017 update](https://api-docs.deepseek.com/updates/)
+keeps the API name and pricing unchanged, so the OpenCode route remains
+`opencode-go/deepseek-v4.1-flash`.
+
 ## Configuration
 
 Arena is disabled by default and is not needed for ordinary reviews.
