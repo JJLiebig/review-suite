@@ -4483,6 +4483,7 @@ def build_record_from_grade(
     indexed = variant_index(roster)
     runs = [deepcopy(run) for run in round_payload.get("runs", [])]
     groups = placement_groups_from_ranks(runs, rank_groups, basis)
+    finding_assessment = {"groups": groups, "basis": basis}
     aliases = {
         alias: run["variant_id"]
         for run in runs
@@ -4531,6 +4532,8 @@ def build_record_from_grade(
         "placement_v1": {"groups": groups, "basis": basis},
         "runs": runs,
     }
+    if record["placement_v1"] != finding_assessment:
+        record["placement_v1"]["finding_assessment"] = finding_assessment
     if round_payload.get("reporting_pool"):
         record["reporting_pool"] = True
     repo_name = repo_name_from_round_payload(round_payload)
@@ -4633,6 +4636,20 @@ def aggregate_records(
                 for rank, group in enumerate(groups)
                 for variant_id in group
             }
+            _, finding_groups, finding_basis = placement_record(
+                {
+                    "rating_pool_id": pool_id,
+                    "placement_v1": record["placement_v1"].get(
+                        "finding_assessment", record["placement_v1"]
+                    ),
+                },
+                expected_variants=set(ranks),
+            )
+            finding_ranks = {
+                variant_id: rank
+                for rank, group in enumerate(finding_groups)
+                for variant_id in group
+            }
             before = {
                 variant_id: ratings.get(variant_id, 1500.0) for variant_id in ranks
             }
@@ -4665,20 +4682,23 @@ def aggregate_records(
                 bucket["sample_count"] += 1
                 if len(groups) == 1 or (rank == 0 and len(groups[0]) > 1):
                     bucket["tie_count"] += 1
-                    outcome = "tie"
                 elif rank == 0:
                     bucket["win_count"] += 1
-                    outcome = "win"
                 else:
                     bucket["loss_count"] += 1
-                    outcome = "loss"
-                if basis in BUG_OPPORTUNITY_BASES:
+                finding_rank = finding_ranks[variant_id]
+                finding_winner = (
+                    finding_rank == 0
+                    and len(finding_groups) > 1
+                    and len(finding_groups[0]) == 1
+                )
+                if finding_basis in BUG_OPPORTUNITY_BASES:
                     bucket["finding_opportunity_count"] += 1
                 if (
-                    outcome == "win" and basis in VALID_FINDING_WIN_BASES
-                ) or basis in ALL_PARTICIPANTS_FOUND_BASES:
+                    finding_winner and finding_basis in VALID_FINDING_WIN_BASES
+                ) or finding_basis in ALL_PARTICIPANTS_FOUND_BASES:
                     bucket["valid_finding_count"] += 1
-                if outcome == "loss" and basis in MISSED_BUG_LOSS_BASES:
+                if finding_rank > 0 and finding_basis in MISSED_BUG_LOSS_BASES:
                     bucket["missed_bug_loss_count"] += 1
                 if isinstance(run.get("low_quality"), bool):
                     bucket["low_quality_sample_count"] += 1

@@ -533,6 +533,18 @@ def test_build_record_from_grade_uses_explicit_ordered_groups() -> None:
             ["alpha", "bravo", "charlie"],
             [["model-a", "model-b", "model-c"]],
         ),
+        (
+            ["alpha", "bravo,charlie"],
+            "valid_findings_vs_none",
+            ["alpha"],
+            [["model-b", "model-c"], ["model-a"]],
+        ),
+        (
+            ["alpha,bravo,charlie"],
+            "tie_clean",
+            ["alpha"],
+            [["model-b", "model-c"], ["model-a"]],
+        ),
     ):
         flagged_record = build_record_from_grade(
             round_payload=round_payload,
@@ -548,6 +560,37 @@ def test_build_record_from_grade_uses_explicit_ordered_groups() -> None:
         assert flagged_record["placement_v1"]["groups"] == expected_groups
         assert sum(run["low_quality"] for run in flagged_record["runs"]) == len(flagged)
         assert compact_benchmark_record(flagged_record) == flagged_record
+        original_record = build_record_from_grade(
+            round_payload=round_payload,
+            roster=roster,
+            rubric={"basis": list(review_suite_local.GRADE_BASIS_VALUES)},
+            task_id="task-1",
+            rating_pool_id="arena-phase-v1",
+            rank_groups=ranks,
+            basis=basis,
+            shared_note=None,
+        )
+        finding_results = []
+        for graded_record in (original_record, flagged_record):
+            summary = aggregate_records(
+                roster,
+                [graded_record],
+                _operational_state(champion_ids=[], probation_ids=[], cooling={}),
+            )
+            finding_results.append(
+                {
+                    row["variant_id"]: {
+                        key: row[key]
+                        for key in (
+                            "finding_opportunity_count",
+                            "valid_finding_count",
+                            "missed_bug_loss_count",
+                        )
+                    }
+                    for row in summary["task_classes"]["phase_review"]["leaderboard"]
+                }
+            )
+        assert finding_results[0] == finding_results[1]
         if len(expected_groups) > 1:
             after = review_suite_local.update_elo(
                 dict.fromkeys(("model-a", "model-b", "model-c"), 1500),
