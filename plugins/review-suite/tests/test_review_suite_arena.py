@@ -22,7 +22,9 @@ from review_suite_arena import (
     _normalize_arena_task_class,
     _print_findings,
     _record_grade_result,
+    build_parser,
     cmd_costs,
+    cmd_grade,
     cmd_dismiss_round,
     cmd_prune_state,
     cmd_resume_round,
@@ -47,6 +49,86 @@ def _stub_clean_git_worktree(monkeypatch) -> None:
     monkeypatch.setattr(
         "review_suite_local.ensure_clean_git_worktree", lambda *args, **kwargs: None
     )
+
+
+def test_grade_records_garbage_flags_and_penalizes_placements(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    roster_path = tmp_path / "roster.json"
+    roster_path.write_text(
+        json.dumps(
+            {
+                "settings": {"promotion_min_samples": 20},
+                "variants": [
+                    {"id": variant, "state": "active", "task_classes": ["phase_review"]}
+                    for variant in ("model-a", "model-b", "model-c")
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_round(
+        state_dir,
+        {
+            "round_id": "garbage-round",
+            "repo_name": "test-repo",
+            "task_class": "phase_review",
+            "selection_mode": "scramble",
+            "reporting_pool": True,
+            "status": "completed",
+            "runs": [
+                {
+                    "slot": slot,
+                    "variant_id": variant,
+                    "review_status": "completed",
+                    "grade_blocked": False,
+                    "usage": {},
+                    "cost_usd": 0,
+                }
+                for slot, variant in zip(
+                    ("alpha", "bravo", "charlie"), ("model-a", "model-b", "model-c")
+                )
+            ],
+        },
+    )
+    args = build_parser().parse_args(
+        [
+            "grade",
+            "--round-id",
+            "garbage-round",
+            "--task-id",
+            "task",
+            "--rating-pool-id",
+            "test-pool",
+            "--rank",
+            "alpha,bravo,charlie",
+            "--basis",
+            "tie_both_useful",
+            "--low-quality",
+            "alpha",
+            "--low-quality",
+            "model-c",
+            "--roster",
+            str(roster_path),
+            "--rubric",
+            str(SCRIPT_DIR.parent / "references" / "rubric_v2.json"),
+            "--state-dir",
+            str(state_dir),
+            "--caller-id",
+            "test-caller",
+        ]
+    )
+    assert cmd_grade(args) == 0
+    record = json.loads((state_dir / "runs.jsonl").read_text(encoding="utf-8"))
+    assert record["placement_v1"]["groups"] == [["model-b"], ["model-a", "model-c"]]
+    assert [run["low_quality"] for run in record["runs"]] == [True, False, True]
+    summary = json.loads((state_dir / "summary.json").read_text(encoding="utf-8"))
+    rows = {
+        row["variant_id"]: row
+        for row in summary["task_classes"]["phase_review"]["leaderboard"]
+    }
+    assert rows["model-b"]["elo"] > rows["model-a"]["elo"]
+    assert rows["model-a"]["low_quality_loss_rate"] == 100
+    assert rows["model-b"]["low_quality_loss_rate"] == 0
 
 
 def test_print_findings_prints_final_reviewer_output(capsys) -> None:

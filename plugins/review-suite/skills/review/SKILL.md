@@ -31,6 +31,7 @@ Rules:
 - There is no `--allow-dirty` override.
 - Read `Output:`, then follow the emitted `Action`: run `cmd` when present, or classify the output and run exactly one matching `choices` command.
 - For arena grading actions, grade only after checking findings against the diff/repo. Plausible but unverified findings do not count as valid. Use `scope_bloat_loss` when a review asks for product behavior, AI guardrails, validation, fallback behavior, UX policy, or safety checks that are not required by the diff, a real bug, a trust boundary, or the user request.
+- If a reviewer gave garbage, add `--low-quality <slot-or-variant>` to the grade command; repeat for each such reviewer. Your judgment is authoritative: wrong flags, hallucinations, and demands against the requested product behavior count even when the same review also has a useful finding. A missed bug or unresolved disagreement alone does not. No extra evidence fields are required. Flagged reviewers are placed below unflagged reviewers, preserving your order and ties within each group; omitting the flag assesses every reviewer as not low quality.
 - Supply the requested rating pool and repeat `--rank` from best to worst; comma-separated variants within one rank tie. The caller grades; Review Suite never promotes a winner automatically.
 - Without an id, use `review.py --status --cd <repo-root>` for branch routing.
 - The default base is the repository's remote default branch. Use `--base <ref>` only as an explicit override.

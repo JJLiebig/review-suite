@@ -33,7 +33,6 @@ from review_suite_local import (
     _running_status_line,
     _transport_hung_after_output,
     _transport_stalled,
-    LOW_QUALITY_LOSS_REASON_BASES,
     aggregate_records,
     build_record_from_grade,
     compact_benchmark_record,
@@ -513,6 +512,107 @@ def test_build_record_from_grade_uses_explicit_ordered_groups() -> None:
     assert "pairwise_outcome" not in record
     assert "grade_schema" not in record
     assert all(run["grader_notes"] == "checked" for run in record["runs"])
+    assert all(run["low_quality"] is False for run in record["runs"])
+
+    for ranks, basis, flagged, expected_groups in (
+        (
+            ["alpha", "bravo,charlie"],
+            "better_bug_coverage",
+            ["alpha", "model-c"],
+            [["model-b"], ["model-a"], ["model-c"]],
+        ),
+        (
+            ["alpha,bravo,charlie"],
+            "tie_both_useful",
+            ["alpha"],
+            [["model-b", "model-c"], ["model-a"]],
+        ),
+        (
+            ["alpha,bravo,charlie"],
+            "tie_both_useful",
+            ["alpha", "bravo", "charlie"],
+            [["model-a", "model-b", "model-c"]],
+        ),
+        (
+            ["alpha", "bravo,charlie"],
+            "valid_findings_vs_none",
+            ["alpha"],
+            [["model-b", "model-c"], ["model-a"]],
+        ),
+        (
+            ["alpha,bravo,charlie"],
+            "tie_clean",
+            ["alpha"],
+            [["model-b", "model-c"], ["model-a"]],
+        ),
+    ):
+        flagged_record = build_record_from_grade(
+            round_payload=round_payload,
+            roster=roster,
+            rubric={"basis": list(review_suite_local.GRADE_BASIS_VALUES)},
+            task_id="task-1",
+            rating_pool_id="arena-phase-v1",
+            rank_groups=ranks,
+            basis=basis,
+            shared_note="Useful findings do not cancel garbage.",
+            low_quality=flagged,
+        )
+        assert flagged_record["placement_v1"]["groups"] == expected_groups
+        assert sum(run["low_quality"] for run in flagged_record["runs"]) == len(flagged)
+        assert compact_benchmark_record(flagged_record) == flagged_record
+        original_record = build_record_from_grade(
+            round_payload=round_payload,
+            roster=roster,
+            rubric={"basis": list(review_suite_local.GRADE_BASIS_VALUES)},
+            task_id="task-1",
+            rating_pool_id="arena-phase-v1",
+            rank_groups=ranks,
+            basis=basis,
+            shared_note=None,
+        )
+        finding_results = []
+        for graded_record in (original_record, flagged_record):
+            summary = aggregate_records(
+                roster,
+                [graded_record],
+                _operational_state(champion_ids=[], probation_ids=[], cooling={}),
+            )
+            finding_results.append(
+                {
+                    row["variant_id"]: {
+                        key: row[key]
+                        for key in (
+                            "finding_opportunity_count",
+                            "valid_finding_count",
+                            "missed_bug_loss_count",
+                        )
+                    }
+                    for row in summary["task_classes"]["phase_review"]["leaderboard"]
+                }
+            )
+        assert finding_results[0] == finding_results[1]
+        if len(expected_groups) > 1:
+            after = review_suite_local.update_elo(
+                dict.fromkeys(("model-a", "model-b", "model-c"), 1500),
+                expected_groups,
+                24,
+            )
+            assert after["model-b"] > after["model-a"]
+        if basis.startswith("tie_") and len(expected_groups) > 1:
+            assert flagged_record["placement_v1"]["basis"] == "better_finding_validity"
+
+    with pytest.raises(ValueError, match="unknown low-quality reviewer"):
+        build_record_from_grade(
+            round_payload=round_payload,
+            roster=roster,
+            rubric={"basis": list(review_suite_local.GRADE_BASIS_VALUES)},
+            task_id="task-1",
+            rating_pool_id="arena-phase-v1",
+            rank_groups=["alpha", "bravo,charlie"],
+            basis="better_bug_coverage",
+            shared_note=None,
+            low_quality=["typo"],
+        )
 
     configured = json.loads(json.dumps(round_payload))
     configured["rating_pool_id"] = "discovery-phase-gpt-5.6-v1"
@@ -2267,6 +2367,10 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
             basis="scope_bloat_loss",
         ),
     ]
+    # Only explicit caller judgments count; old round-level reasons are unassessed.
+    for record, flags in zip(records, ((False, False), (True, False), (True, True))):
+        for run, flag in zip(record["runs"], flags):
+            run["low_quality"] = flag
 
     summary = aggregate_records(
         roster=roster,
@@ -2280,30 +2384,32 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
         row["variant_id"]: row
         for row in summary["task_classes"]["phase_review"]["leaderboard"]
     }
-    zero_low_quality_reasons = dict.fromkeys(LOW_QUALITY_LOSS_REASON_BASES, 0)
     assert rows["alpha-model"]["finding_opportunity_count"] == 3
     assert rows["alpha-model"]["valid_finding_count"] == 2
     assert rows["alpha-model"]["valid_finding_rate"] == pytest.approx(66.667)
     assert rows["alpha-model"]["missed_bug_loss_count"] == 0
     assert rows["alpha-model"]["missed_bug_loss_rate"] == 0.0
-    assert rows["alpha-model"]["low_quality_loss_count"] == 3
-    assert rows["alpha-model"]["low_quality_loss_rate"] == 60.0
-    assert rows["alpha-model"]["low_quality_loss_reasons"] == {
-        **zero_low_quality_reasons,
-        **{
-            "false_positive_loss": 1,
-            "scope_bloat_loss": 1,
-            "better_finding_validity": 1,
-        },
-    }
+    assert rows["alpha-model"]["low_quality_loss_count"] == 2
+    assert rows["alpha-model"]["low_quality_sample_count"] == 3
+    assert rows["alpha-model"]["low_quality_loss_rate"] == pytest.approx(66.667)
     assert rows["bravo-model"]["finding_opportunity_count"] == 3
     assert rows["bravo-model"]["valid_finding_count"] == 2
     assert rows["bravo-model"]["valid_finding_rate"] == pytest.approx(66.667)
     assert rows["bravo-model"]["missed_bug_loss_count"] == 1
     assert rows["bravo-model"]["missed_bug_loss_rate"] == pytest.approx(33.333)
-    assert rows["bravo-model"]["low_quality_loss_count"] == 0
-    assert rows["bravo-model"]["low_quality_loss_rate"] == 0.0
-    assert rows["bravo-model"]["low_quality_loss_reasons"] == zero_low_quality_reasons
+    assert rows["bravo-model"]["low_quality_loss_count"] == 1
+    assert rows["bravo-model"]["low_quality_sample_count"] == 3
+    assert rows["bravo-model"]["low_quality_loss_rate"] == pytest.approx(33.333)
+
+    legacy = aggregate_records(
+        roster,
+        records[3:],
+        _operational_state(champion_ids=[], probation_ids=[], cooling={}),
+    )
+    assert all(
+        row["low_quality_loss_rate"] is None
+        for row in legacy["task_classes"]["phase_review"]["leaderboard"]
+    )
 
 
 def test_aggregate_records_isolates_latest_pool_and_projects_placements() -> None:

@@ -86,14 +86,6 @@ GRADE_BASIS_VALUES = (
 )
 TERMINAL_REVIEW_COMMANDS = {"clean", "findings"}
 TERMINAL_REVIEW_RESULT_PREFIX = "Review result:"
-LOW_QUALITY_LOSS_REASON_BASES = (
-    "false_positive_loss",
-    "hallucinated_finding_loss",
-    "fringe_finding_loss",
-    "scope_bloat_loss",
-    "better_finding_validity",
-)
-LOW_QUALITY_LOSS_BASES = set(LOW_QUALITY_LOSS_REASON_BASES)
 MISSED_BUG_LOSS_BASES = {
     "valid_findings_vs_none",
     "more_valid_findings",
@@ -4303,6 +4295,7 @@ def record_identity_key(record: dict[str, Any]) -> str:
                 "reviewer_output": run.get("reviewer_output"),
                 "reviewer_output_ref": run.get("reviewer_output_ref"),
                 "grader_notes": run.get("grader_notes"),
+                "low_quality": run.get("low_quality"),
                 "elapsed_seconds": run.get("elapsed_seconds"),
             }
         )
@@ -4337,6 +4330,8 @@ def compact_benchmark_run(run: dict[str, Any]) -> dict[str, Any]:
         compacted["actual_model"] = run["actual_model"]
     if run.get("actual_models"):
         compacted["actual_models"] = list(run["actual_models"])
+    if isinstance(run.get("low_quality"), bool):
+        compacted["low_quality"] = run["low_quality"]
     reviewer_output = run.get("reviewer_output")
     if reviewer_output:
         compacted["reviewer_output"] = reviewer_output
@@ -4468,6 +4463,7 @@ def build_record_from_grade(
     rank_groups: list[str],
     basis: str,
     shared_note: str | None,
+    low_quality: list[str] | None = None,
 ) -> dict[str, Any]:
     if round_payload.get("status") != "completed":
         raise ValueError(f"round {round_payload['round_id']} is not completed yet")
@@ -4487,6 +4483,27 @@ def build_record_from_grade(
     indexed = variant_index(roster)
     runs = [deepcopy(run) for run in round_payload.get("runs", [])]
     groups = placement_groups_from_ranks(runs, rank_groups, basis)
+    finding_assessment = {"groups": groups, "basis": basis}
+    aliases = {
+        alias: run["variant_id"]
+        for run in runs
+        for alias in (run["slot"], run["variant_id"])
+    }
+    low_quality_ids = set()
+    for reviewer in low_quality or []:
+        if reviewer not in aliases:
+            raise ValueError(f"unknown low-quality reviewer: {reviewer}")
+        low_quality_ids.add(aliases[reviewer])
+    # A useful finding cannot cancel out a garbage review.
+    ordered_groups = []
+    for flagged in (False, True):
+        for group in groups:
+            subgroup = [v for v in group if (v in low_quality_ids) == flagged]
+            if subgroup:
+                ordered_groups.append(subgroup)
+    groups = ordered_groups
+    if len(groups) > 1 and basis.startswith("tie_"):
+        basis = "better_finding_validity"
     if not str(rating_pool_id or "").strip():
         raise ValueError("rating_pool_id is required")
     configured_pool_id = str(round_payload.get("rating_pool_id") or "").strip()
@@ -4499,6 +4516,7 @@ def build_record_from_grade(
         if variant_id not in indexed:
             raise ValueError(f"unknown roster variant: {variant_id}")
         run["grader_notes"] = shared_note or str(run["slot"])
+        run["low_quality"] = variant_id in low_quality_ids
         if run.get("cost_usd") is None:
             run["cost_usd"] = compute_cost_usd(
                 indexed[variant_id], run.get("usage", {})
@@ -4514,6 +4532,8 @@ def build_record_from_grade(
         "placement_v1": {"groups": groups, "basis": basis},
         "runs": runs,
     }
+    if record["placement_v1"] != finding_assessment:
+        record["placement_v1"]["finding_assessment"] = finding_assessment
     if round_payload.get("reporting_pool"):
         record["reporting_pool"] = True
     repo_name = repo_name_from_round_payload(round_payload)
@@ -4587,9 +4607,7 @@ def aggregate_records(
                 "valid_finding_count": 0,
                 "missed_bug_loss_count": 0,
                 "low_quality_loss_count": 0,
-                "low_quality_loss_reasons": {
-                    basis: 0 for basis in LOW_QUALITY_LOSS_REASON_BASES
-                },
+                "low_quality_sample_count": 0,
                 "elapsed_values": [],
                 "cost_values": [],
                 "total_token_values": [],
@@ -4616,6 +4634,20 @@ def aggregate_records(
             ranks = {
                 variant_id: rank
                 for rank, group in enumerate(groups)
+                for variant_id in group
+            }
+            _, finding_groups, finding_basis = placement_record(
+                {
+                    "rating_pool_id": pool_id,
+                    "placement_v1": record["placement_v1"].get(
+                        "finding_assessment", record["placement_v1"]
+                    ),
+                },
+                expected_variants=set(ranks),
+            )
+            finding_ranks = {
+                variant_id: rank
+                for rank, group in enumerate(finding_groups)
                 for variant_id in group
             }
             before = {
@@ -4650,24 +4682,27 @@ def aggregate_records(
                 bucket["sample_count"] += 1
                 if len(groups) == 1 or (rank == 0 and len(groups[0]) > 1):
                     bucket["tie_count"] += 1
-                    outcome = "tie"
                 elif rank == 0:
                     bucket["win_count"] += 1
-                    outcome = "win"
                 else:
                     bucket["loss_count"] += 1
-                    outcome = "loss"
-                if basis in BUG_OPPORTUNITY_BASES:
+                finding_rank = finding_ranks[variant_id]
+                finding_winner = (
+                    finding_rank == 0
+                    and len(finding_groups) > 1
+                    and len(finding_groups[0]) == 1
+                )
+                if finding_basis in BUG_OPPORTUNITY_BASES:
                     bucket["finding_opportunity_count"] += 1
                 if (
-                    outcome == "win" and basis in VALID_FINDING_WIN_BASES
-                ) or basis in ALL_PARTICIPANTS_FOUND_BASES:
+                    finding_winner and finding_basis in VALID_FINDING_WIN_BASES
+                ) or finding_basis in ALL_PARTICIPANTS_FOUND_BASES:
                     bucket["valid_finding_count"] += 1
-                if outcome == "loss" and basis in MISSED_BUG_LOSS_BASES:
+                if finding_rank > 0 and finding_basis in MISSED_BUG_LOSS_BASES:
                     bucket["missed_bug_loss_count"] += 1
-                if outcome == "loss" and basis in LOW_QUALITY_LOSS_BASES:
-                    bucket["low_quality_loss_count"] += 1
-                    bucket["low_quality_loss_reasons"][basis] += 1
+                if isinstance(run.get("low_quality"), bool):
+                    bucket["low_quality_sample_count"] += 1
+                    bucket["low_quality_loss_count"] += int(run["low_quality"])
                 elapsed_seconds = run.get("elapsed_seconds")
                 if isinstance(elapsed_seconds, (int, float)):
                     bucket["elapsed_values"].append(float(elapsed_seconds))
@@ -4714,11 +4749,10 @@ def aggregate_records(
                         bucket["finding_opportunity_count"],
                     ),
                     "low_quality_loss_count": bucket["low_quality_loss_count"],
+                    "low_quality_sample_count": bucket["low_quality_sample_count"],
                     "low_quality_loss_rate": percentage(
-                        bucket["low_quality_loss_count"], sample_count
-                    ),
-                    "low_quality_loss_reasons": dict(
-                        bucket["low_quality_loss_reasons"]
+                        bucket["low_quality_loss_count"],
+                        bucket["low_quality_sample_count"],
                     ),
                     "median_elapsed_seconds": round(
                         statistics.median(bucket["elapsed_values"]), 3
@@ -4837,7 +4871,7 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
         f"- Champion gate: `sample_count >= {champion_min_samples}` and `elo >= {format_decimal(champion_min_elo)}`. Champion group membership is `<= {format_decimal(champion_group_window)}` Elo behind the top eligible model."
     )
     lines.append(
-        "- `found %` is valid findings over bug-present opportunities, including all participants on `tie_both_useful` and multi-finding coverage wins. `missed %` is missed-bug losses over bug-present opportunities. `low-quality %` is validity, false-positive, hallucinated, fringe, or scope-bloat losses over all samples."
+        "- `found %` is valid findings over bug-present opportunities, including all participants on `tie_both_useful` and multi-finding coverage wins. `missed %` is missed-bug losses over bug-present opportunities. `low-quality %` is reviews the caller flagged as garbage over assessed reviews; older unassessed reviews are excluded."
     )
     lines.append(
         "- `tok/job` is uncached input (cache writes included) plus output, with reasoning folded into output; cache reads are excluded. `cost/job` is the authoritative per-run cost."

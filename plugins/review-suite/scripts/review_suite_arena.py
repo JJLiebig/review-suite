@@ -219,6 +219,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="repeat best to worst; comma-separate ties",
     )
     run.add_argument("--basis", help="grade basis")
+    run.add_argument(
+        "--low-quality",
+        action="append",
+        help="reviewer slot or variant that gave garbage; repeat for each",
+    )
     run.add_argument("--note")
 
     sample = sub.add_parser("sample")
@@ -290,6 +295,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="repeat best to worst; comma-separate ties",
     )
     grade.add_argument("--basis", required=True, help="grade basis")
+    grade.add_argument(
+        "--low-quality",
+        action="append",
+        help="reviewer slot or variant that gave garbage; repeat for each",
+    )
     grade.add_argument("--note")
     grade.add_argument("--roster", default=str(default_roster_path()))
     grade.add_argument("--rubric", default=str(default_rubric_path()))
@@ -1503,6 +1513,7 @@ def run_benchmarked_round(
     public_task_name: str | None = None,
     allow_stage_step_down: bool = False,
     dry_run: bool = False,
+    low_quality: list[str] | None = None,
 ) -> int:
     public_task = str(public_task_name or _public_local_task_name(task_class))
     direct_grade_requested = _has_direct_grade_inputs(
@@ -1511,7 +1522,10 @@ def run_benchmarked_round(
         rank_groups=rank_groups,
         basis=basis,
     )
-    if any((rating_pool_id, rank_groups, basis)) and not direct_grade_requested:
+    if (
+        any((rating_pool_id, rank_groups, basis, low_quality))
+        and not direct_grade_requested
+    ):
         raise ValueError(
             "direct grading requires --task-id, --rating-pool-id, --rank, and --basis"
         )
@@ -1551,6 +1565,7 @@ def run_benchmarked_round(
                 rank_groups=list(rank_groups or []),
                 basis=str(basis),
                 note=note,
+                low_quality=low_quality,
                 caller_id=caller_id,
                 caller_id_source=caller_id_source,
             )
@@ -1685,6 +1700,7 @@ def run_benchmarked_round(
         rank_groups=list(rank_groups or []),
         basis=str(basis),
         note=note,
+        low_quality=low_quality,
         caller_id=caller_id,
         caller_id_source=caller_id_source,
     )
@@ -1711,6 +1727,7 @@ def _record_grade_result(
     note: str | None,
     caller_id: str | None,
     caller_id_source: str | None,
+    low_quality: list[str] | None = None,
 ) -> dict[str, object]:
     round_payload = load_round(state_dir, round_id)
     record = build_record_from_grade(
@@ -1722,6 +1739,7 @@ def _record_grade_result(
         rank_groups=rank_groups,
         basis=basis,
         shared_note=note,
+        low_quality=low_quality,
     )
     if not append_record_if_new(state_dir, record):
         result: dict[str, object] = {
@@ -1818,6 +1836,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         rank_groups=args.rank_groups,
         basis=args.basis,
         note=args.note,
+        low_quality=args.low_quality,
         public_task_name=_public_local_task_name(task_class),
         dry_run=bool(getattr(args, "dry_run", False)),
     )
@@ -2406,6 +2425,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
         rank_groups=args.rank_groups,
         basis=args.basis,
         note=args.note,
+        low_quality=args.low_quality,
         caller_id=caller_id,
         caller_id_source=caller_id_source,
     )
