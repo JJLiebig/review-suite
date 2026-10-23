@@ -13,7 +13,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import review_deslop
-from review_suite_core import orchestrator_runner
+from review_suite_core import orchestrator_runner, lens_runtime, claude_runtime, opencode_runtime
 
 _CLEAN_PROTOCOL = "Conformance: CONFORMS\nReview decision: clean"
 _FINDINGS_PROTOCOL = "Conformance: CONFORMS\nReview decision: findings"
@@ -381,7 +381,6 @@ def test_main_uses_generic_read_only_deslop_review(
 
     assert review_deslop.main() == 0
 
-    assert not hasattr(review_deslop, "run_codex_review")
     assert captured["run_codex"]["review_root"] == tmp_path
     prompt = str(captured["run_codex"]["prompt"])
     assert "base branch `origin/main`" in prompt
@@ -451,6 +450,7 @@ def test_main_stops_static_scan_when_review_launch_fails(
         ({"model": "claude::claude-opus-5-5"}, "claude::claude-opus-5-5", "medium"),
         ({"reasoning": "xhigh"}, "gpt-5.5", "xhigh"),
         ({"model": "claude::claude-opus-5-5", "reasoning": "xhigh"}, "claude::claude-opus-5-5", "xhigh"),
+        ({"model": "opencode::opencode-go/deepseek-v4.1-flash", "reasoning": "high"}, "opencode::opencode-go/deepseek-v4.1-flash", "high"),
     ],
 )
 def test_main_uses_generic_prompt_for_linear_commit_ranges(
@@ -475,31 +475,35 @@ def test_main_uses_generic_prompt_for_linear_commit_ranges(
         ),
     )
 
-    monkeypatch.setattr(
-        review_deslop,
-        "validated_linear_review_range",
-        lambda review_root, start, end, label: {
+    def validated_range(review_root, start, end, label):
+        return {
             "start": start,
             "end": end,
             "resolved_start": f"{start}-resolved",
             "resolved_end": f"{end}-resolved",
             "head": f"{end}-resolved",
-        },
-    )
+        }
+    for module in (review_deslop, claude_runtime, opencode_runtime):
+        monkeypatch.setattr(module, "validated_linear_review_range", validated_range)
+    monkeypatch.setattr(lens_runtime, "validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr(lens_runtime, "isolated_runtime_user_config_overrides", lambda: [])
+    monkeypatch.setattr(opencode_runtime, "_opencode_output_config", lambda model: {})
 
-    def fake_run_codex(**kwargs):
-        captured["run_codex"] = kwargs
+    def capture_command(**kwargs):
+        captured["launch"] = kwargs
+        for path in kwargs.get("cleanup_paths", ()):
+            path.unlink(missing_ok=True)
         return {
             "returncode": 0,
             "stdout": "",
             "stderr": "",
-            "final_message": "No findings.",
+            "final_message": _CLEAN_PROTOCOL,
             "session_id": "sess-1",
             "elapsed_seconds": 1.0,
             "timed_out": False,
         }
 
-    monkeypatch.setattr(review_deslop, "run_codex", fake_run_codex)
+    monkeypatch.setattr(lens_runtime, "_run_captured_codex_command", capture_command)
 
     def fake_emit_result(**kwargs):
         captured["emit_result"] = kwargs
@@ -509,17 +513,29 @@ def test_main_uses_generic_prompt_for_linear_commit_ranges(
     command = orchestrator_runner.deslop_command({
         "identity": {"cwd": str(tmp_path), "merge_base": "abc123", "head": "def456"},
         "model_override": override,
+        "review_brief": "# Goal\nPreserve scope.",
     })
     monkeypatch.setattr(sys, "argv", command[1:])
     monkeypatch.setattr(review_deslop, "emit_output_only", fake_emit_result)
 
     assert review_deslop.main() == 0
-    assert captured["run_codex"]["model"] == model
-    assert captured["run_codex"]["reasoning_effort"] == effort
-    assert captured["run_codex"]["service_tier"] is None
+    launched = captured["launch"]["command"]
+    if "::" in model:
+        backend, expected_model = model.split("::", 1)
+        assert Path(launched[1]).name == f"{backend}_driver.py"
+        assert launched[launched.index("--model") + 1] == expected_model
+        effort_flag = "--effort" if backend == "claude" else "--variant"
+        assert launched[launched.index(effort_flag) + 1] == effort
+        assert launched[launched.index("--base") + 1] == "abc123"
+        assert launched[launched.index("--commit-end") + 1] == "def456"
+    else:
+        assert launched[1] == "exec"
+        assert "review" not in launched
+        assert f'model="{model}"' in launched
+        assert f'model_reasoning_effort="{effort}"' in launched
 
-    prompt = str(captured["run_codex"]["prompt"])
+    prompt = str(captured["launch"]["stdin_text"])
     assert "commit range `abc123..def456`" in prompt
-    assert captured["emit_result"]["result"]["final_message"] == "No findings."
+    assert captured["emit_result"]["result"]["final_message"] == _CLEAN_PROTOCOL
     assert "=== BEGIN DIFF ===" not in prompt
     assert "diff --git" not in prompt

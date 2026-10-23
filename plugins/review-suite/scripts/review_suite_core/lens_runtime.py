@@ -660,7 +660,9 @@ def run_codex_review(
     timeout_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
 ) -> dict[str, object]:
-    launch = prepare_codex_review_launch(
+    from .review_backend import prepare_review_launch
+
+    launch = prepare_review_launch(
         tool_name=tool_name,
         model=model,
         reasoning_effort=reasoning_effort,

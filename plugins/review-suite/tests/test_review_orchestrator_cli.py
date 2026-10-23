@@ -1436,6 +1436,7 @@ def test_id_retries_legacy_uninspected_followup_without_resetting_cycle(
 
     with pytest.raises(ValueError, match="blocked review round"):
         review._apply_decision(before, "clean", state_dir=state_dir)
+    assert review._auto_decision_command(before, state_dir=state_dir) is None
     _, status = _run_review(monkeypatch, ["--id", public_id, "--show-status", "--state-dir", str(state_dir)])
     assert "retry" in str(status["Action"]["note"])
     assert _cycle_payload(state_dir, public_id) == before
