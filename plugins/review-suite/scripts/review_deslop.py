@@ -37,6 +37,8 @@ from review_suite_core import (
     write_text,
 )
 from review_suite_local import ensure_clean_git_worktree
+from review_suite_core.config import override_model_config
+from review_suite_core.model_labels import SUPPORTED_REASONING_EFFORTS
 
 STATIC_CLEANUP_LIMIT = 20
 STATIC_CLEANUP_MIN_CONFIDENCE = 90
@@ -84,6 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--commit", nargs="+")
     parser.add_argument("--focus")
     parser.add_argument("--review-brief", help=argparse.SUPPRESS)
+    parser.add_argument("--model", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--reasoning", choices=sorted(SUPPORTED_REASONING_EFFORTS), help=argparse.SUPPRESS
+    )
     parser.add_argument(
         "--conformance-only", action="store_true", help=argparse.SUPPRESS
     )
@@ -539,7 +545,10 @@ def main() -> int:
         if commit and args.base is not None:
             raise ValueError("use either --base or --commit")
         review_root = resolve_repo_root(args.cd)
-        model_config = lens_model_config("review-deslop")
+        model_config = override_model_config(
+            lens_model_config("review-deslop"),
+            {"model": args.model, "reasoning": args.reasoning},
+        )
         if commit and commit_end:
             validated_linear_review_range(
                 review_root,

@@ -27,7 +27,6 @@ from review_suite_core import (
     current_branch,
     current_head,
     cwd_path_from_normalized,
-    default_opencode_reasoning_effort,
     EFFECTIVE_BASE_METADATA_KEYS,
     effective_base_ref,
     emit_error,
@@ -43,10 +42,14 @@ from review_suite_core import (
     resolve_ref,
     resolve_repo_root,
     SUPPORTED_REASONING_EFFORTS,
-    validate_opencode_reasoning_effort,
     write_text,
 )
-from review_suite_core.config import default_state_dir, load_config
+from review_suite_core.config import (
+    LensModelConfig,
+    default_state_dir,
+    load_config,
+    override_model_config,
+)
 from review_suite_core.orchestrator_profiles import (
     MODE_STRICTNESS_ORDER,
     RESTART_TARGET_MODES,
@@ -119,6 +122,7 @@ from review_suite_local import (
     grade_rank_placeholders,
     latest_rerolled_round_payload,
     load_round,
+    payload_has_blocked_runs,
     rounds_dir,
     print_reviewer_output_section,
     round_has_live_reviewer_process,
@@ -419,7 +423,11 @@ def _round_blocked_slots(payload: dict[str, Any]) -> list[str]:
     for run in list(payload.get("runs") or []):
         if not isinstance(run, dict):
             continue
-        if bool(run.get("blocked")) or bool(run.get("grade_blocked")):
+        if (
+            bool(run.get("blocked"))
+            or bool(run.get("grade_blocked"))
+            or (run.get("reviewer_output") and payload_has_blocked_runs({"runs": [run]}))
+        ):
             slot = str(run.get("slot") or "").strip()
             if slot:
                 slots.append(slot)
@@ -623,6 +631,11 @@ def _blocked_decision_recovery_state(
         or _round_blocked_slots(payload)
     ):
         return state
+    if round_record.get("lane") == FOLLOWUP_LANE:
+        active = dict(state.get("active_findings") or {})
+        if active.get("followup_round_id") != round_id:
+            raise ValueError("blocked follow-up does not match active findings")
+        return mark_fix_detected(state, head=str(active["fix_head"]))
     profile_step = dict(round_record.get("profile_step") or {})
     step_index = profile_step.get("index")
     if step_index is None:
@@ -672,6 +685,11 @@ def _blocked_decision_action(
     if recovery_state is state:
         return None
     pending = dict(recovery_state.get("pending_action") or {})
+    if str(pending.get("kind") or "") == "run-followup":
+        return {
+            "cmd": _review_command(public_id, state_dir=state_dir),
+            "note": "Follow-up blocked before inspection; rerun this review id to retry it.",
+        }
     if str(pending.get("kind") or "") == "run-review-step":
         step = str(pending.get("step") or "review").strip() or "review"
         return {
@@ -1537,7 +1555,9 @@ def _apply_decision_to_ready_state(
             "grade the arena round before recording a clean/findings decision"
         )
     round_payload = _round_by_id(state, round_id)
-    blocked_slots = _round_blocked_slots(round_payload)
+    blocked_slots = _round_blocked_slots(
+        _load_output_round_payload(state_dir, round_payload)
+    ) or _round_blocked_slots(round_payload)
     if bool(round_payload.get("review_blocked")) or blocked_slots:
         slot_text = (
             f" Blocked slots: {', '.join(blocked_slots)}." if blocked_slots else ""
@@ -1603,7 +1623,11 @@ def _auto_record_pending_decision_fix(
 ) -> dict[str, Any]:
     round_id, lane = _pending_decision(state)
     round_payload = _round_by_id(state, round_id)
-    if bool(round_payload.get("review_blocked")) or _round_blocked_slots(round_payload):
+    if (
+        bool(round_payload.get("review_blocked"))
+        or _round_blocked_slots(round_payload)
+        or _round_blocked_slots(_load_output_round_payload(state_dir, round_payload))
+    ):
         return state
     reviewed_head = str(round_payload.get("reviewed_head") or "").strip()
     if not reviewed_head or reviewed_head == current_head_value:
@@ -2235,22 +2259,10 @@ def _config_with_model_override(
         existing_model, existing_effort, existing_tier = parse_model_label(
             defaults.get(ref), field=ref
         )
-        chosen_model = model or existing_model
-        effort = reasoning or existing_effort
-        if chosen_model.startswith(OPENCODE_MODEL_PREFIX):
-            opencode_name = chosen_model[len(OPENCODE_MODEL_PREFIX) :]
-            if reasoning:
-                effort = validate_opencode_reasoning_effort(opencode_name, reasoning)
-            else:
-                try:
-                    effort = validate_opencode_reasoning_effort(opencode_name, effort)
-                except ValueError:
-                    effort = default_opencode_reasoning_effort(opencode_name)
-        tier = (
-            None
-            if chosen_model.startswith((OPENCODE_MODEL_PREFIX, CLAUDE_MODEL_PREFIX))
-            else existing_tier
+        chosen = override_model_config(
+            LensModelConfig(existing_model, existing_effort, existing_tier), override
         )
+        chosen_model, effort, tier = chosen.model, chosen.reasoning_effort, chosen.service_tier
         defaults[ref] = "-".join([chosen_model, effort] + ([tier] if tier else []))
         section = merged.get(group)
         if isinstance(section, dict):
@@ -2697,7 +2709,11 @@ def _advance_without_decision(
     for _ in range(6):
         if deslop_is_ready(ready_state) or _deslop_is_open(ready_state):
             resumed = _resume_progress(ready_state, state_dir=state_dir)
-            resumed = _blocked_decision_recovery_state(resumed, state_dir=state_dir)
+            recovery = _blocked_decision_recovery_state(resumed, state_dir=state_dir)
+            if recovery != resumed and recovery.get("stage") == STAGE_FOLLOWUP_PENDING:
+                # Persist the retry before the existing follow-up ownership check.
+                return recovery
+            resumed = recovery
         else:
             resumed = ready_state
         decided = (

@@ -1388,6 +1388,79 @@ def test_decision_rejects_blocked_review_round(tmp_path: Path) -> None:
         review._apply_decision(state, "clean", state_dir=tmp_path / "state")
 
 
+def test_id_retries_legacy_uninspected_followup_without_resetting_cycle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "initial-round")
+    followup_calls = _stub_followup(monkeypatch, "retry-round")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.py", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/recovery")
+    _commit_file(repo, "app.py", "feature\n", "feature")
+    _, created = _run_review(monkeypatch, [
+        "--mode", "deep", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir),
+        "--model", "claude::claude-opus-5-5", "--reasoning", "xhigh",
+    ])
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+    fix_head = _commit_file(repo, "app.py", "fixed\n", "fix")
+    state = review.mark_fix_detected(_cycle_payload(state_dir, public_id), head=fix_head)
+    state["identity"]["head"] = fix_head
+    state = mark_followup_review_pending(
+        state, round_id="blocked-followup", reviewed_head=fix_head, source_round_id="initial-round",
+    )
+    round_dir = state_dir / "orchestrator" / "review-rounds"
+    state["rounds"][-1]["round_state_dir"] = str(round_dir)
+    state["rounds"][-1]["review_blocked"] = False
+    output = (
+        "Review blocked: local git commands failed before execution with CreateDesktopW error 5. "
+        "No findings could be verified; this verdict indicates correctness could not be established, "
+        "not a demonstrated defect. Fix resolution and CI status remain unverified."
+    )
+    legacy_round = {
+        "round_id": "blocked-followup", "status": "completed", "runs": [{
+            "slot": "alpha", "review_status": "completed", "grade_blocked": False,
+            "reviewer_output": output,
+        }],
+    }
+    round_path = round_dir / "rounds" / "blocked-followup.json"
+    round_path.parent.mkdir(parents=True, exist_ok=True)
+    round_path.write_text(json.dumps(legacy_round), encoding="utf-8")
+    original_bytes = round_path.read_bytes()
+    _write_cycle_payload(state_dir, public_id, state)
+    before = _cycle_payload(state_dir, public_id)
+
+    with pytest.raises(ValueError, match="blocked review round"):
+        review._apply_decision(before, "clean", state_dir=state_dir)
+    _, status = _run_review(monkeypatch, ["--id", public_id, "--show-status", "--state-dir", str(state_dir)])
+    assert "retry" in str(status["Action"]["note"])
+    assert _cycle_payload(state_dir, public_id) == before
+    code, resumed = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert code == 0
+    assert resumed["review"] == public_id
+    assert _cycle_payload(state_dir, public_id)["stage"] == "followup-pending"
+    assert followup_calls == []
+    code, resumed = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert code == 0
+    after = _cycle_payload(state_dir, public_id)
+    assert after["rounds"][:-1] == before["rounds"]
+    assert after["decisions"] == before["decisions"]
+    assert after["convergence"] == before["convergence"]
+    assert after["review_progress"] == before["review_progress"]
+    assert after["active_findings"]["round_id"] == "initial-round"
+    assert after["pending_action"]["round_id"] == "retry-round"
+    assert after["validation"]["review_green"] == "unknown"
+    assert round_path.read_bytes() == original_bytes
+    assert len(review_calls) == 1
+    assert len(followup_calls) == 1
+    assert followup_calls[0]["model"] == "claude::claude-opus-5-5"
+    assert followup_calls[0]["reasoning_effort"] == "xhigh"
+
+
 def test_create_resume_and_id_reprint_use_one_pending_action(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

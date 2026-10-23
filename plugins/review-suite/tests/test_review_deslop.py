@@ -13,6 +13,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import review_deslop
+from review_suite_core import orchestrator_runner
 
 _CLEAN_PROTOCOL = "Conformance: CONFORMS\nReview decision: clean"
 _FINDINGS_PROTOCOL = "Conformance: CONFORMS\nReview decision: findings"
@@ -443,8 +444,18 @@ def test_main_stops_static_scan_when_review_launch_fails(
     assert stopped == [scan]
 
 
+@pytest.mark.parametrize(
+    ("override", "model", "effort"),
+    [
+        ({}, "gpt-5.5", "medium"),
+        ({"model": "claude::claude-opus-5-5"}, "claude::claude-opus-5-5", "medium"),
+        ({"reasoning": "xhigh"}, "gpt-5.5", "xhigh"),
+        ({"model": "claude::claude-opus-5-5", "reasoning": "xhigh"}, "claude::claude-opus-5-5", "xhigh"),
+    ],
+)
 def test_main_uses_generic_prompt_for_linear_commit_ranges(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    override: dict[str, str], model: str, effort: str,
 ) -> None:
     captured: dict[str, object] = {}
 
@@ -495,11 +506,17 @@ def test_main_uses_generic_prompt_for_linear_commit_ranges(
         return 0
 
     monkeypatch.setattr(review_deslop, "emit_result", fake_emit_result)
-    monkeypatch.setattr(
-        sys, "argv", ["review_deslop.py", "--commit", "abc123", "def456"]
-    )
+    command = orchestrator_runner.deslop_command({
+        "identity": {"cwd": str(tmp_path), "merge_base": "abc123", "head": "def456"},
+        "model_override": override,
+    })
+    monkeypatch.setattr(sys, "argv", command[1:])
+    monkeypatch.setattr(review_deslop, "emit_output_only", fake_emit_result)
 
     assert review_deslop.main() == 0
+    assert captured["run_codex"]["model"] == model
+    assert captured["run_codex"]["reasoning_effort"] == effort
+    assert captured["run_codex"]["service_tier"] is None
 
     prompt = str(captured["run_codex"]["prompt"])
     assert "commit range `abc123..def456`" in prompt

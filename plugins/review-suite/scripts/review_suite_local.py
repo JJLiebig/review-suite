@@ -3225,6 +3225,12 @@ def _review_interrupted_detected(*, stderr_text: str, reviewer_output: str) -> b
 def _tooling_failure_detected(*, stderr_text: str, reviewer_output: str) -> bool:
     output_haystack = (reviewer_output or "").lower()
     stderr_haystack = (stderr_text or "").lower()
+    if (
+        output_haystack.lstrip().startswith("review blocked:")
+        and "createdesktopw error 5" in output_haystack
+        and "no findings could be verified" in output_haystack
+    ):
+        return True
     output_markers = (
         "i could not inspect the changes because shell access failed",
         "without a readable diff",

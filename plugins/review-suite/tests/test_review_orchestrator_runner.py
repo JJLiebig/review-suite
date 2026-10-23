@@ -1432,8 +1432,17 @@ def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
         assert launches == ["followup-round", "followup-round"]
 
 
+@pytest.mark.parametrize(
+    ("override", "model", "effort"),
+    [
+        ({}, "gpt-6.1-sol", "medium"),
+        ({"model": "claude::claude-opus-5-5"}, "claude::claude-opus-5-5", "medium"),
+        ({"reasoning": "xhigh"}, "gpt-6.1-sol", "xhigh"),
+        ({"model": "claude::claude-opus-5-5", "reasoning": "xhigh"}, "claude::claude-opus-5-5", "xhigh"),
+    ],
+)
 def test_runner_runs_real_followup_once_from_followup_pending(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, override: dict[str, str], model: str, effort: str
 ) -> None:
     followup_calls = _stub_followup(monkeypatch)
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
@@ -1481,6 +1490,12 @@ def test_runner_runs_real_followup_once_from_followup_pending(
     fixed["identity"]["base_upstream"] = "origin/main"
     fixed["identity"]["base_ref_stale"] = True
     fixed["review_brief"] = "# Goal\n\nStay scoped."
+    fixed["model_override"] = override
+    (tmp_path / "state").mkdir(exist_ok=True)
+    (tmp_path / "state" / "settings.toml").write_text(
+        '[jobs.followup]\nmodel = "gpt-6.1-sol"\nreasoning = "medium"\nservice_tier = "fast"\n',
+        encoding="utf-8",
+    )
     save_cycle(tmp_path / "state", fixed)
 
     result = orchestrator_runner.run_one_expensive_step(
@@ -1505,6 +1520,9 @@ def test_runner_runs_real_followup_once_from_followup_pending(
         "rollout://followup-round-1/alpha"
     ]
     assert len(followup_calls) == 1
+    assert followup_calls[0]["model"] == model
+    assert followup_calls[0]["reasoning_effort"] == effort
+    assert followup_calls[0]["service_tier"] == (None if model.startswith("claude::") else "fast")
     assert (
         followup_calls[0]["review_scope"]["source_round_id"] == "phase_review-round-1"
     )
