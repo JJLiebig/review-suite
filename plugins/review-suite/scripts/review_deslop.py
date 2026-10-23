@@ -33,10 +33,14 @@ from review_suite_core import (
     resolve_repo_root,
     resolve_ref,
     run_codex,
+    run_codex_review,
     validated_linear_review_range,
     write_text,
 )
 from review_suite_local import ensure_clean_git_worktree
+from review_suite_core.config import override_model_config
+from review_suite_core.model_labels import SUPPORTED_REASONING_EFFORTS
+from review_suite_core.review_backend import split_review_backend_model
 
 STATIC_CLEANUP_LIMIT = 20
 STATIC_CLEANUP_MIN_CONFIDENCE = 90
@@ -84,6 +88,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--commit", nargs="+")
     parser.add_argument("--focus")
     parser.add_argument("--review-brief", help=argparse.SUPPRESS)
+    parser.add_argument("--model", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--reasoning", choices=sorted(SUPPORTED_REASONING_EFFORTS), help=argparse.SUPPRESS
+    )
     parser.add_argument(
         "--conformance-only", action="store_true", help=argparse.SUPPRESS
     )
@@ -539,7 +547,10 @@ def main() -> int:
         if commit and args.base is not None:
             raise ValueError("use either --base or --commit")
         review_root = resolve_repo_root(args.cd)
-        model_config = lens_model_config("review-deslop")
+        model_config = override_model_config(
+            lens_model_config("review-deslop"),
+            {"model": args.model, "reasoning": args.reasoning},
+        )
         if commit and commit_end:
             validated_linear_review_range(
                 review_root,
@@ -573,7 +584,17 @@ def main() -> int:
             conformance_only=bool(args.conformance_only),
         )
         try:
-            result = run_codex(
+            runner = run_codex
+            review_scope = {}
+            if split_review_backend_model(model_config.model)[0] != "codex":
+                runner = run_codex_review
+                review_scope = {
+                    "title": "review-deslop",
+                    "base": commit if commit_end else prompt_base,
+                    "commit": None if commit_end else commit,
+                    "commit_end": commit_end,
+                }
+            result = runner(
                 tool_name="review-deslop",
                 prompt=prompt,
                 model=model_config.model,
@@ -583,6 +604,7 @@ def main() -> int:
                 progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
                 timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
                 allow_unsafe_windows_wsl_fallback=bool(args.wsl),
+                **review_scope,
             )
             result = _with_effective_returncode(result)
             if static_scan is not None:

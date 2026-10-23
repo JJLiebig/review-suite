@@ -14,6 +14,11 @@ from .model_labels import (
     SUPPORTED_SERVICE_TIERS,
     supported_reasoning_efforts_text,
 )
+from .opencode_runtime import (
+    default_opencode_reasoning_effort,
+    validate_opencode_reasoning_effort,
+)
+from .review_backend import split_review_backend_model
 
 
 DEFAULT_CONFIG_FILENAME = "default_settings.toml"
@@ -29,6 +34,26 @@ class LensModelConfig:
     model: str
     reasoning_effort: str
     service_tier: str | None = None
+
+
+def override_model_config(
+    config: LensModelConfig, override: dict[str, str]
+) -> LensModelConfig:
+    model = str(override.get("model") or config.model).strip()
+    backend, backend_model = split_review_backend_model(model)
+    reasoning = str(override.get("reasoning") or "").strip()
+    effort = reasoning or config.reasoning_effort
+    if backend == "opencode":
+        if reasoning:
+            effort = validate_opencode_reasoning_effort(backend_model, reasoning)
+        else:
+            try:
+                effort = validate_opencode_reasoning_effort(backend_model, effort)
+            except ValueError:
+                effort = default_opencode_reasoning_effort(backend_model)
+    return LensModelConfig(
+        model, effort, config.service_tier if backend == "codex" else None
+    )
 
 
 def plugin_root() -> Path:

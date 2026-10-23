@@ -23,7 +23,7 @@ from review_suite_local import (
 )
 
 from .axi_output import format_command, write_text
-from .config import lens_model_config
+from .config import lens_model_config, override_model_config
 from .lens_runtime import (
     DEFAULT_PROGRESS_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -116,6 +116,9 @@ def deslop_command(state: dict[str, Any]) -> list[str]:
     ]
     if brief := str(state.get("review_brief") or "").strip():
         command.append(f"--review-brief={brief}")
+    for key, value in dict(state.get("model_override") or {}).items():
+        if key in {"model", "reasoning"}:
+            command.extend([f"--{key}", value])
     if _allow_unsafe_windows_wsl_fallback(state):
         command.append("--wsl")
     return command
@@ -1318,7 +1321,10 @@ def _run_followup_review_once(
     )
     if not prompt.strip():
         raise ValueError("follow-up review prompt must not be empty")
-    model_config = lens_model_config(FOLLOWUP_REVIEW_LANE, state_dir=state_dir)
+    model_config = override_model_config(
+        lens_model_config(FOLLOWUP_REVIEW_LANE, state_dir=state_dir),
+        dict(state.get("model_override") or {}),
+    )
 
     def on_round_started(round_info: dict[str, object]) -> None:
         with orchestrator_store_lock(

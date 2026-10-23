@@ -2,6 +2,8 @@
 
 Use the installed launcher and existing review id. These commands preserve the existing review and validation gates.
 
+- If a follow-up reports that `CreateDesktopW error 5` prevented inspection, use the emitted `review.py --id <id>` retry after repairing the reviewer transport. This preserves the failed output and accepted findings, uses the cycle's model/reasoning override, and keeps cleanup, signoff and validation gates pending. Do not classify an uninspected attempt as clean.
+
 - To dismiss a materially drifted closure, use `review.py --id <id> --deslop-done --reason "<why the findings are dismissed>"`. This records the caller's reason without changing the reviewer verdict or findings. It requires a completed closure on the exact clean branch, HEAD, and merge-base; all other review and validation gates remain in force.
 - To replace an existing ladder with stricter review, use `review.py --id <id> --restart-mode deep --reason "<why>"` while the original repo/base/branch/head/merge-base still match and the worktree is clean; plain `--mode deep --cd <repo-root>` is not a restart.
 - To replace mistaken literal text in a frozen brief before accepting any findings, use `review.py --id <id> --restart-brief (Get-Content -Raw "<brief.md>") --reason "<why the old brief is invalid>"`. This creates a fresh same-mode successor on the same clean branch, unchanged merge-base, and current descendant head. The original cycle and findings history remain stored; cleanup, review, and validation do not carry over.
