@@ -105,6 +105,7 @@ from review_suite_core.orchestrator_state import (
     abort_cycle,
     convergence_summary,
     correct_inferred_followup_decision,
+    reject_automatic_findings,
     record_contract_conflict,
     record_contract_replan,
     record_convergence_decision,
@@ -178,7 +179,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--convergence-decision",
         choices=tuple(sorted(decision.lower() for decision in CONVERGENCE_DECISIONS)),
     )
-    parser.add_argument("--reason", help="Reason for restart or closure dismissal")
+    parser.add_argument(
+        "--reason",
+        help="Reason for restart, closure dismissal, or decision correction/disagreement",
+    )
     parser.add_argument("--cd")
     parser.add_argument(
         "--no-arena",
@@ -1779,7 +1783,86 @@ def _auto_record_structured_decision(
     command = _auto_decision_command(state, state_dir=state_dir)
     if command is None:
         return state
-    return _apply_decision_to_ready_state(state, command, state_dir=state_dir)
+    next_state = _apply_decision_to_ready_state(state, command, state_dir=state_dir)
+    next_state["decisions"][-1]["source"] = "automatic"
+    return next_state
+
+
+def _record_caller_disagreement(
+    state: dict[str, Any], *, state_dir: Path, reason: str
+) -> dict[str, Any]:
+    _, _, _, head, _ = _current_restart_identity(state)
+    dispositions = state.get("finding_dispositions") or []
+    round_record = (state.get("rounds") or [{}])[-1]
+    if (
+        dispositions
+        and not state.get("active_findings")
+        and dispositions[-1]["reviewed_head"] == head
+        and dispositions[-1]["round_id"] == round_record.get("round_id")
+        and state.get("stage") in {STAGE_CREATED, STAGE_REVIEW_GREEN}
+    ):
+        return state
+    active = dict(state.get("active_findings") or {})
+    payload = _load_output_round_payload(state_dir, round_record)
+    accepted_heads = dict(state.get("convergence") or {}).get(
+        "accepted_findings_heads"
+    ) or [{}]
+    if (
+        state.get("schema_version") != 1
+        or active.get("round_id") != round_record.get("round_id")
+        or active.get("reviewed_head") != head
+        or accepted_heads[-1].get("tree") != _reviewed_tree(state, head)
+        or dict(payload.get("review_scope") or {}).get("reviewed_head") != head
+        or str(payload.get("status") or "") != "completed"
+        or _round_terminal_command(payload) != DECISION_FINDINGS
+        or round_record.get("review_blocked")
+        or payload.get("review_blocked")
+        or _round_blocked_slots(round_record)
+        or _round_blocked_slots(payload)
+        or _pending_grade_payload(state, state_dir=state_dir) is not None
+        or bool(round_record.get("grading_required"))
+        and bool(round_record.get("arena_round") or payload.get("arena_round"))
+        and round_needs_caller_grade(payload)
+        or not payload.get("runs")
+        or any(
+            str(run.get("review_status") or run.get("status") or "") != "completed"
+            or not str(run.get("reviewer_output") or "").strip()
+            for run in payload.get("runs") or []
+        )
+    ):
+        raise ValueError(
+            "caller disagreement requires the latest completed structured findings review at the exact clean head"
+        )
+    source_round_id = str(
+        round_record.get("source_round_id") or active.get("round_id") or ""
+    )
+    for record in state.get("rounds") or []:
+        if round_has_live_reviewer_process(
+            _load_output_round_payload(state_dir, record)
+        ):
+            raise ValueError("cannot reject findings while a reviewer is running")
+    for candidate_dir in _round_state_dir_candidates(state_dir, round_record):
+        for path in rounds_dir(candidate_dir).glob("*.json"):
+            candidate = load_round(candidate_dir, path.stem)
+            if (
+                dict(candidate.get("review_scope") or {}).get("source_round_id")
+                != source_round_id
+            ):
+                continue
+            if round_has_live_reviewer_process(candidate):
+                raise ValueError(
+                    "cannot reject findings while a follow-up reviewer is running"
+                )
+            if candidate.get("status") in {"completed", "running"} and not _round_by_id(
+                state, path.stem
+            ):
+                raise ValueError(
+                    "cannot reject findings before inspecting the unconsumed follow-up review"
+                )
+    digest = sha256(
+        "\n\n".join(str(run["reviewer_output"]) for run in payload["runs"]).encode()
+    ).hexdigest()
+    return reject_automatic_findings(state, reason=reason, verdict_digest=digest)
 
 
 def _resume_progress(
@@ -3634,7 +3717,15 @@ def main() -> int:
                 return 0
             if args.decision:
                 if args.reason:
-                    state = _correct_inferred_clean_decision(
+                    latest_round = (state.get("rounds") or [{}])[-1]
+                    reasoned_clean = (
+                        _correct_inferred_clean_decision
+                        if _stored_clean_review(
+                            _load_output_round_payload(state_dir, latest_round)
+                        )
+                        else _record_caller_disagreement
+                    )
+                    state = reasoned_clean(
                         state, state_dir=state_dir, reason=args.reason
                     )
                     if has_validation_status:

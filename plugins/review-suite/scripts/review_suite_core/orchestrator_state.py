@@ -615,7 +615,10 @@ def convergence_summary(state: dict[str, Any]) -> dict[str, Any]:
 def _effective_findings_heads(state: dict[str, Any]) -> list[dict[str, Any]]:
     corrected = {
         item["accepted_findings_index"]
-        for item in state.get("decision_corrections", [])
+        for item in (
+            state.get("decision_corrections", [])
+            + state.get("finding_dispositions", [])
+        )
     }
     return [
         item
@@ -1941,6 +1944,87 @@ def correct_inferred_followup_decision(
     next_state["validation"].update(
         dict.fromkeys(("focused", "full_suite", "ci"), "unknown")
     )
+    return next_state
+
+
+def reject_automatic_findings(
+    state: dict[str, Any], *, reason: str, verdict_digest: str
+) -> dict[str, Any]:
+    """Record caller disagreement without rewriting the automatic decision."""
+    active = _active_findings(state)
+    rounds = state.get("rounds") or []
+    decisions = state.get("decisions") or []
+    convergence = dict(state.get("convergence") or {})
+    heads = convergence.get("accepted_findings_heads") or []
+    round_id, head = active["round_id"], active["reviewed_head"]
+    if not (
+        (
+            (state.get("stage"), convergence.get("status"))
+            == (STAGE_FIX_PENDING, "ACTIVE")
+            or (
+                state.get("stage"),
+                convergence.get("status"),
+                convergence.get("reason"),
+            )
+            == ("decision-required", "DECISION_REQUIRED", "budget_exhausted")
+        )
+        and not convergence.get("conflict")
+        and not convergence.get("continue_pending")
+        and rounds
+        and decisions
+        and heads
+        and rounds[-1].get("round_id") == decisions[-1].get("round_id") == round_id
+        and rounds[-1].get("lane") == decisions[-1].get("lane") == active.get("lane")
+        and decisions[-1].get("command") == DECISION_FINDINGS
+        and decisions[-1].get("source") in {None, "automatic"}
+        and decisions[-1].get("reviewed_head") == heads[-1].get("head") == head
+        and head == _state_head(state)
+        and not any(
+            item.get("head") == head or item.get("tree") == heads[-1].get("tree")
+            for item in heads[:-1]
+        )
+        and not any(
+            item.get("reviewed_head") == head
+            and item.get("command") == DECISION_FINDINGS
+            for item in decisions[:-1]
+        )
+    ):
+        raise ValueError(
+            "caller disagreement requires the latest unconsumed automatic findings decision"
+        )
+    next_state = _copy_state(state)
+    next_state.setdefault("finding_dispositions", []).append(
+        {
+            "round_id": round_id,
+            "reviewed_head": head,
+            "command": DECISION_CLEAN,
+            "source": "caller",
+            "reason": _required_text(reason, field="caller disagreement reason"),
+            "verdict_digest": _required_text(
+                verdict_digest, field="stored verdict digest"
+            ),
+            "accepted_findings_index": len(heads) - 1,
+            "original_decision": deepcopy(decisions[-1]),
+            "original_convergence": convergence_summary(state),
+        }
+    )
+    next_state["convergence"].update(
+        status="ACTIVE", decision=None, reason=None, conflict=None
+    )
+    # Reuse clean progression, then retain the original review and decision audit.
+    next_state["decisions"].pop()
+    if active["lane"] == "review-followup":
+        next_state["active_findings"]["round_id"] = active["previous_round_id"]
+        next_state = record_followup_clean(
+            next_state, round_id=round_id, reviewed_head=head
+        )
+    else:
+        next_state["active_findings"] = None
+        next_state = record_clean_decision(
+            next_state, round_id=round_id, lane=active["lane"], reviewed_head=head
+        )
+    next_state["rounds"] = deepcopy(rounds)
+    next_state["decisions"] = deepcopy(decisions)
     return next_state
 
 

@@ -2367,6 +2367,326 @@ def test_clean_correction_rejects_unproven_or_changed_review(
     assert _cycle_payload(state_dir, before["public_id"]) == before
 
 
+def _automatic_findings_cycle(
+    tmp_path: Path,
+    *,
+    prior_count: int = 0,
+    final_step: bool = False,
+    followup: bool = False,
+) -> tuple[Path, Path, dict, dict]:
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    _init_repo(repo)
+    base = _commit_file(repo, "app.py", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/disagreement")
+    head = _commit_file(repo, "app.py", "feature\n", "feature")
+    state = review.create_cycle(
+        cwd=repo,
+        base="main",
+        branch="feature/disagreement",
+        head=head,
+        merge_base=base,
+        requested_mode="deep",
+        effective_mode="deep",
+        selection="auto",
+        effective_selection="stable",
+        review_brief="Frozen contract",
+    )
+    for index in range(prior_count):
+        state = review.record_findings_decision(
+            state,
+            round_id=f"prior-{index}",
+            lane="review_t1",
+            reviewed_head=head,
+            reviewed_tree=_git(repo, "rev-parse", f"{head}^{{tree}}"),
+        )
+        state["decisions"][-1]["source"] = "caller"
+        if index == 2:
+            state = review.record_convergence_decision(state, decision="CONTINUE")
+        head = _commit_file(repo, "app.py", f"fix {index}\n", "fix")
+        state["identity"]["head"] = head
+        state = review.record_followup_clean(
+            state, round_id=f"prior-clean-{index}", reviewed_head=head
+        )
+    state["review_plan"] = {
+        "steps": [
+            {"kind": "review", "name": f"signoff-{i}", "lane": "review_t1"}
+            for i in range(1 if final_step else 2)
+        ]
+    }
+    state = mark_review_step_pending(
+        state,
+        round_id="automatic",
+        lane="review_t1",
+        step_index=0,
+        step_name="signoff-0",
+        reviewed_head=head,
+    )
+    if followup:
+        state = review.record_findings_decision(
+            state,
+            round_id="automatic",
+            lane="review_t1",
+            reviewed_head=head,
+            reviewed_tree=_git(repo, "rev-parse", f"{head}^{{tree}}"),
+        )
+        state["decisions"][-1]["source"] = "caller"
+        head = _commit_file(repo, "app.py", "followup fix\n", "fix")
+        state["identity"]["head"] = head
+        state = review.mark_fix_detected(state, head=head)
+        state = mark_followup_review_pending(
+            state,
+            round_id="automatic-followup",
+            reviewed_head=head,
+            source_round_id="automatic",
+        )
+    # A prior clean signoff at this head must not be mistaken for accepted findings.
+    state["decisions"].append(
+        {
+            "round_id": "precision-clean",
+            "lane": "review_t1",
+            "command": "clean",
+            "reviewed_head": head,
+        }
+    )
+    round_id = "automatic-followup" if followup else "automatic"
+    payload = {
+        "round_id": round_id,
+        "status": "completed",
+        "review_scope": {"reviewed_head": head},
+        "runs": [
+            {
+                "review_status": "completed",
+                "reviewer_output": "[P2] Assumes a nonexistent product rule.",
+                "terminal_command": "findings",
+            },
+            {
+                "review_status": "completed",
+                "reviewer_output": "No findings.",
+                "terminal_command": "clean",
+            },
+        ],
+    }
+    if followup:
+        payload["review_scope"]["source_round_id"] = "automatic"
+    write_round(state_dir / "orchestrator" / "review-rounds", payload)
+    state = review._auto_record_structured_decision(state, state_dir=state_dir)
+    state["deslop"] = {"status": "closed", "tracked": False, "reviewed_head": head}
+    state["validation"].update(focused="passed", full_suite="pending", ci="pending")
+    state = review.save_cycle(state_dir, state)
+    return repo, state_dir, state, payload
+
+
+@pytest.mark.parametrize(
+    "prior_count,final_step,legacy,followup",
+    [
+        (0, False, False, False),
+        (2, False, True, False),
+        (3, True, True, False),
+        (0, True, False, True),
+    ],
+)
+def test_reasoned_caller_disagreement_preserves_audit_budget_and_remaining_gates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    prior_count: int,
+    final_step: bool,
+    legacy: bool,
+    followup: bool,
+) -> None:
+    _, state_dir, before, payload = _automatic_findings_cycle(
+        tmp_path, prior_count=prior_count, final_step=final_step, followup=followup
+    )
+    assert before["decisions"][-1]["source"] == "automatic"
+    if legacy:
+        del before["decisions"][-1]["source"]
+        before = review.save_cycle(state_dir, before)
+    output_path = (
+        review.rounds_dir(state_dir / "orchestrator" / "review-rounds")
+        / f"{payload['round_id']}.json"
+    )
+    original_output = output_path.read_bytes()
+    args = [
+        "--id",
+        before["public_id"],
+        "--decision",
+        "clean",
+        "--reason",
+        "Caller rejects automatic finding: the cited product rule does not exist",
+        "--state-dir",
+        str(state_dir),
+    ]
+    code, result = _run_review(monkeypatch, args)
+    assert code == 0
+    saved = _cycle_payload(state_dir, before["public_id"])
+    for key in (
+        "rounds",
+        "decisions",
+        "review_brief",
+        "deslop",
+        "github_review",
+        "identity",
+    ):
+        assert saved.get(key) == before.get(key)
+    assert (
+        saved["convergence"]["accepted_findings_heads"]
+        == before["convergence"]["accepted_findings_heads"]
+    )
+    assert saved["convergence"]["decisions"] == before["convergence"]["decisions"]
+    assert (
+        saved["convergence"]["continue_used"] == before["convergence"]["continue_used"]
+    )
+    assert review.convergence_summary(saved)[
+        "accepted_findings_heads"
+    ] == prior_count + int(followup)
+    assert saved["active_findings"] is None
+    assert saved["stage"] == ("review-green" if final_step else "created")
+    assert saved["review_progress"]["next_step_index"] == 1
+    assert saved["validation"] == before["validation"] | {
+        "review_green": "passed" if final_step else "unknown"
+    }
+    disposition = saved["finding_dispositions"][0]
+    assert disposition["reason"] == args[5]
+    assert disposition["original_decision"] == before["decisions"][-1]
+    assert disposition["reviewed_head"] == before["identity"]["head"]
+    assert len(disposition["verdict_digest"]) == 64
+    assert output_path.read_bytes() == original_output
+    assert result["done"] is False
+    assert _run_review(monkeypatch, args)[0] == 0
+    assert _cycle_payload(state_dir, before["public_id"]) == saved
+    if final_step:
+        _run_review(
+            monkeypatch,
+            ["--id", before["public_id"], "--full-suite", "passed", "--ci", "passed"],
+        )
+        _, handed_off = _run_review(
+            monkeypatch, ["--id", before["public_id"], "--github-result", "clean"]
+        )
+        assert handed_off["done"] is True
+    if prior_count == 3:
+        with pytest.raises(ValueError, match="CONTINUE is available once"):
+            saved["convergence"]["status"] = "DECISION_REQUIRED"
+            review.record_convergence_decision(saved, decision="CONTINUE")
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "head",
+        "dirty",
+        "branch",
+        "base",
+        "caller",
+        "inference",
+        "older-schema",
+        "later-round",
+        "earlier-findings",
+        "same-tree",
+        "tree",
+        "incomplete",
+        "missing-output",
+        "unstructured",
+        "blocked",
+        "running",
+        "running-followup",
+        "later-followup",
+        "ungraded",
+        "contract",
+        "continue",
+        "replan",
+        "reslice",
+        "no-reason",
+    ],
+)
+def test_caller_disagreement_rejects_stale_uninspected_or_consumed_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    repo, state_dir, before, payload = _automatic_findings_cycle(
+        tmp_path, prior_count=0 if failure == "contract" else 2
+    )
+    if failure == "head":
+        _commit_file(repo, "app.py", "later\n", "later work")
+    elif failure == "dirty":
+        (repo / "app.py").write_text("dirty\n")
+    elif failure == "branch":
+        _git(repo, "checkout", "-b", "other")
+    elif failure == "base":
+        _git(repo, "branch", "-f", "main", "HEAD")
+    elif failure in {"caller", "inference"}:
+        before["decisions"][-1]["source"] = (
+            "caller" if failure == "caller" else "head-change-inference"
+        )
+    elif failure == "older-schema":
+        before["schema_version"] = 0
+    elif failure == "later-round":
+        before["rounds"].append({"round_id": "later", "lane": "review_t1"})
+    elif failure == "earlier-findings":
+        before["decisions"][-2]["command"] = "findings"
+    elif failure == "same-tree":
+        before["convergence"]["accepted_findings_heads"][0]["tree"] = before[
+            "convergence"
+        ]["accepted_findings_heads"][-1]["tree"]
+    elif failure == "tree":
+        before["convergence"]["accepted_findings_heads"][-1]["tree"] = "different-tree"
+    elif failure == "incomplete":
+        payload["runs"][0]["review_status"] = "running"
+    elif failure == "missing-output":
+        payload["runs"][0]["reviewer_output"] = ""
+    elif failure == "unstructured":
+        del payload["runs"][0]["terminal_command"]
+    elif failure == "blocked":
+        payload["review_blocked"] = True
+    elif failure == "running":
+        before["rounds"][0]["runs"] = [{"pid": os.getpid()}]
+    elif failure in {"running-followup", "later-followup"}:
+        write_round(
+            state_dir / "orchestrator" / "review-rounds",
+            {
+                "round_id": "live",
+                "review_scope": {"source_round_id": "automatic"},
+                "status": "running" if failure == "running-followup" else "completed",
+                "runs": [{"pid": os.getpid()}]
+                if failure == "running-followup"
+                else payload["runs"],
+            },
+        )
+    elif failure == "ungraded":
+        payload.update(grading_required=True, grade_status="pending")
+        before["rounds"][-1].update(
+            arena_round=True, grading_required=True, needs_grade=True
+        )
+    elif failure == "contract":
+        before = review.record_contract_conflict(before, conflict="scope")
+    elif failure in {"continue", "replan", "reslice"}:
+        before = review.record_convergence_decision(before, decision=failure.upper())
+    write_round(state_dir / "orchestrator" / "review-rounds", payload)
+    before = review.save_cycle(state_dir, before)
+    errors = []
+    monkeypatch.setattr(
+        review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2
+    )
+    args = [
+        "--id",
+        before["public_id"],
+        "--decision",
+        "clean",
+        "--state-dir",
+        str(state_dir),
+    ]
+    if failure != "no-reason":
+        args += ["--reason", "Caller rejects automatically classified finding"]
+    if failure == "no-reason":
+        assert _run_review(monkeypatch, args)[1]["status"] == "decision_not_pending"
+    else:
+        monkeypatch.setattr(
+            sys, "argv", ["review.py", *_without_state_dir_args(monkeypatch, args)]
+        )
+        assert review.main() == 2
+        assert errors
+    assert _cycle_payload(state_dir, before["public_id"]) == before
+
+
 def test_wsl_flag_persists_to_orchestrated_steps(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
