@@ -35,7 +35,7 @@ Rules:
 - Supply the requested rating pool and repeat `--rank` from best to worst; comma-separated variants within one rank tie. The caller grades; Review Suite never promotes a winner automatically.
 - Without an id, use `review.py --status --cd <repo-root>` for branch routing.
 - The default base is the repository's remote default branch. Use `--base <ref>` only as an explicit override.
-- Resume with `review.py --id <id>` without creation flags. Use `--decision clean|findings` only when auto-advance cannot classify the verdict or the caller intentionally disagrees.
+- Resume with `review.py --id <id>` without creation flags. Use `--decision clean|findings` when auto-advance cannot classify a pending verdict or the caller intentionally disagrees. To reject the latest automatically recorded finding, use `--decision clean --reason "<why the finding is invalid>"`; follow the exact-head and audit requirements in [recovery](references/recovery.md).
 - Verify findings against the diff/repo before fixing them.
 - After fixing accepted findings, run relevant validation. **Do not rerun review** when every fix is either:
   1. Docs/test-only, preserving intended behavior and test coverage.
