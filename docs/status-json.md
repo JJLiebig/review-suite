@@ -24,9 +24,10 @@ Round times come from stored round output (`review_started_at` and
 are null. File modification times, sampling times, and elapsed durations are
 never used to invent timestamps.
 
-`outcome` is `findings`, `clean`, `blocked`, or null. Recorded caller decisions
-take precedence over reviewer verdicts. Without a caller decision, blocked flags
-take precedence over structured reviewer verdicts. An unfinished or unclassified
+`outcome` is `findings`, `clean`, `blocked`, or null. Recorded caller corrections
+and finding dispositions take precedence over the original audit decisions,
+which take precedence over reviewer verdicts. Without a caller decision, blocked
+flags take precedence over structured reviewer verdicts. An unfinished or unclassified
 round has a null outcome. Review Suite does not persist numeric finding counts,
 so `findings` is null even for clean rounds; it never counts reviewer prose.
 

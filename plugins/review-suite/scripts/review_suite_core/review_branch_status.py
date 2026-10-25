@@ -506,10 +506,12 @@ def review_status_details(
         step_names[record.get("round_id")] = profile.get("name") or step_names.get(
             record.get("source_round_id")
         )
+    # Caller overrides retain the original round and decision audit records.
     decisions = {
         item.get("round_id"): item.get("command")
-        for item in list(state.get("decisions") or [])
-        if isinstance(item, dict)
+        for collection in ("decisions", "rounds", "decision_corrections", "finding_dispositions")
+        for item in list(state.get(collection) or [])
+        if isinstance(item, dict) and item.get("command") in DECISION_COMMANDS
     }
     history = []
     started_at = None
@@ -517,7 +519,7 @@ def review_status_details(
         output = _load_output_round_payload(state_dir, record)
         if number == 1:
             started_at = output.get("review_started_at")
-        outcome = record.get("command") or decisions.get(record.get("round_id"))
+        outcome = decisions.get(record.get("round_id"))
         if outcome not in DECISION_COMMANDS:
             blocked = (
                 record.get("status") == "blocked"

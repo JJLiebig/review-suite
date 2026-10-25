@@ -2303,6 +2303,8 @@ def test_explicit_clean_correction_retains_history_and_remaining_gates(
     code, result = _run_review(monkeypatch, args)
     assert code == 0
     saved = _cycle_payload(state_dir, before["public_id"])
+    _, status = _run_review(monkeypatch, ["--id", before["public_id"], "--show-status"])
+    assert status["round_history"][-1]["outcome"] == "clean"
     for key in ("rounds", "decisions", "review_brief", "deslop", "github_review"):
         assert saved.get(key) == before.get(key)
     assert saved["convergence"]["accepted_findings_heads"] == before["convergence"]["accepted_findings_heads"]
@@ -2545,6 +2547,8 @@ def test_reasoned_caller_disagreement_preserves_audit_budget_and_remaining_gates
         "review_green": "passed" if final_step else "unknown"
     }
     disposition = saved["finding_dispositions"][0]
+    _, status = _run_review(monkeypatch, ["--id", before["public_id"], "--show-status"])
+    assert status["round_history"][-1]["outcome"] == "clean"
     assert disposition["reason"] == args[5]
     assert disposition["original_decision"] == before["decisions"][-1]
     assert disposition["reviewed_head"] == before["identity"]["head"]
