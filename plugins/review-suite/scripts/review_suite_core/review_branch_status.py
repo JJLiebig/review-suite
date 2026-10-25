@@ -159,6 +159,9 @@ def _json_status_payload(payload: dict[str, object]) -> dict[str, object]:
         value = payload.get(key)
         if value not in (None, "", [], {}):
             public[key] = value
+    for key in ("steps", "rounds", "round_history", "started_at", "round_started_at"):
+        if key in payload:
+            public[key] = payload[key]
     return public
 
 
@@ -463,6 +466,95 @@ def _auto_decision_command(state: dict[str, object], *, state_dir: Path) -> str 
     return _round_terminal_command(round_payload)
 
 
+def review_status_details(
+    state: dict[str, object], *, state_dir: Path
+) -> dict[str, object]:
+    progress = dict(state.get("review_progress") or {})
+    current_index = dict(progress.get("current_step") or {}).get("index")
+    if current_index is None:
+        current_index = progress.get("next_step_index")
+    if current_index is None:
+        current_index = dict(state.get("pending_action") or {}).get("step_index")
+    completed = {
+        item.get("index")
+        for item in list(progress.get("completed_steps") or [])
+        if isinstance(item, dict)
+    }
+    steps = [
+        {
+            "index": index,
+            "name": step.get("name"),
+            "state": (
+                "current"
+                if index == current_index
+                else "done"
+                if index in completed
+                else "pending"
+            ),
+        }
+        for index, step in enumerate(
+            dict(state.get("review_plan") or {}).get("steps") or []
+        )
+        if isinstance(step, dict)
+    ]
+    rounds = [
+        item for item in list(state.get("rounds") or []) if isinstance(item, dict)
+    ]
+    step_names = {}
+    for record in rounds:
+        profile = dict(record.get("profile_step") or {})
+        step_names[record.get("round_id")] = profile.get("name") or step_names.get(
+            record.get("source_round_id")
+        )
+    # Caller overrides retain the original round and decision audit records.
+    decisions = {
+        item.get("round_id"): item.get("command")
+        for collection in ("decisions", "rounds", "decision_corrections", "finding_dispositions")
+        for item in list(state.get(collection) or [])
+        if isinstance(item, dict) and item.get("command") in DECISION_COMMANDS
+    }
+    history = []
+    started_at = None
+    for number, record in enumerate(rounds[-20:], start=max(1, len(rounds) - 19)):
+        output = _load_output_round_payload(state_dir, record)
+        if number == 1:
+            started_at = output.get("review_started_at")
+        outcome = decisions.get(record.get("round_id"))
+        if outcome not in DECISION_COMMANDS:
+            blocked = (
+                record.get("status") == "blocked"
+                or output.get("status") == "blocked"
+                or _round_blocked(record)
+                or _round_blocked(output)
+            )
+            outcome = "blocked" if blocked else _round_terminal_command(output)
+        history.append(
+            {
+                "number": number,
+                "round_id": record.get("round_id"),
+                "lane": record.get("lane"),
+                "step": step_names.get(record.get("round_id")),
+                "status": record.get("status") or output.get("status"),
+                "outcome": outcome,
+                # Finding counts are not recorded; reviewer prose is not a count.
+                "findings": None,
+                "started_at": output.get("review_started_at"),
+                "finished_at": output.get("review_completed_at"),
+            }
+        )
+    if len(rounds) > 20:
+        started_at = _load_output_round_payload(state_dir, rounds[0]).get(
+            "review_started_at"
+        )
+    return {
+        "steps": steps,
+        "rounds": len(rounds),
+        "round_history": history,
+        "started_at": started_at,
+        "round_started_at": history[-1]["started_at"] if history else None,
+    }
+
+
 def _orchestrator_mode_label(state: dict[str, object]) -> str:
     mode = dict(state.get("mode") or {})
     return str(mode.get("effective") or mode.get("requested") or "").strip()
@@ -703,6 +795,7 @@ def _orchestrator_status_override(
         "head": current_payload.get("head"),
         "mode": _orchestrator_mode_label(state),
     }
+    payload.update(review_status_details(state, state_dir=state_dir))
     convergence = convergence_summary(state)
     if convergence.get("status") != "ACTIVE" or convergence.get(
         "accepted_findings_heads"
