@@ -57,7 +57,10 @@ from review_suite_core.orchestrator_profiles import (
     resolve_orchestrator_profile,
 )
 from review_suite_core.review_backend import split_review_backend_model
-from review_suite_core.review_branch_status import cmd_status as cmd_branch_status
+from review_suite_core.review_branch_status import (
+    cmd_status as cmd_branch_status,
+    review_status_details,
+)
 from review_suite_core.orchestrator_runner import run_one_expensive_step
 from review_suite_core.orchestrator_state import (
     DECISION_CLEAN,
@@ -1308,6 +1311,7 @@ def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
         if state.get("review_brief")
         else "unavailable",
     }
+    payload.update(review_status_details(state, state_dir=state_dir))
     if mode := _mode_label(state):
         payload["mode"] = mode
     if cwd := _cwd_label(identity):

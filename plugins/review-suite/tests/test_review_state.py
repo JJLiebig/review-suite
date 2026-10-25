@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import review_suite_core.workflow_state as workflow_state_module
 import review
 import review_suite_core.review_branch_status as review_state
+from review_suite_local import write_round
 
 from review_suite_core.workflow_state import (
     branch_token,
@@ -253,7 +254,237 @@ def test_review_state_status_json_emits_sanitized_running_review(
         "progress": "review 1/1 broad-discovery",
         "review": "rvw_running",
         "review_ladder": "pending",
+        "steps": [{"index": 0, "name": "broad-discovery", "state": "current"}],
+        "round_history": [],
+        "started_at": None,
+        "round_started_at": None,
     }
+
+
+def test_status_json_reports_recorded_round_history_without_content(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    state_dir = tmp_path / "state"
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    state = {
+        "public_id": "rvw_history",
+        "stage": "running",
+        "identity": {
+            "cwd": str(review_state.normalize_review_cwd_value(tmp_path)),
+            "base": "main",
+            "branch": "feature/history",
+        },
+        "review_plan": {
+            "steps": [
+                {"name": "discovery"},
+                {"name": "signoff"},
+                {"name": "later"},
+            ]
+        },
+        "review_progress": {
+            "completed_steps": [{"index": 0}],
+            "current_step": {"index": 1},
+            "next_step_index": 1,
+        },
+        "rounds": [
+            {
+                "round_id": "r1",
+                "lane": "review_t1",
+                "status": "decided",
+                "profile_step": {"index": 0, "name": "discovery"},
+            },
+            {
+                "round_id": "r2",
+                "lane": "review-followup",
+                "status": "decided",
+                "command": "clean",
+                "source_round_id": "r1",
+            },
+            {
+                "round_id": "r3",
+                "lane": "review_t1",
+                "status": "decision-pending",
+                "review_blocked": True,
+                "profile_step": {"index": 1, "name": "signoff"},
+            },
+            {
+                "round_id": "r4",
+                "lane": "review_t1",
+                "status": "running",
+                "profile_step": {"index": 1, "name": "signoff"},
+            },
+        ],
+        "review_brief": "PRIVATE_BRIEF",
+    }
+    for round_id, extra in {
+        "r1": {
+            "review_started_at": "2026-10-25T10:00:00Z",
+            "review_completed_at": "2026-10-25T10:01:00Z",
+        },
+        "r2": {},
+        "r3": {
+            "review_started_at": "2026-10-25T10:02:00Z",
+            "review_completed_at": "2026-10-25T10:03:00Z",
+        },
+        "r4": {"review_started_at": "2026-10-25T10:04:00Z"},
+    }.items():
+        write_round(
+            round_state_dir,
+            {
+                "round_id": round_id,
+                "status": "running" if round_id == "r4" else "completed",
+                "sampled_at": "2026-10-24T09:00:00Z",
+                "requested_prompt": "PRIVATE_PROMPT",
+                "runs": [
+                    {
+                        "review_status": "running" if round_id == "r4" else "completed",
+                        "terminal_command": "findings",
+                        "reviewer_output": "PRIVATE_FINDING_BODY" * 64000,
+                        "stdout": "PRIVATE_FILE_CONTENT",
+                    }
+                ],
+                **extra,
+            },
+        )
+    _write_orchestrator_cycle(state_dir, "history.json", state)
+    before = {path: path.read_bytes() for path in state_dir.rglob("*.json")}
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "base": "main",
+            "branch": "feature/history",
+            "head": "head-1",
+        },
+    )
+    _use_default_state_dir(monkeypatch, state_dir)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--status", "--json", "--cd", str(tmp_path), "--base", "main"],
+    )
+
+    assert review.main() == 0
+    rendered = capsys.readouterr().out
+    payload = json.loads(rendered)
+    assert payload["steps"] == [
+        {"index": 0, "name": "discovery", "state": "done"},
+        {"index": 1, "name": "signoff", "state": "current"},
+        {"index": 2, "name": "later", "state": "pending"},
+    ]
+    assert payload["started_at"] == "2026-10-25T10:00:00Z"
+    assert payload["round_started_at"] == "2026-10-25T10:04:00Z"
+    history = payload["round_history"]
+    assert [item["number"] for item in history] == [1, 2, 3, 4]
+    assert [item["outcome"] for item in history] == [
+        "findings",
+        "clean",
+        "blocked",
+        None,
+    ]
+    assert history[1] == {
+        "number": 2,
+        "round_id": "r2",
+        "lane": "review-followup",
+        "step": "discovery",
+        "status": "decided",
+        "outcome": "clean",
+        "findings": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+    assert history[0]["finished_at"] == "2026-10-25T10:01:00Z"
+    assert history[-1]["finished_at"] is None
+    assert all(item["findings"] is None for item in history)
+    assert "PRIVATE_" not in rendered
+    assert len(rendered.encode()) < 64000
+    assert {path: path.read_bytes() for path in state_dir.rglob("*.json")} == before
+
+
+@pytest.mark.parametrize(
+    ("round_count", "first_start"),
+    [
+        (1, "2026-10-25T10:01:00Z"),
+        (25, "2026-10-25T10:01:00Z"),
+        (25, None),
+    ],
+)
+def test_status_json_clean_review_bounds_history_and_keeps_original_start(
+    monkeypatch, tmp_path: Path, capsys, round_count: int, first_start: str | None
+) -> None:
+    state_dir = tmp_path / "state"
+    state = {
+        "public_id": "rvw_clean",
+        "stage": "review-green",
+        "mode": {"effective": "fast"},
+        "identity": {
+            "cwd": str(review_state.normalize_review_cwd_value(tmp_path)),
+            "base": "main",
+            "branch": "feature/history",
+            "head": "head-1",
+        },
+        "review_heads": {"last_reviewed_head": "head-1"},
+        "review_plan": {"steps": [{"name": "signoff"}]},
+        "review_progress": {"next_step_index": 1, "completed_steps": [{"index": 0}]},
+        "validation": {
+            "review_green": "passed",
+            "full_suite": "passed",
+            "ci": "passed",
+        },
+        "rounds": [
+            {
+                "round_id": f"r{number}",
+                "lane": "review_t1",
+                "status": "decided",
+                "command": "clean",
+                "profile_step": {"index": 0, "name": "signoff"},
+            }
+            for number in range(1, round_count + 1)
+        ],
+    }
+    for number in range(1, round_count + 1):
+        write_round(
+            state_dir,
+            {
+                "round_id": f"r{number}",
+                "status": "completed",
+                "review_started_at": first_start
+                if number == 1
+                else f"2026-10-25T10:{number:02}:00Z",
+                "review_completed_at": f"2026-10-25T10:{number:02}:30Z",
+                "runs": [],
+            },
+        )
+    _write_orchestrator_cycle(state_dir, "clean.json", state)
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "base": "main",
+            "branch": "feature/history",
+            "head": "head-1",
+        },
+    )
+    _use_default_state_dir(monkeypatch, state_dir)
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", "--status", "--json", "--base", "main"]
+    )
+
+    assert review.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["done"] is True
+    assert payload["steps"] == [{"index": 0, "name": "signoff", "state": "done"}]
+    assert payload["started_at"] == first_start
+    assert payload["round_started_at"] == f"2026-10-25T10:{round_count:02}:00Z"
+    history = payload["round_history"]
+    assert [item["number"] for item in history] == list(
+        range(max(1, round_count - 19), round_count + 1)
+    )
+    assert all(
+        item["outcome"] == "clean" and item["findings"] is None for item in history
+    )
 
 
 def test_review_state_status_json_emits_caller_convergence_decision(
