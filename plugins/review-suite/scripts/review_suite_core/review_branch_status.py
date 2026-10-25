@@ -500,6 +500,12 @@ def review_status_details(
     rounds = [
         item for item in list(state.get("rounds") or []) if isinstance(item, dict)
     ]
+    step_names = {}
+    for record in rounds:
+        profile = dict(record.get("profile_step") or {})
+        step_names[record.get("round_id")] = profile.get("name") or step_names.get(
+            record.get("source_round_id")
+        )
     decisions = {
         item.get("round_id"): item.get("command")
         for item in list(state.get("decisions") or [])
@@ -520,16 +526,12 @@ def review_status_details(
                 or _round_blocked(output)
             )
             outcome = "blocked" if blocked else _round_terminal_command(output)
-        profile = dict(record.get("profile_step") or {})
-        if not profile and record.get("source_round_id"):
-            source = _round_by_id(state, str(record["source_round_id"]))
-            profile = dict(source.get("profile_step") or {})
         history.append(
             {
                 "number": number,
                 "round_id": record.get("round_id"),
                 "lane": record.get("lane"),
-                "step": profile.get("name"),
+                "step": step_names.get(record.get("round_id")),
                 "status": record.get("status") or output.get("status"),
                 "outcome": outcome,
                 # Finding counts are not recorded; reviewer prose is not a count.

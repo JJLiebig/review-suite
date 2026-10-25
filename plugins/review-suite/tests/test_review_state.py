@@ -297,8 +297,15 @@ def test_status_json_reports_recorded_round_history_without_content(
                 "round_id": "r2",
                 "lane": "review-followup",
                 "status": "decided",
-                "command": "clean",
+                "command": "findings",
                 "source_round_id": "r1",
+            },
+            {
+                "round_id": "r2b",
+                "lane": "review-followup",
+                "status": "decided",
+                "command": "clean",
+                "source_round_id": "r2",
             },
             {
                 "round_id": "r3",
@@ -322,6 +329,7 @@ def test_status_json_reports_recorded_round_history_without_content(
             "review_completed_at": "2026-10-25T10:01:00Z",
         },
         "r2": {},
+        "r2b": {},
         "r3": {
             "review_started_at": "2026-10-25T10:02:00Z",
             "review_completed_at": "2026-10-25T10:03:00Z",
@@ -376,16 +384,17 @@ def test_status_json_reports_recorded_round_history_without_content(
     assert payload["started_at"] == "2026-10-25T10:00:00Z"
     assert payload["round_started_at"] == "2026-10-25T10:04:00Z"
     history = payload["round_history"]
-    assert [item["number"] for item in history] == [1, 2, 3, 4]
+    assert [item["number"] for item in history] == [1, 2, 3, 4, 5]
     assert [item["outcome"] for item in history] == [
+        "findings",
         "findings",
         "clean",
         "blocked",
         None,
     ]
-    assert history[1] == {
-        "number": 2,
-        "round_id": "r2",
+    assert history[2] == {
+        "number": 3,
+        "round_id": "r2b",
         "lane": "review-followup",
         "step": "discovery",
         "status": "decided",
