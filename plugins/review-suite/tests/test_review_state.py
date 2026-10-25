@@ -255,6 +255,7 @@ def test_review_state_status_json_emits_sanitized_running_review(
         "review": "rvw_running",
         "review_ladder": "pending",
         "steps": [{"index": 0, "name": "broad-discovery", "state": "current"}],
+        "rounds": 0,
         "round_history": [],
         "started_at": None,
         "round_started_at": None,
@@ -383,6 +384,7 @@ def test_status_json_reports_recorded_round_history_without_content(
     ]
     assert payload["started_at"] == "2026-10-25T10:00:00Z"
     assert payload["round_started_at"] == "2026-10-25T10:04:00Z"
+    assert payload["rounds"] == 5
     history = payload["round_history"]
     assert [item["number"] for item in history] == [1, 2, 3, 4, 5]
     assert [item["outcome"] for item in history] == [
@@ -487,6 +489,7 @@ def test_status_json_clean_review_bounds_history_and_keeps_original_start(
     assert payload["steps"] == [{"index": 0, "name": "signoff", "state": "done"}]
     assert payload["started_at"] == first_start
     assert payload["round_started_at"] == f"2026-10-25T10:{round_count:02}:00Z"
+    assert payload["rounds"] == round_count
     history = payload["round_history"]
     assert [item["number"] for item in history] == list(
         range(max(1, round_count - 19), round_count + 1)

@@ -1331,9 +1331,6 @@ def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
         payload["current"] = current
     if runtime := _review_runtime_label(state, state_dir=state_dir):
         payload["runtime"] = runtime
-    payload["rounds"] = len(
-        [item for item in list(state.get("rounds") or []) if isinstance(item, dict)]
-    )
     deslop = dict(state.get("deslop") or {})
     if deslop_status := str(deslop.get("status") or "").strip():
         payload["deslop"] = deslop_status

@@ -11,6 +11,8 @@ a current review cycle exists, the response also includes:
   one-based position in the complete cycle, so a truncated history keeps its
   original numbering. Each entry has `round_id`, `lane`, `step` (the profile step
   name, or null), `status`, `outcome`, `findings`, `started_at`, and `finished_at`.
+- `rounds`: the total number of round records in the full cycle. Subtract
+  `round_history.length` to count earlier rounds omitted from the response.
 - `started_at`: the first round's recorded `review_started_at`, or null. This
   marks the first reviewer launch, not cycle creation. If that time is missing,
   a later round's time is not substituted.

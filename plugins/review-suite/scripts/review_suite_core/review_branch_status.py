@@ -159,7 +159,7 @@ def _json_status_payload(payload: dict[str, object]) -> dict[str, object]:
         value = payload.get(key)
         if value not in (None, "", [], {}):
             public[key] = value
-    for key in ("steps", "round_history", "started_at", "round_started_at"):
+    for key in ("steps", "rounds", "round_history", "started_at", "round_started_at"):
         if key in payload:
             public[key] = payload[key]
     return public
@@ -546,6 +546,7 @@ def review_status_details(
         )
     return {
         "steps": steps,
+        "rounds": len(rounds),
         "round_history": history,
         "started_at": started_at,
         "round_started_at": history[-1]["started_at"] if history else None,
