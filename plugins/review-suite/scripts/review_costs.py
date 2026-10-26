@@ -61,6 +61,13 @@ MODEL_PRICING_PER_MILLION = {
     "claude-sonnet-5-5": {
         "input": 2.00, "output": 10.00, "cached_input": 0.20, "cache_write": 4.00,
     },
+    # Standard API rates: https://developers.openai.com/api/docs/models/gpt-6.1-terra
+    "gpt-6.1-terra": {
+        "input": 1.00,
+        "output": 5.00,
+        "cached_input": 0.05,
+        "cache_write": 1.25,
+    },
     # Launch rates: user screenshot, 2026-09-29; cache writes: OpenAI prompt-caching guide.
     "gpt-6.1-sol": {
         "input": 2.00,
