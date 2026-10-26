@@ -28,6 +28,12 @@ Astra Minor remains unpriced.
 Existing model defaults and rating pool IDs are unchanged.
 Pinned user `variant_ids` overrides must include the new candidates to sample them.
 
+GPT-6.1 Terra is available at low/medium/high/xhigh for phase reviews and
+medium/high/xhigh/max for PR reviews. Its [standard API rates](https://developers.openai.com/api/docs/models/gpt-6.1-terra)
+are $1 input, $0.05 cached input, $1.25 cache write, and $5 output per million
+tokens. Estimates use these standard short-context rates; long-context and
+speed-tier pricing can differ.
+
 DeepSeek V4.1 Flash 1017 uses separate `deepseek-v4.1-flash-1017-*` variants
 at low/high/max effort (low is phase-only). The earlier variants are disabled;
 their ratings remain in history. The [1017 update](https://api-docs.deepseek.com/updates/)

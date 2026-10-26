@@ -2979,6 +2979,25 @@ def test_shipped_pools_can_select_after_the_initial_schedule(
     )
     assert len(payload["runs"]) == 4
     assert payload["selection_pairing"] == "configured_balanced"
+    efforts = (
+        ("low", "medium", "high", "xhigh")
+        if task_class == "phase_review"
+        else ("medium", "high", "xhigh", "max")
+    )
+    terra_ids = {f"gpt-6.1-terra-{effort}" for effort in efforts}
+    payload = select_pair(
+        roster=roster,
+        operational_state=review_suite_local.default_operational_state(),
+        records=records,
+        task_class=task_class,
+        review_cwd=None,
+        seed=None,
+        rating_pool_id=pool["rating_pool_id"],
+        variant_groups=pool["variant_groups"],
+        variant_ids=pool["variant_ids"],
+        excluded_variant_ids=set(pool["variant_ids"]) - terra_ids,
+    )
+    assert {run["variant_id"] for run in payload["runs"]} == terra_ids
 
 
 def test_balanced_configured_selection_preserves_reviewer_slot_limit() -> None:
