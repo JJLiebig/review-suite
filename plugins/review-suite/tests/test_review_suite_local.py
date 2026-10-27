@@ -270,6 +270,10 @@ def test_write_round_preserves_stderr_derived_classification(tmp_path: Path) -> 
             True,
         ),
         (
+            "Review blocked: local git commands failed with `CreateDesktopW failed: 5`, so the diff against origin/main could not be inspected. No defects were established.",
+            True,
+        ),
+        (
             "The fix handles CreateDesktopW error 5 correctly.\nReview result: clean",
             False,
         ),

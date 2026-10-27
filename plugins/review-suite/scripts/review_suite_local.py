@@ -3233,7 +3233,11 @@ def _tooling_failure_detected(*, stderr_text: str, reviewer_output: str) -> bool
         )
         and any(
             text in output_haystack
-            for text in ("no findings could be verified", "no findings were verified")
+            for text in (
+                "no findings could be verified",
+                "no findings were verified",
+                "could not be inspected",
+            )
         )
     ):
         return True
