@@ -1417,8 +1417,8 @@ def test_id_retries_legacy_uninspected_followup_without_resetting_cycle(
     state["rounds"][-1]["round_state_dir"] = str(round_dir)
     state["rounds"][-1]["review_blocked"] = False
     output = (
-        "Review blocked: local git commands failed before execution with CreateDesktopW error 5. "
-        "No findings could be verified; this verdict indicates correctness could not be established, "
+        "Review blocked: local Git commands failed to launch with `CreateDesktopW failed: 5`, "
+        "so the diff could not be inspected. No findings were verified; correctness could not be established, "
         "not a demonstrated defect. Fix resolution and CI status remain unverified."
     )
     legacy_round = {

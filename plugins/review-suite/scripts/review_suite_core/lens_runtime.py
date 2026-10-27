@@ -197,8 +197,6 @@ def _codex_command_prefix(
             [
                 "-c",
                 'windows.sandbox="unelevated"',
-                "-c",
-                "windows.sandbox_private_desktop=false",
             ]
         )
     effective_reasoning_effort = codex_reasoning_effort(model, reasoning_effort)

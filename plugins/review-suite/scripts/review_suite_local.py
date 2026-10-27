@@ -3227,8 +3227,18 @@ def _tooling_failure_detected(*, stderr_text: str, reviewer_output: str) -> bool
     stderr_haystack = (stderr_text or "").lower()
     if (
         output_haystack.lstrip().startswith("review blocked:")
-        and "createdesktopw error 5" in output_haystack
-        and "no findings could be verified" in output_haystack
+        and any(
+            text in output_haystack
+            for text in ("createdesktopw error 5", "createdesktopw failed: 5")
+        )
+        and any(
+            text in output_haystack
+            for text in (
+                "no findings could be verified",
+                "no findings were verified",
+                "could not be inspected",
+            )
+        )
     ):
         return True
     output_markers = (

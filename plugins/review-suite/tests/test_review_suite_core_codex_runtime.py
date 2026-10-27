@@ -152,7 +152,7 @@ def test_codex_exec_command_includes_runtime_settings(
     assert command.index("--ignore-user-config") < command.index("-C")
     assert command.index('approval_policy="never"') < command.index("--color")
     assert 'windows.sandbox="unelevated"' in command
-    assert "windows.sandbox_private_desktop=false" in command
+    assert "windows.sandbox_private_desktop=false" not in command
     assert command[command.index("-s") + 1] == "read-only"
 
 
