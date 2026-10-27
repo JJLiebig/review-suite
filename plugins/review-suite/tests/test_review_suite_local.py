@@ -261,19 +261,38 @@ def test_write_round_preserves_stderr_derived_classification(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     ("output", "blocked"),
     [
-        ("Review blocked: local git commands failed before execution with CreateDesktopW error 5. No findings could be verified.", True),
-        ("The fix handles CreateDesktopW error 5 correctly.\nReview result: clean", False),
-        ("Review blocked: a regression raises CreateDesktopW error 5.\nReview result: findings", False),
+        (
+            "Review blocked: local git commands failed before execution with CreateDesktopW error 5. No findings could be verified.",
+            True,
+        ),
+        (
+            "Review blocked: local Git commands failed to launch with `CreateDesktopW failed: 5`, so the diff could not be inspected. No findings were verified; correctness is unverified.\nReview result: clean",
+            True,
+        ),
+        (
+            "The fix handles CreateDesktopW error 5 correctly.\nReview result: clean",
+            False,
+        ),
+        (
+            "Review blocked: a regression raises CreateDesktopW error 5.\nReview result: findings",
+            False,
+        ),
     ],
 )
 def test_desktop_failure_blocks_only_an_explicit_uninspected_review(
-    output: str, blocked: bool,
+    output: str,
+    blocked: bool,
 ) -> None:
     classification = review_suite_local._classify_review_result(
-        reviewer_output=output, stderr_text="", session_id="session", thread_id="thread",
+        reviewer_output=output,
+        stderr_text="",
+        session_id="session",
+        thread_id="thread",
     )
     assert classification["grade_blocked"] is blocked
-    assert classification["review_status"] == ("tooling_failure" if blocked else "completed")
+    assert classification["review_status"] == (
+        "tooling_failure" if blocked else "completed"
+    )
 
 
 def test_compact_round_files_cleans_existing_round_state_dirs(
