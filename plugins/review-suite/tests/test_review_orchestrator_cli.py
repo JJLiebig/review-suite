@@ -547,7 +547,14 @@ def test_no_arena_skips_arena_for_one_cycle_without_setting_repo_preference(
 def test_model_override_prefixes_provider_model_and_defaults_reasoning(
     tmp_path: Path,
 ) -> None:
-    config = review.load_config(tmp_path / "state")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    # Pin unsupported efforts to exercise provider fallback independently of shipped policy.
+    (state_dir / "settings.toml").write_text(
+        '[base]\nreasoning = "medium"\n[deep]\nreasoning = "xhigh"\n',
+        encoding="utf-8",
+    )
+    config = review.load_config(state_dir)
     override = review._requested_model_override(
         argparse.Namespace(model="opencode-go/deepseek-v4.1-flash", reasoning=None)
     )
@@ -696,6 +703,10 @@ def test_model_override_survives_restart_mode(
     _stub_review(monkeypatch, "fast-round-1", "deep-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "settings.toml").write_text(
+        '[deep]\nreasoning = "xhigh"\n', encoding="utf-8"
+    )
     _use_compact_base_profile(monkeypatch, state_dir, include_deep=True)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
