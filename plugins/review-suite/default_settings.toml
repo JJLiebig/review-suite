@@ -2,12 +2,12 @@
 # All jobs use base except final deep signoff, which uses deep.
 
 [base]
-model = "gpt-6.1-sol"
-reasoning = "medium"
+model = "gpt-6.1-terra"
+reasoning = "high"
 
 [deep]
-model = "gpt-6.1-sol"
-reasoning = "xhigh"
+model = "gpt-6.1-terra"
+reasoning = "max"
 
 # Optional per-job overrides inherit omitted fields from base/deep:
 # [jobs.deslop]
