@@ -18,7 +18,7 @@ from review_suite_core.orchestrator_profiles import load_orchestrator_profiles
 
 def test_deep_model_is_reserved_for_final_signoff(tmp_path: Path) -> None:
     (tmp_path / "settings.toml").write_text(
-        '[normal]\nmodel = "gpt-5.6-sol"\nreasoning = "medium"\n'
+        '[base]\nmodel = "gpt-5.6-sol"\nreasoning = "medium"\n'
         '[deep]\nmodel = "gpt-6-astra"\nreasoning = "xhigh"\n',
         encoding="utf-8",
     )
@@ -43,7 +43,7 @@ def test_legacy_migration_preserves_non_model_settings_only(tmp_path: Path) -> N
         "arena": {
             "enabled": True,
             "pools": {
-                "arena_phase": {
+                "arena_base": {
                     "rating_pool_id": "existing-ratings",
                     "variant_ids": ["gpt-5.5-medium"],
                     "variant_groups": [["gpt-5.5-medium"]],
@@ -53,7 +53,7 @@ def test_legacy_migration_preserves_non_model_settings_only(tmp_path: Path) -> N
         "orchestrator": {
             "selection": "stable",
             "stable_defaults": {
-                "signoff_normal_model": "gpt-5.5-medium",
+                "signoff_base_model": "gpt-5.5-medium",
                 "signoff_deep_model": "gpt-5.5-xhigh",
             },
             "profiles": {
@@ -87,8 +87,8 @@ def test_legacy_migration_preserves_non_model_settings_only(tmp_path: Path) -> N
     migrated_text = (tmp_path / "settings.toml").read_text()
     migrated = tomllib.loads(migrated_text)
     assert "gpt-5.5" not in migrated_text
-    assert "normal" not in migrated or "model" not in migrated["normal"]
-    assert migrated["arena"]["pools"]["arena_phase"] == {
+    assert "base" not in migrated or "model" not in migrated["base"]
+    assert migrated["arena"]["pools"]["arena_base"] == {
         "rating_pool_id": "existing-ratings"
     }
     assert config["arena"]["enabled"] is True
@@ -96,7 +96,7 @@ def test_legacy_migration_preserves_non_model_settings_only(tmp_path: Path) -> N
     assert config["future_setting"]["path"] == legacy["future_setting"]["path"]
     assert config["future_setting"]["tags"] == ["one", "two"]
     assert migrated["jobs"]["deslop"]["service_tier"] == "fast"
-    assert migrated["normal"]["service_tier"] == "flex"
+    assert migrated["base"]["service_tier"] == "flex"
     fast = load_orchestrator_profiles(config)["stable"]["fast"].steps[0]
     assert fast.count == 1
     assert fast.max_review_rounds == 2

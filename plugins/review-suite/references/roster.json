@@ -15,13 +15,13 @@
     "probation_min_samples": 20,
     "probation_max_elo": 1500.0
   },
-  "task_classes": {"phase_review": {}, "pr_review": {}},
+  "task_classes": {"base_review": {}, "deep_review": {}},
   "variants": [
     {
       "id": "gpt-6.1-terra-low",
       "model": "gpt-6.1-terra",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.0, "cached_input_per_million_usd": 0.05, "cache_write_input_per_million_usd": 1.25, "output_per_million_usd": 5.0 }
@@ -30,7 +30,7 @@
       "id": "gpt-6.1-terra-medium",
       "model": "gpt-6.1-terra",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.0, "cached_input_per_million_usd": 0.05, "cache_write_input_per_million_usd": 1.25, "output_per_million_usd": 5.0 }
@@ -39,7 +39,7 @@
       "id": "gpt-6.1-terra-high",
       "model": "gpt-6.1-terra",
       "reasoning_effort": "high",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.0, "cached_input_per_million_usd": 0.05, "cache_write_input_per_million_usd": 1.25, "output_per_million_usd": 5.0 }
@@ -48,7 +48,7 @@
       "id": "gpt-6.1-terra-xhigh",
       "model": "gpt-6.1-terra",
       "reasoning_effort": "xhigh",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.0, "cached_input_per_million_usd": 0.05, "cache_write_input_per_million_usd": 1.25, "output_per_million_usd": 5.0 }
@@ -57,7 +57,7 @@
       "id": "gpt-6.1-terra-max",
       "model": "gpt-6.1-terra",
       "reasoning_effort": "max",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.0, "cached_input_per_million_usd": 0.05, "cache_write_input_per_million_usd": 1.25, "output_per_million_usd": 5.0 }
@@ -66,7 +66,7 @@
       "id": "gpt-6.1-sol-low",
       "model": "gpt-6.1-sol",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.1, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 10.0 }
@@ -75,7 +75,7 @@
       "id": "gpt-6.1-sol-medium",
       "model": "gpt-6.1-sol",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.1, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 10.0 }
@@ -84,7 +84,7 @@
       "id": "gpt-6.1-sol-high",
       "model": "gpt-6.1-sol",
       "reasoning_effort": "high",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.1, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 10.0 }
@@ -93,7 +93,7 @@
       "id": "gpt-6.1-sol-xhigh",
       "model": "gpt-6.1-sol",
       "reasoning_effort": "xhigh",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.1, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 10.0 }
@@ -102,7 +102,7 @@
       "id": "gpt-6.1-sol-max",
       "model": "gpt-6.1-sol",
       "reasoning_effort": "max",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.1, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 10.0 }
@@ -111,7 +111,7 @@
       "id": "gpt-5.3-codex-low",
       "model": "gpt-5.3-codex",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
@@ -120,7 +120,7 @@
       "id": "gpt-5.3-codex-medium",
       "model": "gpt-5.3-codex",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
@@ -129,7 +129,7 @@
       "id": "gpt-5.3-codex-high",
       "model": "gpt-5.3-codex",
       "reasoning_effort": "high",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
@@ -138,7 +138,7 @@
       "id": "gpt-5.3-codex-xhigh",
       "model": "gpt-5.3-codex",
       "reasoning_effort": "xhigh",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
@@ -147,7 +147,7 @@
       "id": "gpt-5.3-codex-spark-low",
       "model": "gpt-5.3-codex-spark",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
@@ -156,7 +156,7 @@
       "id": "gpt-5.3-codex-spark-medium",
       "model": "gpt-5.3-codex-spark",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
@@ -165,7 +165,7 @@
       "id": "gpt-5.3-codex-spark-high",
       "model": "gpt-5.3-codex-spark",
       "reasoning_effort": "high",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
@@ -174,7 +174,7 @@
       "id": "gpt-5.3-codex-spark-xhigh",
       "model": "gpt-5.3-codex-spark",
       "reasoning_effort": "xhigh",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
@@ -183,7 +183,7 @@
       "id": "gpt-5.4-low",
       "model": "gpt-5.4",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "disabled",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
@@ -193,7 +193,7 @@
       "id": "gpt-5.4-mini-medium",
       "model": "gpt-5.4-mini",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.75, "cached_input_per_million_usd": 0.075, "output_per_million_usd": 4.5 }
@@ -202,7 +202,7 @@
       "id": "gpt-5.4-mini-high",
       "model": "gpt-5.4-mini",
       "reasoning_effort": "high",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.75, "cached_input_per_million_usd": 0.075, "output_per_million_usd": 4.5 }
@@ -211,7 +211,7 @@
       "id": "gpt-5.4-mini-xhigh",
       "model": "gpt-5.4-mini",
       "reasoning_effort": "xhigh",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.75, "cached_input_per_million_usd": 0.075, "output_per_million_usd": 4.5 }
@@ -220,7 +220,7 @@
       "id": "gpt-5.4-medium",
       "model": "gpt-5.4",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "disabled",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
@@ -230,7 +230,7 @@
       "id": "gpt-5.4-high",
       "model": "gpt-5.4",
       "reasoning_effort": "high",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "disabled",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
@@ -240,7 +240,7 @@
       "id": "gpt-5.4-xhigh",
       "model": "gpt-5.4",
       "reasoning_effort": "xhigh",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "disabled",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
@@ -250,7 +250,7 @@
       "id": "gpt-5.6-sol-low",
       "model": "gpt-5.6-sol",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "cache_write_input_per_million_usd": 6.25, "output_per_million_usd": 30.0 }
@@ -259,7 +259,7 @@
       "id": "gpt-5.6-sol-medium",
       "model": "gpt-5.6-sol",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "cache_write_input_per_million_usd": 6.25, "output_per_million_usd": 30.0 }
@@ -268,7 +268,7 @@
       "id": "gpt-5.6-sol-high",
       "model": "gpt-5.6-sol",
       "reasoning_effort": "high",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "cache_write_input_per_million_usd": 6.25, "output_per_million_usd": 30.0 }
@@ -277,7 +277,7 @@
       "id": "gpt-5.6-sol-xhigh",
       "model": "gpt-5.6-sol",
       "reasoning_effort": "xhigh",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "cache_write_input_per_million_usd": 6.25, "output_per_million_usd": 30.0 }
@@ -286,7 +286,7 @@
       "id": "gpt-5.6-sol-max",
       "model": "gpt-5.6-sol",
       "reasoning_effort": "max",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "cache_write_input_per_million_usd": 6.25, "output_per_million_usd": 30.0 }
@@ -295,7 +295,7 @@
       "id": "gpt-6-astra-low",
       "model": "gpt-6-astra",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 10.0, "cached_input_per_million_usd": 1.0, "cache_write_input_per_million_usd": 12.5, "output_per_million_usd": 50.0 }
@@ -304,7 +304,7 @@
       "id": "gpt-6-astra-medium",
       "model": "gpt-6-astra",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 10.0, "cached_input_per_million_usd": 1.0, "cache_write_input_per_million_usd": 12.5, "output_per_million_usd": 50.0 }
@@ -313,7 +313,7 @@
       "id": "gpt-6-astra-high",
       "model": "gpt-6-astra",
       "reasoning_effort": "high",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 10.0, "cached_input_per_million_usd": 1.0, "cache_write_input_per_million_usd": 12.5, "output_per_million_usd": 50.0 }
@@ -322,7 +322,7 @@
       "id": "gpt-6-astra-xhigh",
       "model": "gpt-6-astra",
       "reasoning_effort": "xhigh",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 10.0, "cached_input_per_million_usd": 1.0, "cache_write_input_per_million_usd": 12.5, "output_per_million_usd": 50.0 }
@@ -331,7 +331,7 @@
       "id": "gpt-6-astra-max",
       "model": "gpt-6-astra",
       "reasoning_effort": "max",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 10.0, "cached_input_per_million_usd": 1.0, "cache_write_input_per_million_usd": 12.5, "output_per_million_usd": 50.0 }
@@ -340,7 +340,7 @@
       "id": "deepseek-v4.1-flash-low",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10
     },
@@ -348,7 +348,7 @@
       "id": "deepseek-v4.1-flash-high",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "high",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10
     },
@@ -356,7 +356,7 @@
       "id": "deepseek-v4.1-flash-max",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "max",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10
     },
@@ -364,7 +364,7 @@
       "id": "deepseek-v4.1-flash-1017-low",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "active",
       "bootstrap_target_samples": 10
     },
@@ -372,7 +372,7 @@
       "id": "deepseek-v4.1-flash-1017-high",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "high",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10
     },
@@ -380,7 +380,7 @@
       "id": "deepseek-v4.1-flash-1017-max",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "max",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10
     },
@@ -388,7 +388,7 @@
       "id": "glm-5.3-flash-low",
       "model": "opencode::opencode-go/glm-5.3-flash",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "active",
       "bootstrap_target_samples": 10
     },
@@ -396,7 +396,7 @@
       "id": "glm-5.3-flash-high",
       "model": "opencode::opencode-go/glm-5.3-flash",
       "reasoning_effort": "high",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10
     },
@@ -404,7 +404,7 @@
       "id": "glm-5.3-flash-max",
       "model": "opencode::opencode-go/glm-5.3-flash",
       "reasoning_effort": "max",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10
     },
@@ -412,7 +412,7 @@
       "id": "gpt-5.6-terra-low",
       "model": "gpt-5.6-terra",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 12.0 }
@@ -421,7 +421,7 @@
       "id": "gpt-5.6-terra-medium",
       "model": "gpt-5.6-terra",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 12.0 }
@@ -430,7 +430,7 @@
       "id": "gpt-5.6-terra-high",
       "model": "gpt-5.6-terra",
       "reasoning_effort": "high",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 12.0 }
@@ -439,7 +439,7 @@
       "id": "gpt-5.6-terra-xhigh",
       "model": "gpt-5.6-terra",
       "reasoning_effort": "xhigh",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 12.0 }
@@ -448,7 +448,7 @@
       "id": "gpt-5.6-terra-max",
       "model": "gpt-5.6-terra",
       "reasoning_effort": "max",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 12.0 }
@@ -457,7 +457,7 @@
       "id": "gpt-5.6-luna-low",
       "model": "gpt-5.6-luna",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.2, "cached_input_per_million_usd": 0.02, "cache_write_input_per_million_usd": 0.25, "output_per_million_usd": 1.2 }
@@ -466,7 +466,7 @@
       "id": "gpt-5.6-luna-medium",
       "model": "gpt-5.6-luna",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.2, "cached_input_per_million_usd": 0.02, "cache_write_input_per_million_usd": 0.25, "output_per_million_usd": 1.2 }
@@ -475,7 +475,7 @@
       "id": "gpt-5.6-luna-high",
       "model": "gpt-5.6-luna",
       "reasoning_effort": "high",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.2, "cached_input_per_million_usd": 0.02, "cache_write_input_per_million_usd": 0.25, "output_per_million_usd": 1.2 }
@@ -484,7 +484,7 @@
       "id": "gpt-5.6-luna-xhigh",
       "model": "gpt-5.6-luna",
       "reasoning_effort": "xhigh",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.2, "cached_input_per_million_usd": 0.02, "cache_write_input_per_million_usd": 0.25, "output_per_million_usd": 1.2 }
@@ -493,7 +493,7 @@
       "id": "gpt-5.6-luna-max",
       "model": "gpt-5.6-luna",
       "reasoning_effort": "max",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.2, "cached_input_per_million_usd": 0.02, "cache_write_input_per_million_usd": 0.25, "output_per_million_usd": 1.2 }
@@ -502,7 +502,7 @@
       "id": "gpt-5.5-low",
       "model": "gpt-5.5",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
@@ -512,7 +512,7 @@
       "id": "gpt-5.5-medium",
       "model": "gpt-5.5",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
@@ -522,7 +522,7 @@
       "id": "gpt-5.5-high",
       "model": "gpt-5.5",
       "reasoning_effort": "high",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
@@ -532,7 +532,7 @@
       "id": "gpt-5.5-xhigh",
       "model": "gpt-5.5",
       "reasoning_effort": "xhigh",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
@@ -542,7 +542,7 @@
       "id": "gpt-6-sol-low",
       "model": "gpt-6-sol",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 10.0 }
@@ -551,7 +551,7 @@
       "id": "gpt-6-sol-medium",
       "model": "gpt-6-sol",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 10.0 }
@@ -560,7 +560,7 @@
       "id": "gpt-6-sol-high",
       "model": "gpt-6-sol",
       "reasoning_effort": "high",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 10.0 }
@@ -569,7 +569,7 @@
       "id": "gpt-6-sol-xhigh",
       "model": "gpt-6-sol",
       "reasoning_effort": "xhigh",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 10.0 }
@@ -578,7 +578,7 @@
       "id": "gpt-6-sol-max",
       "model": "gpt-6-sol",
       "reasoning_effort": "max",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 10.0 }
@@ -587,7 +587,7 @@
       "id": "gpt-6-luna-low",
       "model": "gpt-6-luna",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review"],
+      "task_classes": ["base_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.1, "cached_input_per_million_usd": 0.01, "cache_write_input_per_million_usd": 0.125, "output_per_million_usd": 0.5 }
@@ -596,7 +596,7 @@
       "id": "gpt-6-luna-medium",
       "model": "gpt-6-luna",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.1, "cached_input_per_million_usd": 0.01, "cache_write_input_per_million_usd": 0.125, "output_per_million_usd": 0.5 }
@@ -605,7 +605,7 @@
       "id": "gpt-6-luna-high",
       "model": "gpt-6-luna",
       "reasoning_effort": "high",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.1, "cached_input_per_million_usd": 0.01, "cache_write_input_per_million_usd": 0.125, "output_per_million_usd": 0.5 }
@@ -614,7 +614,7 @@
       "id": "gpt-6-luna-xhigh",
       "model": "gpt-6-luna",
       "reasoning_effort": "xhigh",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.1, "cached_input_per_million_usd": 0.01, "cache_write_input_per_million_usd": 0.125, "output_per_million_usd": 0.5 }
@@ -623,7 +623,7 @@
       "id": "gpt-6-luna-max",
       "model": "gpt-6-luna",
       "reasoning_effort": "max",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 0.1, "cached_input_per_million_usd": 0.01, "cache_write_input_per_million_usd": 0.125, "output_per_million_usd": 0.5 }
@@ -632,7 +632,7 @@
       "id": "gpt-6-astra-minor-low",
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10
     },
@@ -640,7 +640,7 @@
       "id": "gpt-6-astra-minor-medium",
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10
     },
@@ -648,7 +648,7 @@
       "id": "gpt-6-astra-minor-high",
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "high",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10
     },
@@ -656,7 +656,7 @@
       "id": "gpt-6-astra-minor-xhigh",
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "xhigh",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10
     },
@@ -664,7 +664,7 @@
       "id": "gpt-6-astra-minor-max",
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "max",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10
     },
@@ -672,7 +672,7 @@
       "id": "claude-opus-5.5-low",
       "model": "claude::claude-opus-5-5",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 4.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 8.0, "output_per_million_usd": 20.0 }
@@ -681,7 +681,7 @@
       "id": "claude-opus-5.5-medium",
       "model": "claude::claude-opus-5-5",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 4.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 8.0, "output_per_million_usd": 20.0 }
@@ -690,7 +690,7 @@
       "id": "claude-opus-5.5-high",
       "model": "claude::claude-opus-5-5",
       "reasoning_effort": "high",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 4.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 8.0, "output_per_million_usd": 20.0 }
@@ -699,7 +699,7 @@
       "id": "claude-opus-5.5-xhigh",
       "model": "claude::claude-opus-5-5",
       "reasoning_effort": "xhigh",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 4.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 8.0, "output_per_million_usd": 20.0 }
@@ -708,7 +708,7 @@
       "id": "claude-opus-5.5-max",
       "model": "claude::claude-opus-5-5",
       "reasoning_effort": "max",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 4.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 8.0, "output_per_million_usd": 20.0 }
@@ -717,7 +717,7 @@
       "id": "claude-sonnet-5.5-low",
       "model": "claude::claude-sonnet-5-5",
       "reasoning_effort": "low",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 4.0, "output_per_million_usd": 10.0 }
@@ -726,7 +726,7 @@
       "id": "claude-sonnet-5.5-medium",
       "model": "claude::claude-sonnet-5-5",
       "reasoning_effort": "medium",
-      "task_classes": ["phase_review", "pr_review"],
+      "task_classes": ["base_review", "deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 4.0, "output_per_million_usd": 10.0 }
@@ -735,7 +735,7 @@
       "id": "claude-sonnet-5.5-high",
       "model": "claude::claude-sonnet-5-5",
       "reasoning_effort": "high",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 4.0, "output_per_million_usd": 10.0 }
@@ -744,7 +744,7 @@
       "id": "claude-sonnet-5.5-xhigh",
       "model": "claude::claude-sonnet-5-5",
       "reasoning_effort": "xhigh",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "active",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 4.0, "output_per_million_usd": 10.0 }
@@ -753,7 +753,7 @@
       "id": "claude-sonnet-5.5-max",
       "model": "claude::claude-sonnet-5-5",
       "reasoning_effort": "max",
-      "task_classes": ["pr_review"],
+      "task_classes": ["deep_review"],
       "state": "disabled",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 4.0, "output_per_million_usd": 10.0 }

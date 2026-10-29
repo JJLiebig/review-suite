@@ -669,7 +669,7 @@ def _blocked_decision_recovery_state(
     action = {
         "kind": "arena-blocked",
         "round_id": round_id,
-        "lane": str(pending.get("lane") or round_record.get("lane") or "review_t1"),
+        "lane": str(pending.get("lane") or round_record.get("lane") or "review_base"),
         "step_index": int(step_index if step_index is not None else 0),
         "step": step_name,
     }
@@ -1014,9 +1014,9 @@ def _round_state_dir_candidates(
 
 def _task_class_for_lane(lane: str) -> str:
     return {
-        "review_t1": "phase_review",
-        "review_t3": "pr_review",
-        FOLLOWUP_LANE: "phase_review",
+        "review_base": "base_review",
+        "review_deep": "deep_review",
+        FOLLOWUP_LANE: "base_review",
     }.get(lane, lane)
 
 
@@ -2002,10 +2002,10 @@ def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[st
         payload = {
             "kind": step.kind,
             "name": step.name,
+            "lane": step.lane,
+            "task_class": step.task_class,
         }
         if step.kind == "arena":
-            payload["lane"] = step.lane
-            payload["task_class"] = step.task_class
             payload["rating_pool_id"] = step.rating_pool_id
             if step.reporting_pool:
                 payload["reporting_pool"] = True
@@ -2337,7 +2337,7 @@ def _config_with_model_override(
     orchestrator = merged.setdefault("orchestrator", {})
     defaults = dict(orchestrator.get("stable_defaults") or {})
     for ref, group in (
-        ("signoff_normal_model", "normal"),
+        ("signoff_base_model", "base"),
         ("signoff_deep_model", "deep"),
     ):
         existing_model, existing_effort, existing_tier = parse_model_label(
@@ -2389,7 +2389,7 @@ def _reject_model_override_on_existing(
 def _create_or_resume_cycle(
     *, args: argparse.Namespace, state_dir: Path
 ) -> dict[str, Any]:
-    mode = str(args.mode or "normal")
+    mode = str(args.mode or "base")
     review_root = resolve_repo_root(args.cd)
     head = current_head(review_root)
     branch = current_branch(review_root)

@@ -39,21 +39,21 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
 
     profiles = load_orchestrator_profiles(config)
 
-    assert set(profiles["stable"]) == {"normal", "deep", "fast"}
+    assert set(profiles["stable"]) == {"base", "deep", "fast"}
     assert config["arena"]["enabled"] is False
     assert config["orchestrator"]["calibration"]["auto_promotion_enabled"] is False
-    assert [_step_summary(step) for step in profiles["stable"]["normal"].steps] == [
-        ("review", "precision-signoff", 2, True),
+    assert [_step_summary(step) for step in profiles["stable"]["base"].steps] == [
+        ("review", "base-signoff", 2, True),
     ]
     assert [step.name for step in profiles["stable"]["deep"].steps] == [
-        "precision-signoff",
+        "base-signoff",
         "deep-signoff",
     ]
-    assert profiles["stable"]["normal"].steps[-1].rerun_on_findings is True
+    assert profiles["stable"]["base"].steps[-1].rerun_on_findings is True
     assert profiles["stable"]["deep"].steps[0].rerun_on_findings is True
     assert profiles["stable"]["deep"].steps[-1].rerun_on_findings is True
     assert [_step_summary(step) for step in profiles["stable"]["fast"].steps] == [
-        ("review", "fast-signoff", 2, False)
+        ("review", "base-signoff", 2, False)
     ]
     assert profiles["stable"]["fast"].steps[0].max_review_rounds == 2
     assert set(profiles) == {"stable"}
@@ -61,7 +61,7 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
 
 def test_stable_profile_rejects_obsolete_deslop_setting(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
-    config["orchestrator"]["profiles"]["stable"]["normal"]["deslop_enabled"] = False
+    config["orchestrator"]["profiles"]["stable"]["base"]["deslop_enabled"] = False
 
     with pytest.raises(ValueError, match=r"deslop_enabled.*--skip-deslop"):
         load_orchestrator_profiles(config)
@@ -69,7 +69,7 @@ def test_stable_profile_rejects_obsolete_deslop_setting(tmp_path: Path) -> None:
 
 def test_profile_step_kind_defaults_to_review(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
-    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"] = [
+    config["orchestrator"]["profiles"]["stable"]["base"]["steps"] = [
         {
             "name": "precision",
             "count": 1,
@@ -80,12 +80,12 @@ def test_profile_step_kind_defaults_to_review(tmp_path: Path) -> None:
 
     profiles = load_orchestrator_profiles(config)
 
-    assert profiles["stable"]["normal"].steps[0].kind == "review"
+    assert profiles["stable"]["base"].steps[0].kind == "review"
 
 
 def test_profile_step_rejects_conflicting_findings_policies(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
-    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"] = [
+    config["orchestrator"]["profiles"]["stable"]["base"]["steps"] = [
         {
             "name": "precision",
             "count": 1,
@@ -106,13 +106,13 @@ def test_arena_disabled_omits_all_multi_model_steps(
     tmp_path: Path,
 ) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
-    config["orchestrator"]["stable_defaults"]["normal_arena_loops"] = 2
+    config["orchestrator"]["stable_defaults"]["base_arena_loops"] = 2
     config["orchestrator"]["stable_defaults"]["deep_arena_loops"] = 1
 
     profiles = load_orchestrator_profiles(config)
 
-    assert [step.name for step in profiles["stable"]["normal"].steps] == [
-        "precision-signoff",
+    assert [step.name for step in profiles["stable"]["base"].steps] == [
+        "base-signoff",
     ]
     assert all(
         "arena-phase" not in step.name for step in profiles["stable"]["deep"].steps
@@ -126,26 +126,26 @@ def test_disabled_first_step_in_loop_block_does_not_drop_enabled_steps(
     config = deepcopy(load_config(tmp_path / "state"))
     config["arena"]["enabled"] = False
     config["orchestrator"]["stable_defaults"]["test_loops"] = 2
-    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"] = [
+    config["orchestrator"]["profiles"]["stable"]["base"]["steps"] = [
         {
             "kind": "arena",
-            "name": "arena-phase-review",
-            "lane": "review_t1",
-            "task_class": "phase_review",
+            "name": "arena-base-review",
+            "lane": "review_base",
+            "task_class": "base_review",
             "loop_ref": "test_loops",
             "enabled_ref": "arena.enabled",
         },
         {
             "name": "broad-discovery",
             "count": 1,
-            "model_ref": "signoff_normal_model",
+            "model_ref": "signoff_base_model",
             "loop_ref": "test_loops",
         },
     ]
 
     profiles = load_orchestrator_profiles(config)
 
-    assert [step.name for step in profiles["stable"]["normal"].steps] == [
+    assert [step.name for step in profiles["stable"]["base"].steps] == [
         "broad-discovery-1",
         "broad-discovery-2",
     ]
@@ -158,31 +158,31 @@ def test_arena_enabled_inserts_only_configured_arena_steps(
     config["arena"]["enabled"] = True
     config["orchestrator"]["stable_defaults"].update(
         {
-            "normal_arena_loops": 2,
+            "base_arena_loops": 2,
             "deep_arena_loops": 3,
         }
     )
 
     profiles = load_orchestrator_profiles(config)
 
-    normal = profiles["stable"]["normal"].steps
-    assert [(step.kind, step.name, step.lane, step.task_class) for step in normal] == [
-        ("arena", "arena-phase-review-1", "review_t1", "phase_review"),
-        ("arena", "arena-phase-review-2", "review_t1", "phase_review"),
-        ("review", "precision-signoff", None, None),
+    base = profiles["stable"]["base"].steps
+    assert [(step.kind, step.name, step.lane, step.task_class) for step in base] == [
+        ("arena", "arena-base-review-1", "review_base", "base_review"),
+        ("arena", "arena-base-review-2", "review_base", "base_review"),
+        ("review", "base-signoff", "review_base", "base_review"),
     ]
-    assert [step.reporting_pool for step in normal if step.kind == "arena"] == [
+    assert [step.reporting_pool for step in base if step.kind == "arena"] == [
         True,
         True,
     ]
 
     deep = profiles["stable"]["deep"].steps
     assert [(step.kind, step.name, step.lane, step.task_class) for step in deep] == [
-        ("review", "precision-signoff", None, None),
-        ("arena", "arena-pr-review-1", "review_t3", "pr_review"),
-        ("arena", "arena-pr-review-2", "review_t3", "pr_review"),
-        ("arena", "arena-pr-review-3", "review_t3", "pr_review"),
-        ("review", "deep-signoff", None, None),
+        ("review", "base-signoff", "review_base", "base_review"),
+        ("arena", "arena-deep-review-1", "review_deep", "deep_review"),
+        ("arena", "arena-deep-review-2", "review_deep", "deep_review"),
+        ("arena", "arena-deep-review-3", "review_deep", "deep_review"),
+        ("review", "deep-signoff", "review_deep", "deep_review"),
     ]
 
 
@@ -191,8 +191,8 @@ def test_default_arena_pool_schedules_are_balanced(tmp_path: Path) -> None:
     pools = config["arena"]["pools"]
     roster = load_roster(default_roster_path())
     for pool_name, task_class in (
-        ("arena_phase", "phase_review"),
-        ("arena_deep", "pr_review"),
+        ("arena_base", "base_review"),
+        ("arena_deep", "deep_review"),
     ):
         claude_variants = {
             variant["id"]
@@ -207,15 +207,15 @@ def test_default_arena_pool_schedules_are_balanced(tmp_path: Path) -> None:
         "arena-deep-gpt-5.6-v1",
     }
     assert {name for name, pool in pools.items() if pool.get("reporting")} == {
-        "arena_phase",
+        "arena_base",
         "arena_deep",
     }
-    for pool_name in ("discovery_phase", "discovery_deep"):
+    for pool_name in ("discovery_base", "discovery_deep"):
         assert all(
             len(group) == 4 and len(set(group)) == 4
             for group in pools[pool_name]["variant_groups"]
         )
-    for pool_name in ("arena_phase", "arena_deep"):
+    for pool_name in ("arena_base", "arena_deep"):
         candidates = set(pools[pool_name]["variant_ids"])
         groups = pools[pool_name]["variant_groups"]
         scheduled = [variant for group in groups for variant in group]
@@ -234,9 +234,9 @@ def test_default_arena_pool_schedules_are_balanced(tmp_path: Path) -> None:
 def test_arena_candidate_list_must_cover_bootstrap_schedule(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
     config["arena"]["enabled"] = True
-    config["orchestrator"]["stable_defaults"]["normal_arena_loops"] = 1
-    phase_pool = config["arena"]["pools"]["arena_phase"]
-    phase_pool["variant_ids"].remove(phase_pool["variant_groups"][0][0])
+    config["orchestrator"]["stable_defaults"]["base_arena_loops"] = 1
+    base_pool = config["arena"]["pools"]["arena_base"]
+    base_pool["variant_ids"].remove(base_pool["variant_groups"][0][0])
 
     with pytest.raises(ValueError, match="must include every scheduled variant"):
         load_orchestrator_profiles(config)
@@ -245,21 +245,21 @@ def test_arena_candidate_list_must_cover_bootstrap_schedule(tmp_path: Path) -> N
 def test_arena_steps_reject_mismatched_lane_and_task_class(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
     config["arena"]["enabled"] = True
-    config["orchestrator"]["stable_defaults"]["normal_arena_loops"] = 1
-    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"][0]["lane"] = (
-        "review_t1"
+    config["orchestrator"]["stable_defaults"]["base_arena_loops"] = 1
+    config["orchestrator"]["profiles"]["stable"]["base"]["steps"][0]["lane"] = (
+        "review_base"
     )
-    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"][0]["task_class"] = (
-        "pr_review"
+    config["orchestrator"]["profiles"]["stable"]["base"]["steps"][0]["task_class"] = (
+        "deep_review"
     )
 
     with pytest.raises(
-        ValueError, match="lane must be review_t3 for task_class pr_review"
+        ValueError, match="lane must be review_deep for task_class deep_review"
     ):
         load_orchestrator_profiles(config)
 
 
-@pytest.mark.parametrize("mode", ["normal", "deep", "fast"])
+@pytest.mark.parametrize("mode", ["base", "deep", "fast"])
 def test_auto_selection_uses_stable_profile_when_configured(
     tmp_path: Path, mode: str
 ) -> None:
@@ -275,13 +275,14 @@ def test_auto_selection_uses_stable_profile_when_configured(
     assert resolution.steps
 
 
-def test_brief_mode_is_not_supported(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["brief", "normal"])
+def test_retired_modes_are_not_supported(tmp_path: Path, mode: str) -> None:
     config = load_config(tmp_path / "state")
 
     with pytest.raises(
-        ValueError, match="orchestrator mode must be one of: fast, normal, deep"
+        ValueError, match="orchestrator mode must be one of: fast, base, deep"
     ):
-        resolve_orchestrator_profile(config, mode="brief", selection="auto")
+        resolve_orchestrator_profile(config, mode=mode, selection="auto")
 
 
 def test_explicit_stable_selection_records_reason_and_skips_grading(
@@ -289,7 +290,7 @@ def test_explicit_stable_selection_records_reason_and_skips_grading(
 ) -> None:
     config = load_config(tmp_path / "state")
 
-    resolution = resolve_orchestrator_profile(config, mode="normal", selection="stable")
+    resolution = resolve_orchestrator_profile(config, mode="base", selection="stable")
 
     assert resolution.effective_selection == "stable"
     assert resolution.selection_reason == "explicit_stable"
@@ -300,17 +301,17 @@ def test_benchmark_selection_is_not_supported(tmp_path: Path) -> None:
     config = load_config(tmp_path / "state")
 
     with pytest.raises(ValueError, match="orchestrator selection must be one of"):
-        resolve_orchestrator_profile(config, mode="normal", selection="benchmark")
+        resolve_orchestrator_profile(config, mode="base", selection="benchmark")
 
 
 def test_auto_selection_requires_stable_profile(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
-    del config["orchestrator"]["profiles"]["stable"]["normal"]
+    del config["orchestrator"]["profiles"]["stable"]["base"]
 
     with pytest.raises(
-        ValueError, match="missing orchestrator stable profile for mode normal"
+        ValueError, match="missing orchestrator stable profile for mode base"
     ):
-        resolve_orchestrator_profile(config, mode="normal", selection="auto")
+        resolve_orchestrator_profile(config, mode="base", selection="auto")
 
 
 def test_calibration_auto_promotion_is_not_enabled(tmp_path: Path) -> None:

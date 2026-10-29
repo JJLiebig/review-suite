@@ -39,8 +39,6 @@ LAUNCHER_ENTRYPOINTS = (
     "review_github.py",
     "review_plan.py",
     "review_suite_arena.py",
-    "review_t1.py",
-    "review_t3.py",
 )
 
 
@@ -60,7 +58,7 @@ def _make_cache_plugin(codex_home: Path, *, version: str = "1.2.3") -> Path:
         plugin_root / "scripts" / "review_suite_runtime_bootstrap.py",
         "print('bootstrap')\n",
     )
-    _write(plugin_root / "default_settings.toml", '[normal]\nmodel = "first"\n')
+    _write(plugin_root / "default_settings.toml", '[base]\nmodel = "first"\n')
     _write(plugin_root / "assets" / "logo.txt", "asset\n")
     return plugin_root
 
@@ -114,7 +112,7 @@ def test_cache_launcher_reexecs_to_runtime_and_preserves_argv(
     with pytest.raises(ExecCalled):
         bootstrap_from_installed_cache(
             plugin_root / "scripts" / "review.py",
-            argv=["review.py", "--mode", "normal", "--cd", "repo"],
+            argv=["review.py", "--mode", "base", "--cd", "repo"],
             environ={"CODEX_HOME": str(codex_home)},
             executable="python",
             execv=fake_execv,
@@ -127,7 +125,7 @@ def test_cache_launcher_reexecs_to_runtime_and_preserves_argv(
     assert argv[0] == "python"
     assert Path(argv[1]).is_relative_to(codex_home / "plugin-runtimes" / "review-suite")
     assert Path(argv[1]).name == "review.py"
-    assert tuple(argv[2:]) == ("--mode", "normal", "--cd", "repo")
+    assert tuple(argv[2:]) == ("--mode", "base", "--cd", "repo")
     assert not Path(argv[1]).is_relative_to(plugin_root)
 
 
@@ -201,15 +199,15 @@ def test_runtime_directory_is_created_and_reused(tmp_path: Path) -> None:
     ) == "print('review')\n"
     assert (
         first_root / "default_settings.toml"
-    ).read_text() == '[normal]\nmodel = "first"\n'
+    ).read_text() == '[base]\nmodel = "first"\n'
     (plugin_root / "default_settings.toml").write_text(
-        '[normal]\nmodel = "updated"\n', encoding="utf-8"
+        '[base]\nmodel = "updated"\n', encoding="utf-8"
     )
     updated_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
     assert updated_root != first_root
     assert (
         updated_root / "default_settings.toml"
-    ).read_text() == '[normal]\nmodel = "updated"\n'
+    ).read_text() == '[base]\nmodel = "updated"\n'
     metadata = json.loads((first_root / METADATA_FILENAME).read_text(encoding="utf-8"))
     assert metadata["source_path"] == str(plugin_root.resolve(strict=False))
     assert metadata["version"] == "1.2.3"
@@ -384,7 +382,7 @@ def test_runtime_loads_split_settings_with_existing_user_overrides(
     state = tmp_path / "state"
     state.mkdir()
     (state / "settings.toml").write_text(
-        '[normal]\nmodel = "gpt-6-sol"\n[arena]\nenabled = true\n[orchestrator.stable_defaults]\nnormal_arena_loops = 2\n',
+        '[base]\nmodel = "gpt-6-sol"\n[arena]\nenabled = true\n[orchestrator.stable_defaults]\nbase_arena_loops = 2\n',
         encoding="utf-8",
     )
     result = subprocess.run(
@@ -395,9 +393,9 @@ def test_runtime_loads_split_settings_with_existing_user_overrides(
             "from review_suite_core.config import load_config; "
             "state = Path(sys.argv[2]); config = load_config(state); "
             "assert config['arena']['enabled'] is True; "
-            "assert config['arena']['pools']['arena_phase']['variant_groups']; "
-            "assert config['orchestrator']['stable_defaults']['normal_arena_loops'] == 2; "
-            "assert config['normal']['model'] == 'gpt-6-sol'",
+            "assert config['arena']['pools']['arena_base']['variant_groups']; "
+            "assert config['orchestrator']['stable_defaults']['base_arena_loops'] == 2; "
+            "assert config['base']['model'] == 'gpt-6-sol'",
             str(runtime / "scripts"),
             str(state),
         ],

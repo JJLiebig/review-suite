@@ -5,20 +5,20 @@ selection = "auto"
 
 [orchestrator.stable_defaults]
 
-[orchestrator.profiles.stable.normal]
+[orchestrator.profiles.stable.base]
 steps = [
-  { kind = "arena", name = "arena-phase-review", lane = "review_t1", task_class = "phase_review", pool = "arena_phase", loop_ref = "normal_arena_loops", enabled_ref = "arena.enabled" },
-  { name = "precision-signoff", count = 2, model_ref = "signoff_normal_model", rerun_on_findings = true },
+  { kind = "arena", name = "arena-base-review", lane = "review_base", task_class = "base_review", pool = "arena_base", loop_ref = "base_arena_loops", enabled_ref = "arena.enabled" },
+  { name = "base-signoff", count = 2, model_ref = "signoff_base_model", rerun_on_findings = true },
 ]
 
 [orchestrator.profiles.stable.deep]
 steps = [
-  { name = "precision-signoff", count = 2, model_ref = "signoff_normal_model", rerun_on_findings = true },
-  { kind = "arena", name = "arena-pr-review", lane = "review_t3", task_class = "pr_review", pool = "arena_deep", loop_ref = "deep_arena_loops", enabled_ref = "arena.enabled" },
+  { name = "base-signoff", count = 2, model_ref = "signoff_base_model", rerun_on_findings = true },
+  { kind = "arena", name = "arena-deep-review", lane = "review_deep", task_class = "deep_review", pool = "arena_deep", loop_ref = "deep_arena_loops", enabled_ref = "arena.enabled" },
   { name = "deep-signoff", count = 2, model_ref = "signoff_deep_model", rerun_on_findings = true },
 ]
 
 [orchestrator.profiles.stable.fast]
 steps = [
-  { name = "fast-signoff", count = 2, model_ref = "signoff_normal_model", max_review_rounds = 2 },
+  { name = "base-signoff", count = 2, model_ref = "signoff_base_model", max_review_rounds = 2 },
 ]

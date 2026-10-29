@@ -66,7 +66,7 @@ def _reject_status_unc_wsl(path: str | None) -> None:
 
 
 def _review_mode_for_lane(lane: str) -> str:
-    return "deep" if lane == "review_t3" else "normal"
+    return "deep" if lane == "review_deep" else "base"
 
 
 def _start_review_command(*, review_cwd: Path, base: str, mode: str) -> str:
@@ -288,8 +288,8 @@ def _orchestrator_progress_label(state: dict[str, object]) -> str | None:
         except TypeError, ValueError:
             continue
         step_name = str(item.get("step") or item.get("name") or "").strip()
-        lane = str(item.get("lane") or "review_t1").strip()
-        if lane != "review_t1" or not step_name:
+        lane = str(item.get("lane") or "review_base").strip()
+        if lane not in {"review_base", "review_deep"} or not step_name:
             continue
         position, total = _review_step_position(state, step_index)
         if position and total:
@@ -890,8 +890,8 @@ def _status_action(
         return _with_action_context(action, review_cwd=review_cwd)
     recommended_lane = str(payload.get("recommended_lane") or "").strip()
     if recommendation in {"coherence-review", "full-review"} and recommended_lane in {
-        "review_t1",
-        "review_t3",
+        "review_base",
+        "review_deep",
     }:
         return _with_action_context(
             {
@@ -909,7 +909,7 @@ def _status_action(
             {
                 "lane": "coherence-review",
                 "cmd": _start_review_command(
-                    review_cwd=review_cwd, base=base, mode="normal"
+                    review_cwd=review_cwd, base=base, mode="base"
                 ),
             },
             review_cwd=review_cwd,
@@ -919,7 +919,7 @@ def _status_action(
             {
                 "lane": "full-review",
                 "cmd": _start_review_command(
-                    review_cwd=review_cwd, base=base, mode="normal"
+                    review_cwd=review_cwd, base=base, mode="base"
                 ),
             },
             review_cwd=review_cwd,

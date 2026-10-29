@@ -187,12 +187,12 @@ def test_claude_roster_matches_arena_review_sizes() -> None:
         prefix = f"claude-{model}-5.5-"
         assert {
             variant["id"].removeprefix(prefix)
-            for variant in eligible_variants(roster, "phase_review")
+            for variant in eligible_variants(roster, "base_review")
             if variant["id"].startswith(prefix)
         } == {"low", "medium"}
         assert {
             variant["id"].removeprefix(prefix)
-            for variant in eligible_variants(roster, "pr_review")
+            for variant in eligible_variants(roster, "deep_review")
             if variant["id"].startswith(prefix)
         } == {"low", "medium", "high", "xhigh"}
 

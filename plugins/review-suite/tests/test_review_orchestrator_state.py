@@ -54,9 +54,9 @@ from review_suite_core.orchestrator_store import (
 def test_late_contract_conflict_cannot_replace_completed_followup(tmp_path: Path, classify: bool) -> None:
     state_dir = tmp_path / "state"
     source = record_findings_decision(
-        mark_review_step_pending(_cycle(tmp_path, mode="deep"), round_id="old", lane="review_t1", step_index=0,
+        mark_review_step_pending(_cycle(tmp_path, mode="deep"), round_id="old", lane="review_base", step_index=0,
                                  step_name="review", reviewed_head="head-1"),
-        round_id="old", lane="review_t1", reviewed_head="head-1",
+        round_id="old", lane="review_base", reviewed_head="head-1",
     )
     save_cycle(state_dir, source)
     stale_conflict = record_contract_conflict(source, conflict="acceptance")
@@ -73,7 +73,7 @@ def test_late_contract_conflict_cannot_replace_completed_followup(tmp_path: Path
 
 
 def _cycle(
-    tmp_path: Path, *, mode: str = "normal", restart_token: str | None = None
+    tmp_path: Path, *, mode: str = "base", restart_token: str | None = None
 ) -> dict[str, object]:
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
@@ -97,11 +97,11 @@ def test_contract_replan_reservation_preserves_convergence_under_late_writes(
     intervening_decision: str | None,
 ) -> None:
     state_dir = tmp_path / "state"
-    before_findings = mark_decision_pending(_cycle(tmp_path), round_id="old-round", lane="review_t1")
+    before_findings = mark_decision_pending(_cycle(tmp_path), round_id="old-round", lane="review_base")
     source = record_findings_decision(
         before_findings,
         round_id="old-round",
-        lane="review_t1",
+        lane="review_base",
         reviewed_head="head-1",
     )
     stale = save_cycle(state_dir, source)
@@ -149,8 +149,8 @@ def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(
         branch="feature/orchestrator",
         head="head-1",
         merge_base="base-1",
-        requested_mode="normal",
-        effective_mode="normal",
+        requested_mode="base",
+        effective_mode="base",
         selection="auto",
         effective_selection="stable",
     )
@@ -160,8 +160,8 @@ def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(
         branch="feature/orchestrator",
         head="head-1",
         merge_base="base-1",
-        requested_mode="normal",
-        effective_mode="normal",
+        requested_mode="base",
+        effective_mode="base",
         selection="auto",
         effective_selection="stable",
     )
@@ -181,15 +181,15 @@ def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(
         branch="feature/no-deslop",
         head="head-1",
         merge_base="base-1",
-        requested_mode="normal",
-        effective_mode="normal",
+        requested_mode="base",
+        effective_mode="base",
         selection="stable",
         deslop_enabled=False,
     )
 
     assert json.loads(json.dumps(state)) == state
     assert state["cycle_key"] == same_state["cycle_key"]
-    assert state["mode"] == {"requested": "normal", "effective": "normal"}
+    assert state["mode"] == {"requested": "base", "effective": "base"}
     assert state["selection"] == {"requested": "auto", "effective": "stable"}
     assert state["deslop"] == {"tracked": True, "status": "tracked"}
     assert state["validation"]["review_green"] == "unknown"
@@ -291,21 +291,21 @@ def test_wait_states_are_idle_and_transitions_are_idempotent(tmp_path: Path) -> 
     state = _cycle(tmp_path)
     original = json.loads(json.dumps(state))
 
-    running = mark_running(state, round_id="round-1", lane="review_t1")
-    running_again = mark_running(running, round_id="round-1", lane="review_t1")
+    running = mark_running(state, round_id="round-1", lane="review_base")
+    running_again = mark_running(running, round_id="round-1", lane="review_base")
     pending = mark_decision_pending(
         running_again,
         round_id="round-1",
-        lane="review_t1",
+        lane="review_base",
         pending_action={
             "kind": "reprint-decision",
             "round_id": "round-1",
             "commands": ["clean", "findings"],
         },
     )
-    findings = record_findings_decision(pending, round_id="round-1", lane="review_t1")
+    findings = record_findings_decision(pending, round_id="round-1", lane="review_base")
     findings_again = record_findings_decision(
-        findings, round_id="round-1", lane="review_t1"
+        findings, round_id="round-1", lane="review_base"
     )
     blocked = mark_blocked(
         findings_again, reason="reviewer unavailable", round_id="round-1"
@@ -353,7 +353,7 @@ def test_clean_profile_steps_record_progress_until_final_review_green(
                 "reasoning_effort": "medium",
             },
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -363,7 +363,7 @@ def test_clean_profile_steps_record_progress_until_final_review_green(
     first_pending = mark_review_step_pending(
         state,
         round_id="round-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="broad-discovery",
         reviewed_head="head-1",
@@ -373,7 +373,7 @@ def test_clean_profile_steps_record_progress_until_final_review_green(
         "index": 0,
         "name": "broad-discovery",
         "round_id": "round-1",
-        "lane": "review_t1",
+        "lane": "review_base",
     }
     assert first_pending["rounds"][0]["profile_step"] == {
         "index": 0,
@@ -381,14 +381,14 @@ def test_clean_profile_steps_record_progress_until_final_review_green(
     }
 
     queued = record_clean_decision(
-        first_pending, round_id="round-1", lane="review_t1", reviewed_head="head-1"
+        first_pending, round_id="round-1", lane="review_base", reviewed_head="head-1"
     )
 
     assert queued["stage"] == "created"
     assert queued["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 1,
-        "step": "precision-signoff",
+        "step": "base-signoff",
     }
     assert queued["review_progress"]["current_step"] is None
     assert queued["review_progress"]["next_step_index"] == 1
@@ -397,7 +397,7 @@ def test_clean_profile_steps_record_progress_until_final_review_green(
             "index": 0,
             "name": "broad-discovery",
             "round_id": "round-1",
-            "lane": "review_t1",
+            "lane": "review_base",
             "reviewed_head": "head-1",
         }
     ]
@@ -405,13 +405,13 @@ def test_clean_profile_steps_record_progress_until_final_review_green(
     second_pending = mark_review_step_pending(
         queued,
         round_id="round-2",
-        lane="review_t1",
+        lane="review_base",
         step_index=1,
-        step_name="precision-signoff",
+        step_name="base-signoff",
         reviewed_head="head-1",
     )
     green = record_clean_decision(
-        second_pending, round_id="round-2", lane="review_t1", reviewed_head="head-1"
+        second_pending, round_id="round-2", lane="review_base", reviewed_head="head-1"
     )
 
     assert green["stage"] == STAGE_REVIEW_GREEN
@@ -447,7 +447,7 @@ def test_clean_discovery_skips_remaining_discovery_loops_to_signoff(
                 "reasoning_effort": "medium",
             },
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -457,21 +457,21 @@ def test_clean_discovery_skips_remaining_discovery_loops_to_signoff(
     pending = mark_review_step_pending(
         state,
         round_id="round-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="broad-discovery-1",
         reviewed_head="head-1",
     )
 
     clean = record_clean_decision(
-        pending, round_id="round-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="round-1", lane="review_base", reviewed_head="head-1"
     )
 
     assert clean["stage"] == STAGE_CREATED
     assert clean["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 3,
-        "step": "precision-signoff",
+        "step": "base-signoff",
     }
     assert clean["review_progress"]["next_step_index"] == 3
     assert [item["name"] for item in clean["review_progress"]["completed_steps"]] == [
@@ -492,7 +492,7 @@ def test_clean_deep_discovery_skips_remaining_deep_discovery_to_deep_signoff(
                 "reasoning_effort": "medium",
             },
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -520,14 +520,14 @@ def test_clean_deep_discovery_skips_remaining_deep_discovery_to_deep_signoff(
     pending = mark_review_step_pending(
         state,
         round_id="round-1",
-        lane="review_t3",
+        lane="review_deep",
         step_index=2,
         step_name="deep-discovery-1",
         reviewed_head="head-1",
     )
 
     clean = record_clean_decision(
-        pending, round_id="round-1", lane="review_t3", reviewed_head="head-1"
+        pending, round_id="round-1", lane="review_deep", reviewed_head="head-1"
     )
 
     assert clean["stage"] == STAGE_CREATED
@@ -551,20 +551,20 @@ def test_clean_arena_round_skips_remaining_arena_rounds_to_next_stage(
             {
                 "name": "arena-discovery-1",
                 "kind": "arena",
-                "lane": "review_t1",
-                "task_class": "phase_review",
+                "lane": "review_base",
+                "task_class": "base_review",
             },
             {
                 "name": "arena-discovery-2",
                 "kind": "arena",
-                "lane": "review_t1",
-                "task_class": "phase_review",
+                "lane": "review_base",
+                "task_class": "base_review",
             },
             {
-                "name": "arena-pr-review",
+                "name": "arena-deep-review",
                 "kind": "arena",
-                "lane": "review_t3",
-                "task_class": "pr_review",
+                "lane": "review_deep",
+                "task_class": "deep_review",
             },
             {
                 "name": "broad-discovery",
@@ -573,7 +573,7 @@ def test_clean_arena_round_skips_remaining_arena_rounds_to_next_stage(
                 "reasoning_effort": "medium",
             },
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -583,7 +583,7 @@ def test_clean_arena_round_skips_remaining_arena_rounds_to_next_stage(
     pending = mark_review_step_pending(
         state,
         round_id="round-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="arena-discovery-1",
         reviewed_head="head-1",
@@ -592,13 +592,13 @@ def test_clean_arena_round_skips_remaining_arena_rounds_to_next_stage(
     )
 
     clean = record_clean_decision(
-        pending, round_id="round-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="round-1", lane="review_base", reviewed_head="head-1"
     )
 
     assert clean["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 2,
-        "step": "arena-pr-review",
+        "step": "arena-deep-review",
         "step_kind": "arena",
     }
     assert clean["review_progress"]["next_step_index"] == 2
@@ -611,8 +611,8 @@ def test_clean_arena_round_skips_terminal_arena_rounds(tmp_path: Path) -> None:
             {
                 "name": f"arena-discovery-{index}",
                 "kind": "arena",
-                "lane": "review_t1",
-                "task_class": "phase_review",
+                "lane": "review_base",
+                "task_class": "base_review",
             }
             for index in (1, 2)
         ]
@@ -620,7 +620,7 @@ def test_clean_arena_round_skips_terminal_arena_rounds(tmp_path: Path) -> None:
     pending = mark_review_step_pending(
         state,
         round_id="round-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="arena-discovery-1",
         reviewed_head="head-1",
@@ -629,7 +629,7 @@ def test_clean_arena_round_skips_terminal_arena_rounds(tmp_path: Path) -> None:
     )
 
     clean = record_clean_decision(
-        pending, round_id="round-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="round-1", lane="review_base", reviewed_head="head-1"
     )
 
     assert clean["stage"] == STAGE_REVIEW_GREEN
@@ -649,7 +649,7 @@ def test_followup_clean_completes_source_profile_step_and_continues(
                 "reasoning_effort": "medium",
             },
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -659,13 +659,13 @@ def test_followup_clean_completes_source_profile_step_and_continues(
     pending = mark_review_step_pending(
         state,
         round_id="round-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="broad-discovery",
         reviewed_head="head-1",
     )
     findings = record_findings_decision(
-        pending, round_id="round-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="round-1", lane="review_base", reviewed_head="head-1"
     )
     fixed = mark_fix_detected(findings, head="head-2")
     followup_pending = mark_followup_review_pending(
@@ -684,14 +684,14 @@ def test_followup_clean_completes_source_profile_step_and_continues(
     assert clean["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 1,
-        "step": "precision-signoff",
+        "step": "base-signoff",
     }
     assert clean["review_progress"]["completed_steps"] == [
         {
             "index": 0,
             "name": "broad-discovery",
             "round_id": "round-1",
-            "lane": "review_t1",
+            "lane": "review_base",
             "reviewed_head": "head-2",
         }
     ]
@@ -716,7 +716,7 @@ def test_followup_clean_after_discovery_findings_keeps_discovery_budget(
                 "reasoning_effort": "medium",
             },
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -726,13 +726,13 @@ def test_followup_clean_after_discovery_findings_keeps_discovery_budget(
     pending = mark_review_step_pending(
         state,
         round_id="round-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="broad-discovery-1",
         reviewed_head="head-1",
     )
     findings = record_findings_decision(
-        pending, round_id="round-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="round-1", lane="review_base", reviewed_head="head-1"
     )
     fixed = mark_fix_detected(findings, head="head-2")
     followup_pending = mark_followup_review_pending(
@@ -759,7 +759,7 @@ def test_followup_clean_reruns_sticky_signoff_step(tmp_path: Path) -> None:
     state["review_plan"] = {
         "steps": [
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -770,13 +770,13 @@ def test_followup_clean_reruns_sticky_signoff_step(tmp_path: Path) -> None:
     pending = mark_review_step_pending(
         state,
         round_id="signoff-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
-        step_name="precision-signoff",
+        step_name="base-signoff",
         reviewed_head="head-1",
     )
     findings = record_findings_decision(
-        pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="signoff-1", lane="review_base", reviewed_head="head-1"
     )
     fixed = mark_fix_detected(findings, head="head-2")
     followup_pending = mark_followup_review_pending(
@@ -795,7 +795,7 @@ def test_followup_clean_reruns_sticky_signoff_step(tmp_path: Path) -> None:
     assert clean["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 0,
-        "step": "precision-signoff",
+        "step": "base-signoff",
     }
     assert clean["review_progress"]["next_step_index"] == 0
     assert clean["review_progress"]["completed_steps"] == []
@@ -803,22 +803,22 @@ def test_followup_clean_reruns_sticky_signoff_step(tmp_path: Path) -> None:
     rerun_pending = mark_review_step_pending(
         clean,
         round_id="signoff-2",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
-        step_name="precision-signoff",
+        step_name="base-signoff",
         reviewed_head="head-2",
     )
     green = record_clean_decision(
-        rerun_pending, round_id="signoff-2", lane="review_t1", reviewed_head="head-2"
+        rerun_pending, round_id="signoff-2", lane="review_base", reviewed_head="head-2"
     )
 
     assert green["stage"] == STAGE_REVIEW_GREEN
     assert green["review_progress"]["completed_steps"] == [
         {
             "index": 0,
-            "name": "precision-signoff",
+            "name": "base-signoff",
             "round_id": "signoff-2",
-            "lane": "review_t1",
+            "lane": "review_base",
             "reviewed_head": "head-2",
         }
     ]
@@ -829,7 +829,7 @@ def test_fast_terminal_findings_get_one_verification_round(tmp_path: Path) -> No
     state["review_plan"] = {
         "steps": [
             {
-                "name": "fast-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -840,13 +840,13 @@ def test_fast_terminal_findings_get_one_verification_round(tmp_path: Path) -> No
     pending = mark_review_step_pending(
         state,
         round_id="signoff-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
-        step_name="fast-signoff",
+        step_name="base-signoff",
         reviewed_head="head-1",
     )
     findings = record_findings_decision(
-        pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="signoff-1", lane="review_base", reviewed_head="head-1"
     )
 
     fixed = mark_fix_detected(findings, head="head-2")
@@ -857,10 +857,10 @@ def test_fast_terminal_findings_get_one_verification_round(tmp_path: Path) -> No
     assert fixed["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 0,
-        "step": "fast-signoff",
+        "step": "base-signoff",
         "fix_verification": {
             "source_round_id": "signoff-1",
-            "source_lane": "review_t1",
+            "source_lane": "review_base",
             "findings_reviewed_head": "head-1",
             "fix_head": "head-2",
         },
@@ -887,7 +887,7 @@ def test_distinct_accepted_finding_trees_require_one_use_caller_decision(
         state = record_findings_decision(
             state,
             round_id=round_id,
-            lane="review_t1",
+            lane="review_base",
             reviewed_head=head,
             reviewed_tree=tree,
         )
@@ -905,7 +905,7 @@ def test_distinct_accepted_finding_trees_require_one_use_caller_decision(
     exhausted = record_findings_decision(
         continued,
         round_id="round-4",
-        lane="review_t1",
+        lane="review_base",
         reviewed_head="head-4",
         reviewed_tree="tree-4",
     )
@@ -927,7 +927,7 @@ def test_continue_preserves_existing_reviewer_work(
         state = record_findings_decision(
             state,
             round_id=f"round-{index}",
-            lane="review_t1",
+            lane="review_base",
             reviewed_head=f"head-{index}",
         )
     # The old fix transition dispatched another round while convergence was stopped.
@@ -936,9 +936,9 @@ def test_continue_preserves_existing_reviewer_work(
     state = mark_step(
         state,
         round_id="round-4",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
-        step_name="precision-signoff",
+        step_name="base-signoff",
         reviewed_head="head-4",
         grading_required=True,
         arena_round=True,
@@ -958,7 +958,7 @@ def test_blocked_retries_do_not_consume_accepted_findings_budget(
     state["review_plan"] = {
         "steps": [
             {
-                "name": "fast-signoff",
+                "name": "base-signoff",
                 "count": 2,
                 "model": "gpt-5.6-sol",
                 "reasoning_effort": "medium",
@@ -969,25 +969,25 @@ def test_blocked_retries_do_not_consume_accepted_findings_budget(
     first_pending = mark_review_step_pending(
         state,
         round_id="signoff-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
-        step_name="fast-signoff",
+        step_name="base-signoff",
         reviewed_head="head-1",
     )
     first_retry = mark_review_step_retry(
-        first_pending, step_index=0, step_name="fast-signoff"
+        first_pending, step_index=0, step_name="base-signoff"
     )
     second_pending = mark_review_step_pending(
         first_retry,
         round_id="signoff-2",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
-        step_name="fast-signoff",
+        step_name="base-signoff",
         reviewed_head="head-1",
     )
 
     retried = mark_review_step_retry(
-        second_pending, step_index=0, step_name="fast-signoff"
+        second_pending, step_index=0, step_name="base-signoff"
     )
 
     assert retried["stage"] == STAGE_CREATED
@@ -1001,7 +1001,7 @@ def test_contract_conflict_requires_an_immediate_durable_decision(
     findings = record_findings_decision(
         _cycle(tmp_path),
         round_id="round-1",
-        lane="review_t1",
+        lane="review_base",
         reviewed_head="head-1",
     )
 
@@ -1025,7 +1025,7 @@ def test_non_deep_discovery_findings_advance_without_extra_discovery(
                 "reasoning_effort": "medium",
             },
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -1035,13 +1035,13 @@ def test_non_deep_discovery_findings_advance_without_extra_discovery(
     pending = mark_review_step_pending(
         state,
         round_id="round-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="broad-discovery",
         reviewed_head="head-1",
     )
     findings = record_findings_decision(
-        pending, round_id="round-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="round-1", lane="review_base", reviewed_head="head-1"
     )
 
     fixed = mark_fix_detected(findings, head="head-2")
@@ -1052,10 +1052,10 @@ def test_non_deep_discovery_findings_advance_without_extra_discovery(
     assert fixed["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 1,
-        "step": "precision-signoff",
+        "step": "base-signoff",
         "fix_verification": {
             "source_round_id": "round-1",
-            "source_lane": "review_t1",
+            "source_lane": "review_base",
             "findings_reviewed_head": "head-1",
             "fix_head": "head-2",
         },
@@ -1066,7 +1066,7 @@ def test_non_deep_discovery_findings_advance_without_extra_discovery(
             "index": 0,
             "name": "broad-discovery",
             "round_id": "round-1",
-            "lane": "review_t1",
+            "lane": "review_base",
             "reviewed_head": "head-1",
         }
     ]
@@ -1092,7 +1092,7 @@ def test_non_deep_discovery_findings_consume_one_discovery_budget(
                 "reasoning_effort": "medium",
             },
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -1102,13 +1102,13 @@ def test_non_deep_discovery_findings_consume_one_discovery_budget(
     pending = mark_review_step_pending(
         state,
         round_id="round-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="broad-discovery-1",
         reviewed_head="head-1",
     )
     findings = record_findings_decision(
-        pending, round_id="round-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="round-1", lane="review_base", reviewed_head="head-1"
     )
 
     fixed = mark_fix_detected(findings, head="head-2")
@@ -1120,7 +1120,7 @@ def test_non_deep_discovery_findings_consume_one_discovery_budget(
         "step": "broad-discovery-2",
         "fix_verification": {
             "source_round_id": "round-1",
-            "source_lane": "review_t1",
+            "source_lane": "review_base",
             "findings_reviewed_head": "head-1",
             "fix_head": "head-2",
         },
@@ -1130,7 +1130,7 @@ def test_non_deep_discovery_findings_consume_one_discovery_budget(
             "index": 0,
             "name": "broad-discovery-1",
             "round_id": "round-1",
-            "lane": "review_t1",
+            "lane": "review_base",
             "reviewed_head": "head-1",
         }
     ]
@@ -1143,17 +1143,17 @@ def test_non_deep_arena_findings_consume_one_arena_budget(tmp_path: Path) -> Non
             {
                 "name": "arena-discovery",
                 "kind": "arena",
-                "lane": "review_t3",
-                "task_class": "phase_review",
+                "lane": "review_deep",
+                "task_class": "base_review",
             },
             {
                 "name": "arena-discovery-2",
                 "kind": "arena",
-                "lane": "review_t3",
-                "task_class": "phase_review",
+                "lane": "review_deep",
+                "task_class": "base_review",
             },
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -1163,7 +1163,7 @@ def test_non_deep_arena_findings_consume_one_arena_budget(tmp_path: Path) -> Non
     pending = mark_review_step_pending(
         state,
         round_id="arena-1",
-        lane="review_t3",
+        lane="review_deep",
         step_index=0,
         step_name="arena-discovery",
         reviewed_head="head-1",
@@ -1171,7 +1171,7 @@ def test_non_deep_arena_findings_consume_one_arena_budget(tmp_path: Path) -> Non
         arena_round=True,
     )
     findings = record_findings_decision(
-        pending, round_id="arena-1", lane="review_t3", reviewed_head="head-1"
+        pending, round_id="arena-1", lane="review_deep", reviewed_head="head-1"
     )
 
     fixed = mark_fix_detected(findings, head="head-2")
@@ -1184,7 +1184,7 @@ def test_non_deep_arena_findings_consume_one_arena_budget(tmp_path: Path) -> Non
         "step_kind": "arena",
         "fix_verification": {
             "source_round_id": "arena-1",
-            "source_lane": "review_t3",
+            "source_lane": "review_deep",
             "findings_reviewed_head": "head-1",
             "fix_head": "head-2",
         },
@@ -1194,7 +1194,7 @@ def test_non_deep_arena_findings_consume_one_arena_budget(tmp_path: Path) -> Non
             "index": 0,
             "name": "arena-discovery",
             "round_id": "arena-1",
-            "lane": "review_t3",
+            "lane": "review_deep",
             "reviewed_head": "head-1",
             "arena_round": True,
         }
@@ -1206,7 +1206,7 @@ def test_non_deep_signoff_findings_rerun_until_clean(tmp_path: Path) -> None:
     state["review_plan"] = {
         "steps": [
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -1223,13 +1223,13 @@ def test_non_deep_signoff_findings_rerun_until_clean(tmp_path: Path) -> None:
     pending = mark_review_step_pending(
         state,
         round_id="signoff-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
-        step_name="precision-signoff",
+        step_name="base-signoff",
         reviewed_head="head-1",
     )
     findings = record_findings_decision(
-        pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="signoff-1", lane="review_base", reviewed_head="head-1"
     )
 
     fixed = mark_fix_detected(findings, head="head-2")
@@ -1238,10 +1238,10 @@ def test_non_deep_signoff_findings_rerun_until_clean(tmp_path: Path) -> None:
     assert fixed["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 0,
-        "step": "precision-signoff",
+        "step": "base-signoff",
         "fix_verification": {
             "source_round_id": "signoff-1",
-            "source_lane": "review_t1",
+            "source_lane": "review_base",
             "findings_reviewed_head": "head-1",
             "fix_head": "head-2",
         },
@@ -1275,7 +1275,7 @@ def test_post_findings_discovery_rerun_clean_skips_remaining_discovery_to_signof
                 "reasoning_effort": "medium",
             },
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -1285,13 +1285,13 @@ def test_post_findings_discovery_rerun_clean_skips_remaining_discovery_to_signof
     pending = mark_review_step_pending(
         state,
         round_id="round-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="broad-discovery-1",
         reviewed_head="head-1",
     )
     findings = record_findings_decision(
-        pending, round_id="round-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="round-1", lane="review_base", reviewed_head="head-1"
     )
     fixed = json.loads(json.dumps(findings))
     fixed["stage"] = STAGE_CREATED
@@ -1306,7 +1306,7 @@ def test_post_findings_discovery_rerun_clean_skips_remaining_discovery_to_signof
         "step": "broad-discovery-2",
         "fix_verification": {
             "source_round_id": "round-1",
-            "source_lane": "review_t1",
+            "source_lane": "review_base",
             "findings_reviewed_head": "head-1",
             "fix_head": "head-2",
         },
@@ -1314,7 +1314,7 @@ def test_post_findings_discovery_rerun_clean_skips_remaining_discovery_to_signof
     running_rerun = mark_review_step_pending(
         fixed,
         round_id="round-2",
-        lane="review_t1",
+        lane="review_base",
         step_index=1,
         step_name="broad-discovery-2",
         reviewed_head="head-2",
@@ -1322,21 +1322,21 @@ def test_post_findings_discovery_rerun_clean_skips_remaining_discovery_to_signof
     )
 
     clean = record_clean_decision(
-        running_rerun, round_id="round-2", lane="review_t1", reviewed_head="head-2"
+        running_rerun, round_id="round-2", lane="review_base", reviewed_head="head-2"
     )
 
     assert clean["stage"] == STAGE_CREATED
     assert clean["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 3,
-        "step": "precision-signoff",
+        "step": "base-signoff",
     }
     assert clean["review_progress"]["completed_steps"] == [
         {
             "index": 1,
             "name": "broad-discovery-2",
             "round_id": "round-2",
-            "lane": "review_t1",
+            "lane": "review_base",
             "reviewed_head": "head-2",
         }
     ]
@@ -1349,7 +1349,7 @@ def test_github_findings_followup_reruns_last_local_signoff_step(
     state["review_plan"] = {
         "steps": [
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -1360,13 +1360,13 @@ def test_github_findings_followup_reruns_last_local_signoff_step(
     pending = mark_review_step_pending(
         state,
         round_id="signoff-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
-        step_name="precision-signoff",
+        step_name="base-signoff",
         reviewed_head="head-1",
     )
     green = record_clean_decision(
-        pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="signoff-1", lane="review_base", reviewed_head="head-1"
     )
 
     github_findings = record_github_result(
@@ -1405,7 +1405,7 @@ def test_github_findings_followup_reruns_last_local_signoff_step(
     assert clean["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 0,
-        "step": "precision-signoff",
+        "step": "base-signoff",
     }
     assert clean["review_progress"]["completed_steps"] == []
 
@@ -1415,7 +1415,7 @@ def test_github_result_defaults_to_latest_local_reviewed_head(tmp_path: Path) ->
     state["review_plan"] = {
         "steps": [
             {
-                "name": "precision-signoff",
+                "name": "base-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -1426,13 +1426,13 @@ def test_github_result_defaults_to_latest_local_reviewed_head(tmp_path: Path) ->
     pending = mark_review_step_pending(
         state,
         round_id="signoff-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
-        step_name="precision-signoff",
+        step_name="base-signoff",
         reviewed_head="head-2",
     )
     green = record_clean_decision(
-        pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-2"
+        pending, round_id="signoff-1", lane="review_base", reviewed_head="head-2"
     )
 
     github_findings = record_github_result(green, result="findings")
@@ -1458,13 +1458,13 @@ def test_github_findings_force_signoff_rerun_for_non_sticky_profile(
     pending = mark_review_step_pending(
         state,
         round_id="signoff-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="custom-signoff",
         reviewed_head="head-1",
     )
     green = record_clean_decision(
-        pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-1"
+        pending, round_id="signoff-1", lane="review_base", reviewed_head="head-1"
     )
     github_findings = record_github_result(
         green, result="findings", reviewed_head="head-1"
@@ -1514,24 +1514,24 @@ def test_github_findings_anchor_to_latest_completed_step_not_older_sticky_step(
     first_pending = mark_review_step_pending(
         state,
         round_id="early-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="early-sticky",
         reviewed_head="head-1",
     )
     queued = record_clean_decision(
-        first_pending, round_id="early-1", lane="review_t1", reviewed_head="head-1"
+        first_pending, round_id="early-1", lane="review_base", reviewed_head="head-1"
     )
     final_pending = mark_review_step_pending(
         queued,
         round_id="final-1",
-        lane="review_t1",
+        lane="review_base",
         step_index=1,
         step_name="final-signoff",
         reviewed_head="head-1",
     )
     green = record_clean_decision(
-        final_pending, round_id="final-1", lane="review_t1", reviewed_head="head-1"
+        final_pending, round_id="final-1", lane="review_base", reviewed_head="head-1"
     )
 
     github_findings = record_github_result(
@@ -1560,7 +1560,7 @@ def test_github_findings_anchor_to_latest_completed_step_not_older_sticky_step(
             "index": 0,
             "name": "early-sticky",
             "round_id": "early-1",
-            "lane": "review_t1",
+            "lane": "review_base",
             "reviewed_head": "head-1",
         }
     ]

@@ -3,7 +3,7 @@
 Stable profiles do not run discovery brawls. Discovery pools and ratings remain
 available for deliberate calibration.
 
-Arena is an opt-in evaluation overlay. Normal and deep run their configured
+Arena is an opt-in evaluation overlay. Base and deep run their configured
 Arena counts only when Arena is enabled and the count is positive. The calling
 agent grades the outputs; Review Suite never selects or promotes a winner.
 Each reporting pool uses its balanced groups once, then favors under-sampled
@@ -13,13 +13,13 @@ evenly. New candidates join the existing pool at 1500 Elo without resetting
 established ratings.
 
 The roster includes `gpt-6-sol` and `gpt-6-luna` with the supported
-low/medium/high/xhigh/max efforts. Review task assignments follow Sol and Luna; all supported Luna efforts are active, with low limited to phase reviews. `gpt-6-astra-minor` remains disabled and excluded
+low/medium/high/xhigh/max efforts. Review task assignments follow Sol and Luna; all supported Luna efforts are active, with low limited to base reviews. `gpt-6-astra-minor` remains disabled and excluded
 from the pools until the model resolves; its efforts provisionally follow Astra.
 Sol and Luna rates follow the [launch announcement](https://openai.com/index/introducing-gpt-6-sol-and-luna/):
 $2/$10 and $0.10/$0.50 per million input/output tokens respectively.
 Cached reads use 0.1x input and cache writes 1.25x input under the
 [GPT-5.6-and-later caching policy](https://developers.openai.com/api/docs/guides/prompt-caching).
-GPT-6.1 Sol uses the same effort allocation as GPT-6 Sol: phase low/medium;
+GPT-6.1 Sol uses the same effort allocation as GPT-6 Sol: base low/medium;
 PR medium/high/xhigh/max. Its [launch pricing](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
 is $2 input, $0.10 cached input, and $10 output per million tokens; cache writes
 use the policy above ($2.50 per million). It is enabled for rollout, but the
@@ -28,14 +28,14 @@ Astra Minor remains unpriced.
 Existing model defaults and rating pool IDs are unchanged.
 Pinned user `variant_ids` overrides must include the new candidates to sample them.
 
-GPT-6.1 Terra is available at low/medium/high/xhigh for phase reviews and
-medium/high/xhigh/max for PR reviews. Its [standard API rates](https://developers.openai.com/api/docs/models/gpt-6.1-terra)
+GPT-6.1 Terra is available at low/medium/high/xhigh for base reviews and
+medium/high/xhigh/max for deep reviews. Its [standard API rates](https://developers.openai.com/api/docs/models/gpt-6.1-terra)
 are $1 input, $0.05 cached input, $1.25 cache write, and $5 output per million
 tokens. Estimates use these standard short-context rates; long-context and
 speed-tier pricing can differ.
 
 DeepSeek V4.1 Flash 1017 uses separate `deepseek-v4.1-flash-1017-*` variants
-at low/high/max effort (low is phase-only). The earlier variants are disabled;
+at low/high/max effort (low is base-only). The earlier variants are disabled;
 their ratings remain in history. The [1017 update](https://api-docs.deepseek.com/updates/)
 keeps the API name and pricing unchanged, so the OpenCode route remains
 `opencode-go/deepseek-v4.1-flash`.
@@ -55,7 +55,7 @@ To opt in, add only the overrides you need to
 enabled = true
 
 [orchestrator.stable_defaults]
-normal_arena_loops = 1
+base_arena_loops = 1
 deep_arena_loops = 1
 ```
 

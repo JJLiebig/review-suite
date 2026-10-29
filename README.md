@@ -36,8 +36,8 @@ authenticated `gh` CLI and access to the GitHub `@codex review` bot.
 | Mode | Use it for | Workflow |
 | --- | --- | --- |
 | `fast` | Small, well-tested changes with limited risk | Dual signoff; no cleanup or GitHub review; at most two local rounds |
-| `normal` | Ordinary changes (default) | Optional Arena, one cleanup pass, dual signoff, then GitHub review |
-| `deep` | Security, billing, migrations, concurrency, and other critical changes | Normal signoff followed by deeper signoff, with cleanup and GitHub review |
+| `base` | Ordinary changes (default) | Optional Arena, one cleanup pass, dual signoff, then GitHub review |
+| `deep` | Security, billing, migrations, concurrency, and other critical changes | Base signoff followed by deeper signoff, with cleanup and GitHub review |
 
 Choose by the change's actual risk, including trust and data-integrity
 boundaries. [Review strategy](docs/review-strategy.md) describes the full
@@ -53,7 +53,7 @@ Ask the installed skill for a local review, or run the launcher directly:
 
 `<plugin-root>` is the installed marketplace plugin root, or
 `plugins/review-suite/` inside the installed skills CLI skill. Omit `--mode`
-for `normal`; pass `--mode fast` or `--mode deep` when appropriate. Review Suite
+for `base`; pass `--mode fast` or `--mode deep` when appropriate. Review Suite
 detects the remote default branch; `--base <ref>` overrides it.
 
 The launcher expects committed changes and a clean worktree. It prints an
@@ -101,11 +101,26 @@ For example, to override just the plan review's reasoning:
 reasoning = "high"
 ```
 
-The jobs are `plan`, `deslop`, `followup`, `normal_signoff`, and `deep_signoff`.
+The jobs are `plan`, `deslop`, `followup`, `base_signoff`, and `deep_signoff`.
 Each can override `model`, `reasoning`, and `service_tier`; omitted values
-inherit the normal or deep defaults. Review history and ratings live beside the
+inherit the base or deep defaults. Review history and ratings live beside the
 settings file. If only legacy `config.json` exists, the first run migrates its
 non-model settings and keeps the original as a backup.
+
+Existing installations must migrate the renamed settings and review history
+once before using this version. Stop review, daemon, tray, and API writers first:
+
+```powershell
+python plugins/review-suite/scripts/migrate_review_names.py --state-dir "$HOME/.codex/state/review-suite"
+python plugins/review-suite/scripts/migrate_review_names.py --state-dir "$HOME/.codex/state/review-suite" --apply
+```
+
+The first command previews changes. The second backs up changed files under
+`base-deep-backup-<timestamp>` in the state directory, writes a `manifest.json`
+with original paths, then applies changes. Add `--snapshot <path>` for each saved
+API snapshot or tray last-round file that should migrate too. Run the migration
+separately for every state directory you use, including custom `--state-dir` paths.
+The active CLI accepts `fast`, `base`, and `deep`; `normal` is no longer accepted.
 
 ## Development
 

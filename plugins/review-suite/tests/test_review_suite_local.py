@@ -144,7 +144,7 @@ def _variant(
         "model": variant_id,
         "reasoning_effort": "medium",
         "state": "active",
-        "task_classes": task_classes or ["phase_review"],
+        "task_classes": task_classes or ["base_review"],
     }
 
 
@@ -180,7 +180,7 @@ def test_write_round_compacts_finalized_storage(tmp_path: Path) -> None:
         tmp_path,
         {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "completed",
             "grading_required": False,
             "requested_prompt": "large prompt",
@@ -209,7 +209,7 @@ def test_write_round_keeps_prompt_for_blocked_reroll(tmp_path: Path) -> None:
         tmp_path,
         {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "completed",
             "grading_required": False,
             "requested_prompt": "reroll prompt",
@@ -236,7 +236,7 @@ def test_write_round_preserves_stderr_derived_classification(tmp_path: Path) -> 
         tmp_path,
         {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "completed",
             "requested_prompt": "prompt",
             "runs": [
@@ -403,14 +403,14 @@ def test_guard_no_stage_step_down_blocks_lower_tier_with_override_hint(
 ) -> None:
     monkeypatch.setattr(
         "review_suite_local.inspect_workflow_status",
-        lambda **kwargs: {"current_stage_lane": "review_t3"},
+        lambda **kwargs: {"current_stage_lane": "review_deep"},
     )
 
     with pytest.raises(
         ValueError, match="Do not invent a lower-tier final-head requirement"
     ) as exc_info:
         guard_no_stage_step_down(
-            lane="review_t1",
+            lane="review_base",
             review_cwd=tmp_path,
             base="main",
             state_dir=tmp_path / "state",
@@ -419,7 +419,7 @@ def test_guard_no_stage_step_down_blocks_lower_tier_with_override_hint(
     assert "--allow-stage-step-down" in str(exc_info.value)
 
     guard_no_stage_step_down(
-        lane="review_t3",
+        lane="review_deep",
         review_cwd=tmp_path,
         base="main",
         state_dir=tmp_path / "state",
@@ -444,13 +444,13 @@ def _operational_state(
     return {
         "generated_at": "2026-04-12T00:00:00Z",
         "task_classes": {
-            "phase_review": {
+            "base_review": {
                 "champion_variant_id": champion_ids[0] if champion_ids else None,
                 "champion_variant_ids": champion_ids,
                 "probation_variant_ids": probation_ids,
                 "cooldowns": cooling,
             },
-            "pr_review": {
+            "deep_review": {
                 "champion_variant_id": None,
                 "champion_variant_ids": [],
                 "probation_variant_ids": [],
@@ -463,8 +463,8 @@ def _operational_state(
 def _summary_with_leaderboard(*rows: dict[str, object]) -> dict[str, object]:
     return {
         "task_classes": {
-            "phase_review": {"leaderboard": list(rows)},
-            "pr_review": {"leaderboard": []},
+            "base_review": {"leaderboard": list(rows)},
+            "deep_review": {"leaderboard": []},
         }
     }
 
@@ -508,7 +508,7 @@ def _record(
 def test_build_record_from_grade_uses_explicit_ordered_groups() -> None:
     round_payload = {
         "round_id": "round-1",
-        "task_class": "phase_review",
+        "task_class": "base_review",
         "selection_mode": "true_scramble",
         "reporting_pool": True,
         "status": "completed",
@@ -628,7 +628,7 @@ def test_build_record_from_grade_uses_explicit_ordered_groups() -> None:
                             "missed_bug_loss_count",
                         )
                     }
-                    for row in summary["task_classes"]["phase_review"]["leaderboard"]
+                    for row in summary["task_classes"]["base_review"]["leaderboard"]
                 }
             )
         assert finding_results[0] == finding_results[1]
@@ -776,7 +776,7 @@ def test_compact_benchmark_record_preserves_repo_name() -> None:
     record = _record(
         recorded_at="2026-04-12T13:00:00Z",
         round_id="phase_review-esbzptu4-123456-20260412T130000Z-abcdef01",
-        task_class="phase_review",
+        task_class="base_review",
         alpha="gpt-5.4-medium",
         beta="gpt-5.5-medium",
         groups=[["gpt-5.5-medium"], ["gpt-5.4-medium"]],
@@ -803,7 +803,7 @@ def test_enrich_record_repo_names_uses_round_payload_remote_for_old_rows(
         _record(
             recorded_at="2026-04-12T13:00:00Z",
             round_id=round_id,
-            task_class="phase_review",
+            task_class="base_review",
             alpha="gpt-5.4-medium",
             beta="gpt-5.5-medium",
             groups=[["gpt-5.5-medium"], ["gpt-5.4-medium"]],
@@ -846,7 +846,7 @@ def test_enrich_record_repo_names_caches_review_cwd_resolution(
             _record(
                 recorded_at=f"2026-04-12T13:0{idx}:00Z",
                 round_id=round_id,
-                task_class="phase_review",
+                task_class="base_review",
                 alpha="gpt-5.4-medium",
                 beta="gpt-5.5-medium",
                 groups=[["gpt-5.5-medium"], ["gpt-5.4-medium"]],
@@ -1089,7 +1089,7 @@ def test_apply_capacity_cooldowns_handles_timeout_and_transport_stall(
 ) -> None:
     state_dir = tmp_path / "state"
     round_payload = {
-        "task_class": "pr_review",
+        "task_class": "deep_review",
         "runs": [
             {
                 "variant_id": "model-timeout",
@@ -1118,7 +1118,7 @@ def test_apply_capacity_cooldowns_handles_timeout_and_transport_stall(
     state = json.loads(
         (state_dir / "operational_state.json").read_text(encoding="utf-8")
     )
-    cooldowns = state["task_classes"]["pr_review"]["cooldowns"]
+    cooldowns = state["task_classes"]["deep_review"]["cooldowns"]
 
     assert [update["variant_id"] for update in updates] == [
         "model-timeout",
@@ -1134,7 +1134,7 @@ def test_apply_capacity_cooldowns_keeps_cooldown_when_same_variant_also_complete
 ) -> None:
     state_dir = tmp_path / "state"
     round_payload = {
-        "task_class": "pr_review",
+        "task_class": "deep_review",
         "runs": [
             {
                 "variant_id": "model-a",
@@ -1157,7 +1157,7 @@ def test_apply_capacity_cooldowns_keeps_cooldown_when_same_variant_also_complete
     state = json.loads(
         (state_dir / "operational_state.json").read_text(encoding="utf-8")
     )
-    cooldowns = state["task_classes"]["pr_review"]["cooldowns"]
+    cooldowns = state["task_classes"]["deep_review"]["cooldowns"]
 
     assert [update["variant_id"] for update in updates] == ["model-a"]
     assert cooldowns["model-a"]["last_reason"] == "review_transport_stalled"
@@ -1166,7 +1166,7 @@ def test_apply_capacity_cooldowns_keeps_cooldown_when_same_variant_also_complete
 def test_apply_capacity_cooldowns_cools_opencode_failures(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     round_payload = {
-        "task_class": "pr_review",
+        "task_class": "deep_review",
         "runs": [
             {
                 "variant_id": "opencode-unavailable",
@@ -1209,7 +1209,7 @@ def test_apply_capacity_cooldowns_cools_opencode_failures(tmp_path: Path) -> Non
     state = json.loads(
         (state_dir / "operational_state.json").read_text(encoding="utf-8")
     )
-    cooldowns = state["task_classes"]["pr_review"]["cooldowns"]
+    cooldowns = state["task_classes"]["deep_review"]["cooldowns"]
 
     assert [update["variant_id"] for update in updates] == [
         "opencode-unavailable",
@@ -1236,7 +1236,7 @@ def test_apply_capacity_cooldowns_escalates_after_history_expires(
     seed = {
         "generated_at": expired,
         "task_classes": {
-            "phase_review": {
+            "base_review": {
                 "cooldowns": {},
                 "cooldown_failures": {
                     "model-x": {
@@ -1246,7 +1246,7 @@ def test_apply_capacity_cooldowns_escalates_after_history_expires(
                     }
                 },
             },
-            "pr_review": {"cooldowns": {}, "cooldown_failures": {}},
+            "deep_review": {"cooldowns": {}, "cooldown_failures": {}},
         },
     }
     (state_dir / "operational_state.json").write_text(
@@ -1256,7 +1256,7 @@ def test_apply_capacity_cooldowns_escalates_after_history_expires(
     updates = _apply_capacity_cooldowns(
         state_dir=state_dir,
         round_payload={
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "runs": [
                 {
                     "variant_id": "model-x",
@@ -1271,7 +1271,7 @@ def test_apply_capacity_cooldowns_escalates_after_history_expires(
     state = json.loads(
         (state_dir / "operational_state.json").read_text(encoding="utf-8")
     )
-    task_state = state["task_classes"]["phase_review"]
+    task_state = state["task_classes"]["base_review"]
     assert task_state["cooldown_failures"]["model-x"]["failure_count"] == 3
     assert updates[0]["failure_count"] == 3
     until = datetime.fromisoformat(
@@ -1290,7 +1290,7 @@ def test_apply_capacity_cooldowns_clears_failure_history_on_success(
     seed = {
         "generated_at": expired,
         "task_classes": {
-            "phase_review": {
+            "base_review": {
                 "cooldowns": {},
                 "cooldown_failures": {
                     "model-y": {
@@ -1300,7 +1300,7 @@ def test_apply_capacity_cooldowns_clears_failure_history_on_success(
                     }
                 },
             },
-            "pr_review": {"cooldowns": {}, "cooldown_failures": {}},
+            "deep_review": {"cooldowns": {}, "cooldown_failures": {}},
         },
     }
     (state_dir / "operational_state.json").write_text(
@@ -1310,7 +1310,7 @@ def test_apply_capacity_cooldowns_clears_failure_history_on_success(
     _apply_capacity_cooldowns(
         state_dir=state_dir,
         round_payload={
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "runs": [
                 {
                     "variant_id": "model-y",
@@ -1325,7 +1325,7 @@ def test_apply_capacity_cooldowns_clears_failure_history_on_success(
     state = json.loads(
         (state_dir / "operational_state.json").read_text(encoding="utf-8")
     )
-    task_state = state["task_classes"]["phase_review"]
+    task_state = state["task_classes"]["base_review"]
     assert "model-y" not in task_state["cooldown_failures"]
 
 
@@ -1338,7 +1338,7 @@ def test_load_operational_state_seeds_cooldown_failure_history(
             {
                 "generated_at": "2000-01-01T00:00:00Z",
                 "task_classes": {
-                    "phase_review": {
+                    "base_review": {
                         "cooldowns": {
                             "model-z": {
                                 "until": "2999-01-01T00:00:00Z",
@@ -1348,7 +1348,7 @@ def test_load_operational_state_seeds_cooldown_failure_history(
                             }
                         },
                     },
-                    "pr_review": {"cooldowns": {}},
+                    "deep_review": {"cooldowns": {}},
                 },
             }
         ),
@@ -1357,7 +1357,7 @@ def test_load_operational_state_seeds_cooldown_failure_history(
 
     state = review_suite_local.load_operational_state(state_path)
 
-    failures = state["task_classes"]["phase_review"]["cooldown_failures"]
+    failures = state["task_classes"]["base_review"]["cooldown_failures"]
     assert failures["model-z"]["failure_count"] == 4
     assert failures["model-z"]["last_reason"] == "opencode_review_failed"
 
@@ -1642,7 +1642,7 @@ def test_collect_round_results_stops_transport_stalled_live_reviewer(
     result = collect_round_results(
         round_payload={
             "round_id": "round-1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "running",
             "runs": [
                 {
@@ -1713,7 +1713,7 @@ def test_collect_round_results_stops_transport_hung_after_output_as_completed(
     result = collect_round_results(
         round_payload={
             "round_id": "round-1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "running",
             "runs": [
                 {
@@ -2345,28 +2345,28 @@ def test_public_round_result_includes_public_task_name() -> None:
     result = public_round_result(
         {
             "round_id": "round-1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "completed",
             "runs": [],
         }
     )
 
-    assert result["task"] == "review_t1"
+    assert result["task"] == "review_base"
 
 
 def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None:
     roster = {
         "settings": {"elo_k_factor": 24},
         "variants": [
-            _variant("alpha-model", task_classes=["phase_review"]),
-            _variant("bravo-model", task_classes=["phase_review"]),
+            _variant("alpha-model", task_classes=["base_review"]),
+            _variant("bravo-model", task_classes=["base_review"]),
         ],
     }
     records = [
         _record(
             recorded_at="2026-04-12T13:00:00Z",
             round_id="round-valid",
-            task_class="phase_review",
+            task_class="base_review",
             alpha="alpha-model",
             beta="bravo-model",
             basis="valid_findings_vs_none",
@@ -2374,7 +2374,7 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
         _record(
             recorded_at="2026-04-12T13:01:00Z",
             round_id="round-garbage",
-            task_class="phase_review",
+            task_class="base_review",
             alpha="alpha-model",
             beta="bravo-model",
             groups=[["bravo-model"], ["alpha-model"]],
@@ -2383,7 +2383,7 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
         _record(
             recorded_at="2026-04-12T13:02:00Z",
             round_id="round-tie",
-            task_class="phase_review",
+            task_class="base_review",
             alpha="alpha-model",
             beta="bravo-model",
             groups=[["alpha-model", "bravo-model"]],
@@ -2392,7 +2392,7 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
         _record(
             recorded_at="2026-04-12T13:03:00Z",
             round_id="round-quality",
-            task_class="phase_review",
+            task_class="base_review",
             alpha="alpha-model",
             beta="bravo-model",
             groups=[["bravo-model"], ["alpha-model"]],
@@ -2401,7 +2401,7 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
         _record(
             recorded_at="2026-04-12T13:04:00Z",
             round_id="round-scope-bloat",
-            task_class="phase_review",
+            task_class="base_review",
             alpha="alpha-model",
             beta="bravo-model",
             groups=[["bravo-model"], ["alpha-model"]],
@@ -2423,7 +2423,7 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
 
     rows = {
         row["variant_id"]: row
-        for row in summary["task_classes"]["phase_review"]["leaderboard"]
+        for row in summary["task_classes"]["base_review"]["leaderboard"]
     }
     assert rows["alpha-model"]["finding_opportunity_count"] == 3
     assert rows["alpha-model"]["valid_finding_count"] == 2
@@ -2449,7 +2449,7 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
     )
     assert all(
         row["low_quality_loss_rate"] is None
-        for row in legacy["task_classes"]["phase_review"]["leaderboard"]
+        for row in legacy["task_classes"]["base_review"]["leaderboard"]
     )
 
 
@@ -2457,7 +2457,7 @@ def test_aggregate_records_isolates_latest_pool_and_projects_placements() -> Non
     roster = {
         "settings": {"elo_k_factor": 24},
         "variants": [
-            _variant(variant_id, task_classes=["phase_review"])
+            _variant(variant_id, task_classes=["base_review"])
             for variant_id in ("alpha-model", "bravo-model", "charlie-model")
         ],
     }
@@ -2465,7 +2465,7 @@ def test_aggregate_records_isolates_latest_pool_and_projects_placements() -> Non
         _record(
             recorded_at="2026-04-12T12:00:00Z",
             round_id="old-pool",
-            task_class="phase_review",
+            task_class="base_review",
             alpha="alpha-model",
             beta="bravo-model",
             rating_pool_id="pool-a",
@@ -2473,7 +2473,7 @@ def test_aggregate_records_isolates_latest_pool_and_projects_placements() -> Non
         {
             "recorded_at": "2026-04-12T13:00:00Z",
             "round_id": "new-pool",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "task_id": "task-1",
             "selection_mode": "true_scramble",
             "rating_pool_id": "pool-b",
@@ -2496,7 +2496,7 @@ def test_aggregate_records_isolates_latest_pool_and_projects_placements() -> Non
             ],
         },
         {
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "pairwise_outcome": {"winner": "bravo-model"},
             "runs": [
                 {"variant_id": "alpha-model"},
@@ -2511,7 +2511,7 @@ def test_aggregate_records_isolates_latest_pool_and_projects_placements() -> Non
         operational_state=_operational_state(
             champion_ids=[], probation_ids=[], cooling={}
         ),
-    )["task_classes"]["phase_review"]
+    )["task_classes"]["base_review"]
 
     assert task["rating_pool_id"] == "pool-b"
     rows = {row["variant_id"]: row for row in task["leaderboard"]}
@@ -2547,7 +2547,7 @@ def test_aggregate_records_isolates_latest_pool_and_projects_placements() -> Non
         operational_state=_operational_state(
             champion_ids=[], probation_ids=[], cooling={}
         ),
-    )["task_classes"]["phase_review"]
+    )["task_classes"]["base_review"]
     assert preferred["rating_pool_id"] == "pool-a"
     assert len(preferred["recent_rounds"]) == 1
 
@@ -2558,13 +2558,13 @@ def test_aggregate_records_does_not_select_ungraded_reporting_pool() -> None:
         _record(
             recorded_at="2026-04-12T12:00:00Z",
             round_id="discovery",
-            task_class="phase_review",
+            task_class="base_review",
             alpha="alpha-model",
             beta="bravo-model",
             rating_pool_id="discovery-pool",
         ),
         {
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "rating_pool_id": "arena-pool",
             "reporting_pool": True,
             "runs": [{"variant_id": "alpha-model"}, {"variant_id": "bravo-model"}],
@@ -2577,7 +2577,7 @@ def test_aggregate_records_does_not_select_ungraded_reporting_pool() -> None:
         operational_state=_operational_state(
             champion_ids=[], probation_ids=[], cooling={}
         ),
-    )["task_classes"]["phase_review"]
+    )["task_classes"]["base_review"]
 
     assert task["rating_pool_id"] == "discovery-pool"
 
@@ -2586,8 +2586,8 @@ def test_aggregate_records_ignores_ungraded_and_legacy_pair_records() -> None:
     roster = {
         "settings": {"elo_k_factor": 24},
         "variants": [
-            _variant("alpha-model", task_classes=["phase_review"]),
-            _variant("bravo-model", task_classes=["phase_review"]),
+            _variant("alpha-model", task_classes=["base_review"]),
+            _variant("bravo-model", task_classes=["base_review"]),
         ],
     }
 
@@ -2595,7 +2595,7 @@ def test_aggregate_records_ignores_ungraded_and_legacy_pair_records() -> None:
         roster=roster,
         records=[
             {
-                "task_class": "phase_review",
+                "task_class": "base_review",
                 "runs": [{"variant_id": "alpha-model"}, {"variant_id": "bravo-model"}],
             }
         ],
@@ -2606,7 +2606,7 @@ def test_aggregate_records_ignores_ungraded_and_legacy_pair_records() -> None:
 
     rows = {
         row["variant_id"]: row
-        for row in summary["task_classes"]["phase_review"]["leaderboard"]
+        for row in summary["task_classes"]["base_review"]["leaderboard"]
     }
     assert rows["alpha-model"]["sample_count"] == 0
     assert rows["alpha-model"]["elo"] == 1500.0
@@ -2616,7 +2616,7 @@ def test_aggregate_records_ignores_ungraded_and_legacy_pair_records() -> None:
     assert rows["bravo-model"]["elo"] == 1500.0
     assert rows["bravo-model"]["wtl"] == "0/0/0"
     assert rows["bravo-model"]["median_elapsed_seconds"] is None
-    assert summary["task_classes"]["phase_review"]["recent_rounds"] == []
+    assert summary["task_classes"]["base_review"]["recent_rounds"] == []
 
 
 def test_ungraded_round_exposure_records_include_pending_but_skip_graded(
@@ -2626,7 +2626,7 @@ def test_ungraded_round_exposure_records_include_pending_but_skip_graded(
         tmp_path,
         {
             "round_id": "pending-round",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "running",
             "runs": [{"variant_id": "gpt-5.5-high"}, {"variant_id": "gpt-5.4-xhigh"}],
         },
@@ -2635,7 +2635,7 @@ def test_ungraded_round_exposure_records_include_pending_but_skip_graded(
         tmp_path,
         {
             "round_id": "graded-round",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "completed",
             "graded_at": "2026-04-23T12:00:00Z",
             "runs": [{"variant_id": "gpt-5.5-low"}, {"variant_id": "gpt-5.4-medium"}],
@@ -2645,7 +2645,7 @@ def test_ungraded_round_exposure_records_include_pending_but_skip_graded(
         tmp_path,
         {
             "round_id": "dismissed-round",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "dismissed",
             "runs": [{"variant_id": "gpt-5.5-medium"}, {"variant_id": "gpt-5.4-high"}],
         },
@@ -2655,7 +2655,7 @@ def test_ungraded_round_exposure_records_include_pending_but_skip_graded(
         {
             "round_id": "rerolled-round",
             "rerolled_from_round_id": "pending-round",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "rating_pool_id": "fresh-pool",
             "status": "running",
             "runs": [{"variant_id": "gpt-5.5-high"}, {"variant_id": "gpt-5.4-xhigh"}],
@@ -2666,7 +2666,7 @@ def test_ungraded_round_exposure_records_include_pending_but_skip_graded(
 
     assert records == [
         {
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "rating_pool_id": "fresh-pool",
             "runs": [{"variant_id": "gpt-5.5-high"}, {"variant_id": "gpt-5.4-xhigh"}],
         }
@@ -2687,7 +2687,7 @@ def test_cleanup_stale_ungraded_rounds_dismisses_old_non_live_round(
         tmp_path,
         {
             "round_id": "old-running-round",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "running",
             "sampled_at": "2026-05-02T11:59:00Z",
             "runs": [
@@ -2776,7 +2776,7 @@ def test_ungraded_round_exposure_records_auto_skips_stale_rounds(
         tmp_path,
         {
             "round_id": "old-pending-round",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "sampled",
             "sampled_at": "2026-05-02T11:59:00Z",
             "runs": [{"variant_id": "gpt-5.5-high"}, {"variant_id": "gpt-5.4-xhigh"}],
@@ -2803,7 +2803,7 @@ def test_ungraded_round_exposure_records_readonly_skips_stale_without_writing(
         tmp_path,
         {
             "round_id": "old-pending-round",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "sampled",
             "sampled_at": "2026-05-02T11:59:00Z",
             "runs": [{"variant_id": "gpt-5.5-high"}, {"variant_id": "gpt-5.4-xhigh"}],
@@ -2831,7 +2831,7 @@ def test_ungraded_round_exposure_records_excludes_stale_when_cleanup_write_fails
         tmp_path,
         {
             "round_id": "old-pending-round",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "sampled",
             "sampled_at": "2026-05-02T11:59:00Z",
             "runs": [{"variant_id": "gpt-5.5-high"}, {"variant_id": "gpt-5.4-xhigh"}],
@@ -2858,7 +2858,7 @@ def test_cleanup_stale_ungraded_rounds_keeps_live_round(
         tmp_path,
         {
             "round_id": "old-live-round",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "running",
             "sampled_at": "2026-05-02T11:59:00Z",
             "runs": [{"variant_id": "gpt-5.5-high", "pid": 12345}],
@@ -2874,16 +2874,16 @@ def test_cleanup_stale_ungraded_rounds_keeps_live_round(
 
 def test_select_pair_explores_least_exposed_under_sampled_variant_first() -> None:
     roster = _roster(
-        _variant("gpt-5.5-low", task_classes=["pr_review"]),
-        _variant("gpt-5.5-medium", task_classes=["pr_review"]),
-        _variant("gpt-5.5-high", task_classes=["pr_review"]),
-        _variant("established", task_classes=["pr_review"]),
+        _variant("gpt-5.5-low", task_classes=["deep_review"]),
+        _variant("gpt-5.5-medium", task_classes=["deep_review"]),
+        _variant("gpt-5.5-high", task_classes=["deep_review"]),
+        _variant("established", task_classes=["deep_review"]),
     )
     records = [
         _record(
             recorded_at=f"2026-04-23T12:0{idx}:00Z",
             round_id=f"round-{idx}",
-            task_class="pr_review",
+            task_class="deep_review",
             alpha="gpt-5.5-high",
             beta="established",
         )
@@ -2896,7 +2896,7 @@ def test_select_pair_explores_least_exposed_under_sampled_variant_first() -> Non
             champion_ids=[], probation_ids=[], cooling={}
         ),
         records=records,
-        task_class="pr_review",
+        task_class="deep_review",
         review_cwd=None,
         seed=4,
     )
@@ -2908,9 +2908,9 @@ def test_configured_selection_uses_only_its_fresh_pool_schedule() -> None:
     roster = _roster(*(_variant(name) for name in "abcde"))
     variant_groups = [["a", "b", "c", "d"], ["b", "c", "d", "e"]]
     records = [
-        {"task_class": "phase_review", "rating_pool_id": "legacy", "runs": []},
+        {"task_class": "base_review", "rating_pool_id": "legacy", "runs": []},
         {
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "rating_pool_id": "fresh-pool",
             "runs": [],
         },
@@ -2922,7 +2922,7 @@ def test_configured_selection_uses_only_its_fresh_pool_schedule() -> None:
             champion_ids=[], probation_ids=[], cooling={}
         ),
         records=records,
-        task_class="phase_review",
+        task_class="base_review",
         review_cwd=None,
         seed=None,
         rating_pool_id="fresh-pool",
@@ -2940,7 +2940,7 @@ def test_configured_selection_evenly_bootstraps_drop_in_candidates() -> None:
     roster = _roster(*(_variant(name) for name in "abcdefghi"))
     records = [
         {
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "rating_pool_id": "arena-pool",
             "runs": [{"variant_id": name} for name in "abcd"],
         }
@@ -2955,7 +2955,7 @@ def test_configured_selection_evenly_bootstraps_drop_in_candidates() -> None:
                 champion_ids=[], probation_ids=[], cooling={}
             ),
             records=records,
-            task_class="phase_review",
+            task_class="base_review",
             review_cwd=None,
             seed=None,
             rating_pool_id="arena-pool",
@@ -2975,7 +2975,7 @@ def test_configured_selection_evenly_bootstraps_drop_in_candidates() -> None:
 
 @pytest.mark.parametrize(
     "pool_name,task_class",
-    [("arena_phase", "phase_review"), ("arena_deep", "pr_review")],
+    [("arena_base", "base_review"), ("arena_deep", "deep_review")],
 )
 def test_shipped_pools_can_select_after_the_initial_schedule(
     pool_name: str, task_class: str
@@ -3004,7 +3004,7 @@ def test_shipped_pools_can_select_after_the_initial_schedule(
     assert payload["selection_pairing"] == "configured_balanced"
     efforts = (
         ("low", "medium", "high", "xhigh")
-        if task_class == "phase_review"
+        if task_class == "base_review"
         else ("medium", "high", "xhigh", "max")
     )
     terra_ids = {f"gpt-6.1-terra-{effort}" for effort in efforts}
@@ -3034,12 +3034,12 @@ def test_balanced_configured_selection_preserves_reviewer_slot_limit() -> None:
             ),
             records=[
                 {
-                    "task_class": "phase_review",
+                    "task_class": "base_review",
                     "rating_pool_id": "arena-pool",
                     "runs": [{"variant_id": name} for name in "abcdefg"],
                 }
             ],
-            task_class="phase_review",
+            task_class="base_review",
             review_cwd=None,
             seed=None,
             rating_pool_id="arena-pool",
@@ -3079,7 +3079,7 @@ def test_select_pair_uses_scramble_even_when_champion_metadata_exists(
         roster=roster,
         operational_state=operational_state,
         records=[],
-        task_class="phase_review",
+        task_class="base_review",
         review_cwd=None,
         seed=7,
     )
@@ -3118,7 +3118,7 @@ def test_select_pair_does_not_require_acting_champion_after_cleanup(
         roster=roster,
         operational_state=operational_state,
         records=[],
-        task_class="phase_review",
+        task_class="base_review",
         review_cwd=None,
         seed=7,
     )
@@ -3139,7 +3139,7 @@ def test_select_pair_true_scramble_rolls_both_slots_uniformly() -> None:
         _record(
             recorded_at=f"2026-04-23T12:{idx:02d}:00Z",
             round_id=f"round-{idx}",
-            task_class="phase_review",
+            task_class="base_review",
             alpha="established-a",
             beta="established-b",
             groups=[["established-a", "established-b"]],
@@ -3154,7 +3154,7 @@ def test_select_pair_true_scramble_rolls_both_slots_uniformly() -> None:
             champion_ids=[], probation_ids=[], cooling={}
         ),
         records=records,
-        task_class="phase_review",
+        task_class="base_review",
         review_cwd=None,
         seed=2,
     )
@@ -3189,7 +3189,7 @@ def test_select_pair_slight_bias_rolls_both_slots_from_same_elo_weighted_pool(
             champion_ids=[], probation_ids=[], cooling={}
         ),
         records=[],
-        task_class="phase_review",
+        task_class="base_review",
         review_cwd=None,
         seed=11,
     )
@@ -3211,7 +3211,7 @@ def test_select_pair_rejects_unknown_selection_mode() -> None:
                 champion_ids=[], probation_ids=[], cooling={}
             ),
             records=[],
-            task_class="phase_review",
+            task_class="base_review",
             review_cwd=None,
             seed=1,
         )
@@ -3247,7 +3247,7 @@ def test_reroll_candidates_fall_back_to_acting_champion_pool(
         operational_state=operational_state,
         records=[],
         round_payload={
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "selection_mode": "champion",
             "selection_pairing": "champion_vs_probation",
             "selection_champion_variant_ids": ["champion"],
@@ -3292,7 +3292,7 @@ def test_build_reroll_slot_payload_pins_top_acting_champion(
         round_payload={
             "round_id": "round-1",
             "status": "completed",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "selection_mode": "champion",
             "selection_pairing": "champion_vs_probation",
             "selection_champion_variant_ids": ["champion"],
@@ -3357,7 +3357,7 @@ def test_configured_reroll_preserves_four_model_cohort_without_cooldown(
         round_payload={
             "round_id": "round-1",
             "status": "completed",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "selection_mode": "configured",
             "selection_pairing": "configured_schedule",
             "rating_pool_id": "fresh-pool",
@@ -3405,7 +3405,7 @@ def test_configured_reroll_replaces_cooling_variant(block_reason: str) -> None:
         round_payload={
             "round_id": "round-1",
             "status": "completed",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "selection_mode": "configured",
             "selection_pairing": "configured_schedule",
             "rating_pool_id": "fresh-pool",
@@ -3457,7 +3457,7 @@ def test_configured_reroll_replaces_unsupported_model() -> None:
         round_payload={
             "round_id": "round-1",
             "status": "completed",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "selection_mode": "configured",
             "selection_pairing": "configured_schedule",
             "rating_pool_id": "fresh-pool",
@@ -3513,7 +3513,7 @@ def test_unconfigured_reroll_replaces_unsupported_model_family() -> None:
         round_payload={
             "round_id": "round-1",
             "status": "completed",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "selection_mode": "true_scramble",
             "selection_pairing": "true_scramble",
             "runs": [
@@ -3562,10 +3562,10 @@ def test_write_reports_includes_recent_match_history_and_model_header(
     rounds_dir.mkdir(parents=True)
     records = []
     for idx in range(11):
-        task_class = "phase_review" if idx % 2 == 0 else "pr_review"
-        alpha = "gpt-5.5-medium" if task_class == "phase_review" else "gpt-5.4-low"
+        task_class = "base_review" if idx % 2 == 0 else "deep_review"
+        alpha = "gpt-5.5-medium" if task_class == "base_review" else "gpt-5.4-low"
         beta = (
-            "gpt-5.3-codex-medium" if task_class == "phase_review" else "gpt-5.5-high"
+            "gpt-5.3-codex-medium" if task_class == "base_review" else "gpt-5.5-high"
         )
         tied = idx % 3 == 0
         round_id = f"{task_class}-round-{idx}"
@@ -3574,6 +3574,9 @@ def test_write_reports_includes_recent_match_history_and_model_header(
                 recorded_at=f"2026-04-12T13:{idx:02d}:00Z",
                 round_id=round_id,
                 task_class=task_class,
+                rating_pool_id=(
+                    "phase_review-v1" if task_class == "base_review" else "pr_review-v1"
+                ),
                 alpha=alpha,
                 beta=beta,
                 groups=[[alpha, beta]] if tied else [[alpha], [beta]],
@@ -3592,16 +3595,16 @@ def test_write_reports_includes_recent_match_history_and_model_header(
     roster = {
         "settings": {"elo_k_factor": 24},
         "variants": [
-            _variant("gpt-5.5-medium", task_classes=["phase_review"]),
-            _variant("gpt-5.3-codex-medium", task_classes=["phase_review"]),
-            _variant("gpt-5.4-low", task_classes=["pr_review"]),
-            _variant("gpt-5.5-high", task_classes=["pr_review"]),
+            _variant("gpt-5.5-medium", task_classes=["base_review"]),
+            _variant("gpt-5.3-codex-medium", task_classes=["base_review"]),
+            _variant("gpt-5.4-low", task_classes=["deep_review"]),
+            _variant("gpt-5.5-high", task_classes=["deep_review"]),
         ],
     }
     operational_state = {
         "generated_at": "2026-04-12T00:00:00Z",
         "task_classes": {
-            "phase_review": {
+            "base_review": {
                 "mode": "champion",
                 "champion_variant_id": "gpt-5.5-medium",
                 "champion_variant_ids": ["gpt-5.5-medium"],
@@ -3609,7 +3612,7 @@ def test_write_reports_includes_recent_match_history_and_model_header(
                 "stable_variant_ids": [],
                 "cooldowns": {},
             },
-            "pr_review": {
+            "deep_review": {
                 "mode": "scramble",
                 "champion_variant_id": None,
                 "champion_variant_ids": [],
@@ -3633,13 +3636,13 @@ def test_write_reports_includes_recent_match_history_and_model_header(
     )
     assert "## round history" in leaderboard
     assert "| review | repo | rating pool | placements and Elo |" in leaderboard
-    assert "## review_t1" in leaderboard
-    assert "## review_t3" in leaderboard
-    assert "| review_t1 | repo-10 | phase_review-v1 | 1. gpt-5.5-medium" in leaderboard
+    assert "## review_base" in leaderboard
+    assert "## review_deep" in leaderboard
+    assert "| review_base | repo-10 | phase_review-v1 | 1. gpt-5.5-medium" in leaderboard
     repo_9_line = next(
         line
         for line in leaderboard.splitlines()
-        if line.startswith("| review_t3 | repo-9 |")
+        if line.startswith("| review_deep | repo-9 |")
     )
     assert "1. gpt-5.4-low" in repo_9_line
     assert " = gpt-5.5-high" in repo_9_line
@@ -3650,14 +3653,14 @@ def test_write_reports_includes_independent_leaderboards_for_each_rating_pool(
     tmp_path: Path,
 ) -> None:
     roster = _roster(
-        _variant("alpha-model", task_classes=["phase_review"]),
-        _variant("bravo-model", task_classes=["phase_review"]),
-        _variant("unused-model", task_classes=["phase_review"]),
+        _variant("alpha-model", task_classes=["base_review"]),
+        _variant("bravo-model", task_classes=["base_review"]),
+        _variant("unused-model", task_classes=["base_review"]),
     )
     discovery = _record(
         recorded_at="2026-04-12T12:00:00Z",
         round_id="discovery-round",
-        task_class="phase_review",
+        task_class="base_review",
         alpha="alpha-model",
         beta="bravo-model",
         rating_pool_id="discovery-pool",
@@ -3665,7 +3668,7 @@ def test_write_reports_includes_independent_leaderboards_for_each_rating_pool(
     arena = _record(
         recorded_at="2026-04-12T13:00:00Z",
         round_id="arena-round",
-        task_class="phase_review",
+        task_class="base_review",
         alpha="alpha-model",
         beta="bravo-model",
         groups=[["bravo-model"], ["alpha-model"]],
@@ -3680,7 +3683,7 @@ def test_write_reports_includes_independent_leaderboards_for_each_rating_pool(
             champion_ids=[], probation_ids=[], cooling={}
         ),
     )
-    task = summary["task_classes"]["phase_review"]
+    task = summary["task_classes"]["base_review"]
     assert task["rating_pool_id"] == "arena-pool"
     assert [pool["rating_pool_id"] for pool in task["rating_pools"]] == [
         "arena-pool",
@@ -3694,7 +3697,7 @@ def test_write_reports_includes_independent_leaderboards_for_each_rating_pool(
         "### discovery-pool", maxsplit=1
     )[0]
     discovery_section = leaderboard.split("### discovery-pool", maxsplit=1)[1].split(
-        "## review_t3", maxsplit=1
+        "## review_deep", maxsplit=1
     )[0]
     assert "| bravo-model | 1512.0 | 1 | 1/0/0 |" in arena_section
     assert "| alpha-model | 1512.0 | 1 | 1/0/0 |" in discovery_section
@@ -3709,7 +3712,7 @@ def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) ->
     record = _record(
         recorded_at="2026-04-12T13:00:00Z",
         round_id=round_id,
-        task_class="phase_review",
+        task_class="base_review",
         alpha="gpt-5.5-medium",
         beta="gpt-5.3-codex-medium",
     )
@@ -3723,14 +3726,14 @@ def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) ->
     roster = {
         "settings": {"elo_k_factor": 10},
         "variants": [
-            _variant("gpt-5.5-medium", task_classes=["phase_review"]),
-            _variant("gpt-5.3-codex-medium", task_classes=["phase_review"]),
+            _variant("gpt-5.5-medium", task_classes=["base_review"]),
+            _variant("gpt-5.3-codex-medium", task_classes=["base_review"]),
         ],
     }
     operational_state = {
         "generated_at": "2026-04-12T00:00:00Z",
         "task_classes": {
-            "phase_review": {
+            "base_review": {
                 "mode": "champion",
                 "champion_variant_id": "gpt-5.5-medium",
                 "champion_variant_ids": ["gpt-5.5-medium"],
@@ -3738,7 +3741,7 @@ def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) ->
                 "stable_variant_ids": [],
                 "cooldowns": {},
             },
-            "pr_review": {
+            "deep_review": {
                 "mode": "scramble",
                 "champion_variant_id": None,
                 "champion_variant_ids": [],
@@ -3757,6 +3760,6 @@ def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) ->
     leaderboard = (state_dir / "leaderboard.md").read_text(encoding="utf-8")
     escaped_pool = "pool\\|v1 next &lt;!-- &amp; --&gt;"
     assert f"- Rating pool: {escaped_pool}" in leaderboard
-    assert f"| review_t1 | repo-k | {escaped_pool} |" in leaderboard
+    assert f"| review_base | repo-k | {escaped_pool} |" in leaderboard
     assert "gpt-5.5-medium 1500.0 -> 1505.0 (+5.0)" in leaderboard
     assert "gpt-5.3-codex-medium 1500.0 -> 1495.0 (-5.0)" in leaderboard

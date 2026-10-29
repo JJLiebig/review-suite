@@ -209,7 +209,7 @@ def test_review_state_status_json_emits_sanitized_running_review(
         {
             "public_id": "rvw_running",
             "stage": "decision-pending",
-            "mode": {"requested": "normal", "effective": "normal"},
+            "mode": {"requested": "base", "effective": "base"},
             "identity": {
                 "cwd": str(review_state.normalize_review_cwd_value(repo)),
                 "base": "main",
@@ -217,7 +217,7 @@ def test_review_state_status_json_emits_sanitized_running_review(
             },
             "pending_action": {
                 "kind": "decision",
-                "lane": "review_t1",
+                "lane": "review_base",
                 "round_id": "round-private",
                 "step": "broad-discovery",
                 "step_index": 0,
@@ -249,7 +249,7 @@ def test_review_state_status_json_emits_sanitized_running_review(
         "branch": "feature/json",
         "done": False,
         "head": "head-1",
-        "mode": "normal",
+        "mode": "base",
         "next_action": "continue",
         "progress": "review 1/1 broad-discovery",
         "review": "rvw_running",
@@ -290,7 +290,7 @@ def test_status_json_reports_recorded_round_history_without_content(
         "rounds": [
             {
                 "round_id": "r1",
-                "lane": "review_t1",
+                "lane": "review_base",
                 "status": "decided",
                 "profile_step": {"index": 0, "name": "discovery"},
             },
@@ -310,14 +310,14 @@ def test_status_json_reports_recorded_round_history_without_content(
             },
             {
                 "round_id": "r3",
-                "lane": "review_t1",
+                "lane": "review_base",
                 "status": "decision-pending",
                 "review_blocked": True,
                 "profile_step": {"index": 1, "name": "signoff"},
             },
             {
                 "round_id": "r4",
-                "lane": "review_t1",
+                "lane": "review_base",
                 "status": "running",
                 "profile_step": {"index": 1, "name": "signoff"},
             },
@@ -446,7 +446,7 @@ def test_status_json_clean_review_bounds_history_and_keeps_original_start(
         "rounds": [
             {
                 "round_id": f"r{number}",
-                "lane": "review_t1",
+                "lane": "review_base",
                 "status": "decided",
                 "command": "clean",
                 "profile_step": {"index": 0, "name": "signoff"},
@@ -641,7 +641,7 @@ def test_review_state_status_surfaces_orchestrator_progress(
         {
             "public_id": "rvw_progress",
             "stage": "decision-pending",
-            "mode": {"requested": "normal", "effective": "normal"},
+            "mode": {"requested": "base", "effective": "base"},
             "identity": {
                 "cwd": str(review_state.normalize_review_cwd_value(repo)),
                 "base": "main",
@@ -649,7 +649,7 @@ def test_review_state_status_surfaces_orchestrator_progress(
             },
             "pending_action": {
                 "kind": "decision",
-                "lane": "review_t1",
+                "lane": "review_base",
                 "round_id": "round-progress",
                 "step": "broad-discovery",
                 "step_index": 1,
@@ -658,7 +658,7 @@ def test_review_state_status_surfaces_orchestrator_progress(
                 "steps": [
                     {"name": "deslop", "kind": "deslop"},
                     {"name": "broad-discovery", "kind": "review"},
-                    {"name": "precision-signoff", "kind": "review"},
+                    {"name": "base-signoff", "kind": "review"},
                 ],
             },
         },
@@ -705,7 +705,7 @@ def test_review_state_status_surfaces_orchestrator_progress(
     assert "--state-dir" not in str(action["choices"]["findings"])
     assert "--state-dir" not in str(emitted[0]["Action"]["restart"]["cmd"])
     assert str(state_dir.resolve(strict=False)) not in str(action["choices"]["clean"])
-    assert "review_t1.py" not in str(emitted[0]["Action"])
+    assert "review_base.py" not in str(emitted[0]["Action"])
 
 
 def test_review_state_status_keeps_persisted_classified_blocked(
@@ -722,7 +722,7 @@ def test_review_state_status_keeps_persisted_classified_blocked(
         {
             "public_id": "rvw_done",
             "stage": "review-green",
-            "mode": {"requested": "normal", "effective": "normal"},
+            "mode": {"requested": "base", "effective": "base"},
             "identity": {
                 "cwd": str(review_state.normalize_review_cwd_value(repo)),
                 "base": "main",
@@ -777,7 +777,7 @@ def test_review_state_status_keeps_patch_equivalent_base_drift_done(
         {
             "public_id": "rvw_done",
             "stage": "review-green",
-            "mode": {"requested": "normal", "effective": "normal"},
+            "mode": {"requested": "base", "effective": "base"},
             "identity": {
                 "cwd": str(review_state.normalize_review_cwd_value(repo)),
                 "base": "main",
@@ -856,12 +856,12 @@ def test_review_state_status_uses_bare_id_for_structured_verdict(
             "pending_action": {
                 "kind": "decision",
                 "round_id": "round-1",
-                "lane": "review_t1",
+                "lane": "review_base",
             },
             "rounds": [
                 {
                     "round_id": "round-1",
-                    "lane": "review_t1",
+                    "lane": "review_base",
                     "review_status": "completed",
                     "round_state_dir": str(round_state_dir),
                     "runs": [
@@ -934,13 +934,13 @@ def test_review_state_status_surfaces_grade_before_structured_verdict(
             "pending_action": {
                 "kind": "decision",
                 "round_id": "arena-round-1",
-                "lane": "review_t1",
+                "lane": "review_base",
             },
             "identity": {"branch": "feature/arena"},
             "rounds": [
                 {
                     "round_id": "arena-round-1",
-                    "lane": "review_t1",
+                    "lane": "review_base",
                     "review_status": "completed",
                     "status": "completed",
                     "grading_required": True,
@@ -1029,7 +1029,7 @@ def test_orchestrator_action_suppresses_stale_terminal_github_result(
     action = review_state._orchestrator_action(
         {
             "stage": "review-green",
-            "mode": {"effective": "normal"},
+            "mode": {"effective": "base"},
             "identity": {"head": "old-head"},
             "review_heads": {
                 "last_reviewed_head": "old-head",
@@ -1052,7 +1052,7 @@ def test_orchestrator_action_uses_clean_followup_head_for_freshness(
     action = review_state._orchestrator_action(
         {
             "stage": "review-green",
-            "mode": {"effective": "normal"},
+            "mode": {"effective": "base"},
             "review_heads": {
                 "last_reviewed_head": "old-head",
                 "last_followup_head": "fixed-head",
@@ -1098,7 +1098,7 @@ def test_review_state_status_ignores_stale_green_orchestrator_cycle(
         lambda **kwargs: {
             "recommendation": "coherence-review",
             "reason": "diff_churn_exceeded",
-            "recommended_lane": "review_t1",
+            "recommended_lane": "review_base",
             "branch": "feature/progress",
             "head": "new-head",
         },
@@ -1120,8 +1120,8 @@ def test_review_state_status_ignores_stale_green_orchestrator_cycle(
     assert emitted[0]["recommendation"] == "coherence-review"
     assert emitted[0]["reason"] == "diff_churn_exceeded"
     assert "review.py" in str(emitted[0]["Action"]["cmd"])
-    assert "--mode normal" in str(emitted[0]["Action"]["cmd"])
-    assert "review_t1.py" not in str(emitted[0]["Action"])
+    assert "--mode base" in str(emitted[0]["Action"]["cmd"])
+    assert "review_base.py" not in str(emitted[0]["Action"])
 
 
 def test_review_state_status_rejects_windows_wsl_unc_before_git(
@@ -1179,7 +1179,7 @@ def test_inspect_workflow_status_warns_after_six_same_tier_runs_without_counting
         record_review_anchor(
             state_dir=state_dir,
             review_cwd=repo,
-            lane="review_t3",
+            lane="review_deep",
             base="main",
             reviewed_head=reviewed_head,
             review_scope={
@@ -1204,7 +1204,7 @@ def test_inspect_workflow_status_warns_after_six_same_tier_runs_without_counting
 
     assert payload["recommendation"] == "none"
     assert payload["convergence"]["status"] == "caution"
-    assert payload["convergence"]["tier"] == "review_t3"
+    assert payload["convergence"]["tier"] == "review_deep"
     assert payload["convergence"]["same_tier_true_run_count"] == 6
     assert "not review-followup" in payload["convergence"]["note"]
     assert "converging and patch-sized" in payload["convergence"]["instruction"]
@@ -1225,7 +1225,7 @@ def test_inspect_workflow_status_high_pressure_after_ten_same_tier_runs(
         record_review_anchor(
             state_dir=state_dir,
             review_cwd=repo,
-            lane="review_t3",
+            lane="review_deep",
             base="main",
             reviewed_head=reviewed_head,
             review_scope={
@@ -1294,7 +1294,7 @@ def test_record_review_anchor_compacts_tool_only_state(tmp_path: Path) -> None:
 
 def test_latest_base_review_context_anchor_matches_branch_base_metadata() -> None:
     anchor = {
-        "lane": "review_t3",
+        "lane": "review_deep",
         "review_scope": {
             "base": "origin/main",
             "branch_base": "main",
@@ -1318,7 +1318,7 @@ def test_inspect_workflow_status_recommends_followup_for_small_delta(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t1",
+        lane="review_base",
         base="main",
         reviewed_head=reviewed_head,
     )
@@ -1346,7 +1346,7 @@ def test_inspect_workflow_status_recommends_coherence_for_large_delta(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
     )
@@ -1430,7 +1430,7 @@ def test_inspect_workflow_status_escalates_after_too_many_followups_since_full_c
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=checkpoint_head,
         review_scope={
@@ -1470,7 +1470,7 @@ def test_inspect_workflow_status_escalates_after_too_many_followups_since_full_c
     assert payload["reason"] == "followup_cycle_limit_exceeded"
     assert payload["commits_since_anchor"] == 1
     assert payload["followup_anchor_count_since_full_review"] == 3
-    assert payload["last_full_review_lane"] == "review_t3"
+    assert payload["last_full_review_lane"] == "review_deep"
 
 
 def test_inspect_workflow_status_github_review_resets_followup_cycle_pressure(
@@ -1486,7 +1486,7 @@ def test_inspect_workflow_status_github_review_resets_followup_cycle_pressure(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=checkpoint_head,
         review_scope={
@@ -1550,7 +1550,7 @@ def test_inspect_workflow_status_recommends_full_review_when_anchor_is_not_ances
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={"base": "main", "reviewed_head": reviewed_head},
@@ -1580,7 +1580,7 @@ def test_inspect_workflow_status_accepts_non_overlapping_equivalent_merge_base_d
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={
@@ -1618,7 +1618,7 @@ def test_inspect_workflow_status_recommends_full_review_when_merge_base_drift_ov
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={
@@ -1657,7 +1657,7 @@ def test_inspect_workflow_status_uses_latest_base_review_context_after_followup(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t1",
+        lane="review_base",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={
@@ -1702,7 +1702,7 @@ def test_commit_only_review_anchor_does_not_advance_branch_review_state(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={"base": "main", "reviewed_head": reviewed_head},
@@ -1712,7 +1712,7 @@ def test_commit_only_review_anchor_does_not_advance_branch_review_state(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t1",
+        lane="review_base",
         base="main",
         review_scope={"commit": initial_head},
     )
@@ -1738,7 +1738,7 @@ def test_inspect_workflow_status_falls_back_to_older_valid_branch_anchor(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={"base": "main", "reviewed_head": reviewed_head},
@@ -1750,7 +1750,7 @@ def test_inspect_workflow_status_falls_back_to_older_valid_branch_anchor(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t1",
+        lane="review_base",
         base="main",
         reviewed_head=unrelated_reviewed_head,
         review_scope={"commit": unrelated_reviewed_head},
@@ -1776,7 +1776,7 @@ def test_commit_only_review_anchor_overrides_older_branch_anchor_when_it_is_clos
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={"base": "main", "reviewed_head": reviewed_head},
@@ -1785,7 +1785,7 @@ def test_commit_only_review_anchor_overrides_older_branch_anchor_when_it_is_clos
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t1",
+        lane="review_base",
         base="main",
         review_scope={"commit": focused_head},
     )
@@ -1799,7 +1799,7 @@ def test_commit_only_review_anchor_overrides_older_branch_anchor_when_it_is_clos
 
     assert payload["recommendation"] == "review-followup"
     assert payload["last_reviewed_head"] == focused_head
-    assert payload["last_reviewed_lane"] == "review_t1"
+    assert payload["last_reviewed_lane"] == "review_base"
 
 
 def test_commit_only_review_anchor_bootstraps_when_no_branch_anchor_exists(
@@ -1813,7 +1813,7 @@ def test_commit_only_review_anchor_bootstraps_when_no_branch_anchor_exists(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t1",
+        lane="review_base",
         base="main",
         review_scope={"commit": reviewed_head},
     )
@@ -1840,7 +1840,7 @@ def test_inspect_workflow_status_recommends_followup_for_dirty_same_head(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={"base": "main", "reviewed_head": reviewed_head},
@@ -1872,7 +1872,7 @@ def test_inspect_workflow_status_ignores_dirty_paths_outside_branch_diff_on_same
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={
@@ -1908,7 +1908,7 @@ def test_inspect_workflow_status_keeps_quoted_dirty_branch_paths_related(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={
@@ -1940,7 +1940,7 @@ def test_inspect_workflow_status_recommends_full_review_when_merge_base_is_unres
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="missing-base",
         reviewed_head=reviewed_head,
         review_scope={
@@ -1972,7 +1972,7 @@ def test_inspect_workflow_status_honors_requested_base_over_stored_base(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={
@@ -2009,7 +2009,7 @@ def test_inspect_workflow_status_uses_effective_base_when_requested_base_matches
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="origin/main",
         reviewed_head=reviewed_head,
         review_scope={
@@ -2105,7 +2105,7 @@ def test_inspect_workflow_status_preserves_detached_head_state_after_new_commit(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={"base": "main", "reviewed_head": reviewed_head},
@@ -2136,7 +2136,7 @@ def test_inspect_workflow_status_does_not_reuse_unrelated_detached_head_state(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=detached_reviewed_head,
         review_scope={"base": "main", "reviewed_head": detached_reviewed_head},
@@ -2178,7 +2178,7 @@ def test_record_review_anchor_uses_branch_scoped_lock(
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
-        lane="review_t3",
+        lane="review_deep",
         base="main",
         reviewed_head=reviewed_head,
         review_scope={"base": "main", "reviewed_head": reviewed_head},
@@ -2211,7 +2211,7 @@ def test_review_state_status_does_not_route_coherence_to_review_deslop(
     assert exit_code == 0
     assert "lane" not in emitted[0]["Action"]
     assert "review.py" in str(emitted[0]["Action"]["cmd"])
-    assert "--mode normal" in str(emitted[0]["Action"]["cmd"])
+    assert "--mode base" in str(emitted[0]["Action"]["cmd"])
     assert "review-deslop" not in str(emitted[0]["Action"])
 
 
@@ -2228,7 +2228,7 @@ def test_review_state_status_routes_stage_full_review_lane(
         lambda **kwargs: {
             "status": "ok",
             "recommendation": "coherence-review",
-            "recommended_lane": "review_t3",
+            "recommended_lane": "review_deep",
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
@@ -2243,7 +2243,7 @@ def test_review_state_status_routes_stage_full_review_lane(
     assert "lane" not in emitted[0]["Action"]
     assert "review.py" in str(emitted[0]["Action"]["cmd"])
     assert "--mode deep" in str(emitted[0]["Action"]["cmd"])
-    assert "review_t3.py" not in str(emitted[0]["Action"])
+    assert "review_deep.py" not in str(emitted[0]["Action"])
     assert "review-deslop" not in str(emitted[0]["Action"])
 
 

@@ -43,8 +43,8 @@ from review_suite_local import (
     PUBLIC_REVIEWER_LABELS,
     aggregate_records,
     append_record_if_new,
-    build_phase_instructions,
-    build_pr_instructions,
+    build_base_instructions,
+    build_deep_instructions,
     build_local_review_request,
     build_record_from_grade,
     build_reroll_slot_payload,
@@ -108,8 +108,8 @@ from review_state_prune import prune_review_state
 
 
 PUBLIC_ARENA_TASK_CLASS_ALIASES = {
-    "review_t1": "phase_review",
-    "review_t3": "pr_review",
+    "review_base": "base_review",
+    "review_deep": "deep_review",
 }
 
 
@@ -267,7 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     show_last = sub.add_parser("show-last", aliases=["show_last"])
     show_last.add_argument("--cd")
-    show_last.add_argument("--task", choices=["review_t1", "review_t3"])
+    show_last.add_argument("--task", choices=["review_base", "review_deep"])
     show_last.add_argument("--state-dir", default=str(default_state_dir()))
     show_last.add_argument("--json", action="store_true")
 
@@ -941,7 +941,7 @@ def _orchestrator_review_state_dir(state_dir: Path) -> Path:
 def _orchestrator_roster_from_round(payload: dict[str, object]) -> dict[str, object]:
     variants: dict[str, dict[str, object]] = {}
     task_class = (
-        str(payload.get("task_class") or "phase_review").strip() or "phase_review"
+        str(payload.get("task_class") or "base_review").strip() or "base_review"
     )
     for run in list(payload.get("runs") or []):
         if not isinstance(run, dict):
@@ -1002,6 +1002,7 @@ def _completed_orchestrator_review_result(
     return {
         "round_id": str(completed.get("round_id") or ""),
         "lane": lane,
+        "task_class": completed.get("task_class"),
         "kind": "review",
         "status": result.get("status"),
         "blocked": bool(result.get("blocked")),
@@ -1029,17 +1030,6 @@ def _orchestrator_review_slots(count: int) -> list[str]:
     ]
 
 
-def _orchestrator_phase_review_request(
-    *, review_cwd: Path, base: str, custom_instructions: str | None = None
-):
-    return _orchestrator_review_request(
-        review_cwd=review_cwd,
-        base=base,
-        task_class="phase_review",
-        custom_instructions=custom_instructions,
-    )
-
-
 def _orchestrator_review_request(
     *,
     review_cwd: Path,
@@ -1048,8 +1038,8 @@ def _orchestrator_review_request(
     custom_instructions: str | None = None,
 ):
     instruction_builders = {
-        "phase_review": build_phase_instructions,
-        "pr_review": build_pr_instructions,
+        "base_review": build_base_instructions,
+        "deep_review": build_deep_instructions,
     }
     instruction_builder = instruction_builders.get(task_class)
     if instruction_builder is None:
@@ -1071,6 +1061,7 @@ def _orchestrator_review_request(
 def run_orchestrator_review_step(
     *,
     lane: str,
+    task_class: str,
     step_name: str,
     reviewer_count: int,
     model: str,
@@ -1094,13 +1085,15 @@ def run_orchestrator_review_step(
     base = str(review_scope.get("base") or "").strip()
     if not base:
         raise ValueError("review_scope.base is required")
-    request = _orchestrator_phase_review_request(
+    request = _orchestrator_review_request(
+        task_class=task_class,
         review_cwd=review_cwd,
         base=base,
         custom_instructions=custom_instructions,
     )
     return _run_orchestrator_manual_review_step(
         lane=lane,
+        task_class=task_class,
         step_name=step_name,
         reviewer_count=reviewer_count,
         model=model,
@@ -1257,6 +1250,7 @@ def run_orchestrator_arena_step(**kwargs) -> dict[str, object]:
 def _run_orchestrator_manual_review_step(
     *,
     lane: str,
+    task_class: str,
     step_name: str,
     reviewer_count: int,
     model: str,
@@ -1287,12 +1281,12 @@ def _run_orchestrator_manual_review_step(
         "state": "active",
         "model": model,
         "reasoning_effort": reasoning_effort,
-        "task_classes": ["phase_review"],
+        "task_classes": [task_class],
     }
     if service_tier:
         variant["service_tier"] = service_tier
     round_state_dir = _orchestrator_review_state_dir(state_dir)
-    round_id = make_round_id("phase_review", review_cwd=review_cwd)
+    round_id = make_round_id(task_class, review_cwd=review_cwd)
     runs = []
     for slot in _orchestrator_review_slots(reviewer_count):
         run = {
@@ -1306,7 +1300,7 @@ def _run_orchestrator_manual_review_step(
         runs.append(run)
     payload = {
         "round_id": round_id,
-        "task_class": "phase_review",
+        "task_class": task_class,
         "public_task": lane,
         "orchestrator_step": step_name,
         "grading_required": bool(grading_required),
@@ -1446,6 +1440,7 @@ def resume_orchestrator_review_step(
 
 def run_orchestrator_followup_review_step(
     *,
+    task_class: str,
     model: str,
     reasoning_effort: str,
     service_tier: str | None,
@@ -1460,6 +1455,7 @@ def run_orchestrator_followup_review_step(
     on_round_started: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     result = _run_orchestrator_manual_review_step(
+        task_class=task_class,
         lane="review-followup",
         step_name="followup",
         reviewer_count=1,
@@ -2201,7 +2197,7 @@ def _iter_recoverable_round_outputs(state_dir: Path) -> list[dict[str, object]]:
     for round_state_dir in _recoverable_round_state_dirs(state_dir):
         for payload in iter_round_payloads(round_state_dir):
             task_class = str(payload.get("task_class") or "")
-            if task_class in {"phase_review", "pr_review"}:
+            if task_class in {"base_review", "deep_review"}:
                 payloads.append(payload)
     return payloads
 
@@ -2291,8 +2287,8 @@ def _cost_row_payload(row) -> dict[str, object]:
         "implementation_tokens": row.implementation_tokens,
         "implementation_cost_usd": row.implementation_cost_usd,
         "latest_review": row.latest_review,
-        "t1_sessions": row.lane_sessions.get("review_t1", 0),
-        "t3_sessions": row.lane_sessions.get("review_t3", 0),
+        "base_sessions": row.lane_sessions.get("review_base", 0),
+        "deep_sessions": row.lane_sessions.get("review_deep", 0),
         "review_seconds": int(round(row.review_seconds)),
         "tokens": row.tokens,
         "cost_usd": row.cost_usd,

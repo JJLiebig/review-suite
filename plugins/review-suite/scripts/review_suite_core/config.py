@@ -168,7 +168,7 @@ def _migrate_settings(legacy: dict[str, Any]) -> dict[str, Any]:
     for tool, settings in lens.items():
         if settings:
             if tool == "default":
-                migrated["normal"] = settings
+                migrated["base"] = settings
             else:
                 migrated.setdefault("jobs", {})[tool.removeprefix("review-")] = settings
     for profile in migrated.get("orchestrator", {}).get("profiles", {}).values():
@@ -178,7 +178,7 @@ def _migrate_settings(legacy: dict[str, Any]) -> dict[str, Any]:
                     step["model_ref"] = (
                         "signoff_deep_model"
                         if step.get("name") == "deep-signoff"
-                        else "signoff_normal_model"
+                        else "signoff_base_model"
                     )
     return migrated
 
@@ -206,7 +206,7 @@ def _create_user_settings(path: Path, defaults: dict[str, Any]) -> None:
 
 
 def _job_model(config: dict[str, Any], job: str) -> dict[str, Any]:
-    group = "deep" if job == "deep_signoff" else "normal"
+    group = "deep" if job == "deep_signoff" else "base"
     base = config.get(group)
     jobs = config.get("jobs", {})
     if not isinstance(base, dict):
@@ -234,7 +234,7 @@ def _resolved_config(config: dict[str, Any]) -> dict[str, Any]:
         _job_model(config, job)
     defaults = config["orchestrator"]["stable_defaults"]
     for ref, job in {
-        "signoff_normal_model": "normal_signoff",
+        "signoff_base_model": "base_signoff",
         "signoff_deep_model": "deep_signoff",
     }.items():
         model = _job_model(config, job)

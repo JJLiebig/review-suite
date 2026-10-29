@@ -19,14 +19,12 @@ import review_followup
 import review_github
 import review_plan
 import review_suite_arena
-import review_t1
-import review_t3
 import review_suite_local
 
 from review_suite_local import (
     build_local_review_request,
-    build_phase_instructions,
-    build_pr_instructions,
+    build_base_instructions,
+    build_deep_instructions,
     load_custom_instructions,
 )
 
@@ -92,7 +90,7 @@ def test_load_custom_instructions_rejects_empty_content(
 
 
 def test_standard_review_contract_includes_current_codex_review_dimensions() -> None:
-    prompt = build_phase_instructions("commit `abc123`")
+    prompt = build_base_instructions("commit `abc123`")
 
     assert (
         "Reviewer output is advisory risk input, not authoritative product direction"
@@ -142,7 +140,7 @@ def test_build_local_review_request_keeps_terminal_contract_after_custom_block(
         review_cwd=tmp_path,
         base="main",
         commit_values=["abc123"],
-        instruction_builder=build_phase_instructions,
+        instruction_builder=build_base_instructions,
         custom_instructions="Do not spend time on backwards compatibility concerns.",
     )
 
@@ -182,7 +180,7 @@ def test_build_local_review_request_linear_commit_range_uses_native_base(
         review_cwd=tmp_path,
         base="main",
         commit_values=["abc123", "def456"],
-        instruction_builder=build_phase_instructions,
+        instruction_builder=build_base_instructions,
         custom_instructions=None,
     )
 
@@ -212,7 +210,7 @@ def test_build_local_review_request_rejects_non_linear_commit_range(
             review_cwd=tmp_path,
             base="main",
             commit_values=["abc123", "def456"],
-            instruction_builder=build_phase_instructions,
+            instruction_builder=build_base_instructions,
             custom_instructions=None,
         )
 
@@ -239,7 +237,7 @@ def test_build_local_review_request_pr_base_without_custom_instructions_includes
         review_cwd=tmp_path,
         base="main",
         commit_values=None,
-        instruction_builder=build_pr_instructions,
+        instruction_builder=build_deep_instructions,
         custom_instructions=None,
     )
 
@@ -248,7 +246,7 @@ def test_build_local_review_request_pr_base_without_custom_instructions_includes
     assert request.review_scope["merge_base"] == "merge-base-sha"
     assert request.review_scope["reviewed_head"] == "head-sha"
     assert (
-        "Review this PR-ready branch diff for correctness and regression risk."
+        "Perform a deep review of this branch diff for correctness and regression risk."
         in request.prompt
     )
     assert "Review result: clean" in request.prompt
@@ -291,7 +289,7 @@ def test_build_local_review_request_uses_effective_upstream_base(
         review_cwd=tmp_path,
         base="main",
         commit_values=None,
-        instruction_builder=build_pr_instructions,
+        instruction_builder=build_deep_instructions,
         custom_instructions=None,
     )
 
@@ -324,7 +322,7 @@ def test_build_local_review_request_pr_base_with_custom_instructions_stays_nativ
         review_cwd=tmp_path,
         base="main",
         commit_values=None,
-        instruction_builder=build_pr_instructions,
+        instruction_builder=build_deep_instructions,
         custom_instructions="Stay focused on correctness only.",
     )
 
@@ -334,7 +332,7 @@ def test_build_local_review_request_pr_base_with_custom_instructions_stays_nativ
     assert request.review_scope["merge_base"] == "merge-base-sha"
     assert request.review_scope["reviewed_head"] == "head-sha"
     assert (
-        "Review this PR-ready branch diff for correctness and regression risk."
+        "Perform a deep review of this branch diff for correctness and regression risk."
         in request.prompt
     )
     assert "Additional review instructions:" in request.prompt
@@ -370,13 +368,13 @@ def test_build_local_review_request_blank_custom_instructions_still_requires_cle
         review_cwd=tmp_path,
         base="main",
         commit_values=None,
-        instruction_builder=build_pr_instructions,
+        instruction_builder=build_deep_instructions,
         custom_instructions="",
     )
 
     assert clean_checks == [tmp_path]
     assert (
-        "Review this PR-ready branch diff for correctness and regression risk."
+        "Perform a deep review of this branch diff for correctness and regression risk."
         in request.prompt
     )
     assert "Additional review instructions:" not in request.prompt
@@ -410,7 +408,7 @@ def test_build_local_review_request_pr_base_with_empty_committed_diff_reports_di
             review_cwd=tmp_path,
             base="main",
             commit_values=None,
-            instruction_builder=build_pr_instructions,
+            instruction_builder=build_deep_instructions,
             custom_instructions="Stay focused on correctness only.",
         )
 
@@ -440,7 +438,7 @@ def test_build_local_review_request_native_pr_base_with_empty_committed_diff_rep
             review_cwd=tmp_path,
             base="main",
             commit_values=None,
-            instruction_builder=build_pr_instructions,
+            instruction_builder=build_deep_instructions,
             custom_instructions=None,
         )
 
@@ -481,7 +479,7 @@ def test_build_local_review_request_pr_base_without_custom_instructions_requires
             review_cwd=tmp_path,
             base="main",
             commit_values=None,
-            instruction_builder=build_pr_instructions,
+            instruction_builder=build_deep_instructions,
             custom_instructions=None,
         )
 
@@ -510,7 +508,7 @@ def test_build_local_review_request_with_custom_instructions_does_not_build_patc
         review_cwd=tmp_path,
         base="main",
         commit_values=None,
-        instruction_builder=build_pr_instructions,
+        instruction_builder=build_deep_instructions,
         custom_instructions="Stay focused on correctness.",
     )
 
@@ -581,47 +579,6 @@ def test_primary_wrappers_hide_operator_state_knobs_from_help() -> None:
     for help_text in help_texts:
         for flag in hidden_flags:
             assert flag not in help_text
-
-
-@pytest.mark.parametrize("module", [review_t1, review_t3])
-def test_legacy_tier_wrappers_point_to_review_py(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], module
-) -> None:
-    monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", "--base", "main"])
-
-    exit_code = module.main()
-
-    rendered = capsys.readouterr().out
-    assert exit_code == 2
-    assert "retired as a direct agent entrypoint" in rendered
-    assert "review.py" in rendered
-    assert "Action" not in rendered
-    assert "REPO_ROOT" not in rendered
-
-
-def test_legacy_tier_wrapper_malformed_old_flags_still_report_retired(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(sys, "argv", ["review_t1.py", "--base"])
-
-    exit_code = review_t1.main()
-
-    rendered = capsys.readouterr().out
-    assert exit_code == 2
-    assert "status: usage_error" in rendered
-    assert "retired as a direct agent entrypoint" in rendered
-    assert "Action" not in rendered
-
-
-def test_legacy_tier_wrappers_own_installed_cache_bootstrap() -> None:
-    for module in (review_t1, review_t3):
-        wrapper_source = Path(module.__file__).read_text(encoding="utf-8")
-        assert (
-            "from review_suite_runtime_bootstrap import bootstrap_from_installed_cache"
-            in wrapper_source
-        )
-        assert "bootstrap_from_installed_cache(__file__)" in wrapper_source
 
 
 def test_agent_wrapper_help_keeps_useful_targeting_controls_visible() -> None:

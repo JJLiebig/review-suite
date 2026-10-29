@@ -5,7 +5,7 @@ Review Suite can run local reviewers through OpenCode without changing the revie
 Use an explicit `opencode::` model prefix. The remainder is passed to OpenCode as its normal `provider/model` identifier:
 
 ```toml
-[normal]
+[base]
 model = "opencode::opencode-go/deepseek-v4.1-flash"
 reasoning = "high"
 ```
@@ -13,7 +13,7 @@ reasoning = "high"
 For GLM-5.3-Flash, only the model value changes:
 
 ```toml
-[normal]
+[base]
 model = "opencode::opencode-go/glm-5.3-flash"
 reasoning = "high"
 ```

@@ -66,11 +66,11 @@ def test_repo_from_worktree_folder_applies_explicit_overrides() -> None:
 
 def test_record_lane_accepts_followup_spellings() -> None:
     assert (
-        _record_lane({"public_task": "review-followup", "task_class": "phase_review"})
+        _record_lane({"public_task": "review-followup", "task_class": "base_review"})
         == "review_followup"
     )
     assert (
-        _record_lane({"public_task": "review_followup", "task_class": "phase_review"})
+        _record_lane({"public_task": "review_followup", "task_class": "base_review"})
         == "review_followup"
     )
 
@@ -299,8 +299,8 @@ def test_cached_row_with_folder_repo_folds_wt_suffix() -> None:
             "implementation_cost_usd": 0.0,
             "latest_review": "2026-04-27T00:00:00Z",
             "lane_sessions": {
-                "review_t1": 0,
-                "review_t3": 1,
+                "review_base": 0,
+                "review_deep": 1,
                 "review_followup": 0,
             },
             "review_seconds": 60,
@@ -443,7 +443,7 @@ def test_collect_review_cost_rows_groups_local_reviews_by_worktree(
         state_dir,
         {
             "round_id": "t1-round",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "graded_task_id": "feat/cost-ledger",
             "status": "completed",
             "sampled_at": "2026-04-27T10:00:00Z",
@@ -468,7 +468,7 @@ def test_collect_review_cost_rows_groups_local_reviews_by_worktree(
         state_dir,
         {
             "round_id": "t3-round",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "graded_task_id": "feat/cost-ledger",
             "status": "completed",
             "sampled_at": "2026-04-27T11:00:00Z",
@@ -524,8 +524,8 @@ def test_collect_review_cost_rows_groups_local_reviews_by_worktree(
     assert row.implementation_tokens == 1100
     assert row.implementation_cost_usd == 0.0044
     assert row.lane_sessions == {
-        "review_t1": 2,
-        "review_t3": 1,
+        "review_base": 2,
+        "review_deep": 1,
         "review_followup": 0,
     }
     assert row.review_seconds == 360
@@ -553,7 +553,7 @@ def test_collect_review_cost_rows_includes_completed_ungraded_local_rounds(
         state_dir,
         {
             "round_id": "ungraded-t1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "completed",
             "sampled_at": "2026-04-27T10:00:00Z",
             "review_completed_at": "2026-04-27T10:01:00Z",
@@ -573,7 +573,7 @@ def test_collect_review_cost_rows_includes_completed_ungraded_local_rounds(
     )
 
     assert len(rows) == 1
-    assert rows[0].lane_sessions["review_t1"] == 1
+    assert rows[0].lane_sessions["review_base"] == 1
     assert rows[0].tokens == 120
 
 
@@ -596,8 +596,8 @@ def test_collect_review_cost_rows_includes_orchestrator_rounds(
         state_dir,
         {
             "round_id": "orc-review",
-            "task_class": "phase_review",
-            "public_task": "review_t1",
+            "task_class": "base_review",
+            "public_task": "review_base",
             "task_id_hint": "feat/current",
             "status": "completed",
             "sampled_at": "2026-04-27T10:00:00Z",
@@ -628,7 +628,7 @@ def test_collect_review_cost_rows_includes_orchestrator_rounds(
         state_dir,
         {
             "round_id": "orc-followup",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "public_task": "review-followup",
             "task_id_hint": "feat/current",
             "status": "completed",
@@ -652,7 +652,7 @@ def test_collect_review_cost_rows_includes_orchestrator_rounds(
 
     assert len(rows) == 1
     row = rows[0]
-    assert row.lane_sessions["review_t1"] == 2
+    assert row.lane_sessions["review_base"] == 2
     assert row.lane_sessions["review_followup"] == 1
     assert row.tokens == 115
     assert row.cost_usd == 0.00112
@@ -677,7 +677,7 @@ def test_render_review_cost_markdown_groups_by_repo(
         state_dir,
         {
             "round_id": "t1-round",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "graded_task_id": "feat/cost-ledger",
             "status": "completed",
             "sampled_at": "2026-04-27T10:00:00Z",
@@ -712,7 +712,7 @@ def test_render_review_cost_markdown_groups_by_repo(
 
     assert "# sample-api" in markdown
     assert (
-        "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | T1 | T3 | FU | Review Time | Review Tokens | Review Cost | Total Cost |"
+        "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | Base | Deep | FU | Review Time | Review Tokens | Review Cost | Total Cost |"
         in markdown
     )
     assert (
@@ -748,7 +748,7 @@ def test_automatic_cost_delta_does_zero_cost_work_when_arena_is_disabled(
     assert not apply_review_cost_delta_best_effort(
         state_dir=tmp_path / "state",
         review_cwd=tmp_path / "repo",
-        record={"task_class": "phase_review", "runs": []},
+        record={"task_class": "base_review", "runs": []},
     )
     assert not (tmp_path / "state").exists()
 
@@ -800,7 +800,7 @@ def test_automatic_cost_delta_updates_only_target_row_once(
     unrelated_text = unrelated_path.read_text(encoding="utf-8")
     record = {
         "round_id": "round-1",
-        "task_class": "phase_review",
+        "task_class": "base_review",
         "status": "completed",
         "sampled_at": "2026-04-27T10:00:00Z",
         "review_completed_at": "2026-04-27T10:01:00Z",
@@ -850,7 +850,7 @@ def test_automatic_cost_delta_updates_only_target_row_once(
 
     row = read_review_cost_row_for_cwd(state_dir=state_dir, review_cwd=repo)
     assert row is not None
-    assert row.lane_sessions["review_t1"] == 3
+    assert row.lane_sessions["review_base"] == 3
     assert row.tokens == 350
     assert row.cost_usd == pytest.approx(0.035)
     assert len(row.accounted_run_ids) == 3
@@ -880,7 +880,7 @@ def test_automatic_cost_delta_skips_immediately_when_manual_lock_is_busy(
     assert not apply_review_cost_delta_best_effort(
         state_dir=tmp_path / "state",
         review_cwd=tmp_path / "repo",
-        record={"task_class": "phase_review", "runs": []},
+        record={"task_class": "base_review", "runs": []},
     )
     assert seen == [0]
     assert not (tmp_path / "state").exists()
@@ -910,7 +910,7 @@ def test_automatic_cost_delta_rejects_record_from_another_branch(
         review_cwd=repo,
         record={
             "round_id": "round-a",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "task_id_hint": "branch-a",
             "review_completed_at": "2026-04-27T10:00:00Z",
             "runs": [
@@ -954,7 +954,7 @@ def test_fallback_run_identity_distinguishes_identical_independent_runs(
     records = [
         {
             "round_id": f"round-{index}",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "review_completed_at": f"2026-04-27T10:0{index}:00Z",
             "runs": [dict(shared_run)],
         }
@@ -969,7 +969,7 @@ def test_fallback_run_identity_distinguishes_identical_independent_runs(
     )
     row = read_review_cost_row_for_cwd(state_dir=state_dir, review_cwd=repo)
     assert row is not None
-    assert row.lane_sessions["review_t1"] == 2
+    assert row.lane_sessions["review_base"] == 2
     assert row.tokens == 200
     assert len(row.accounted_run_ids) == 2
 
@@ -1002,7 +1002,7 @@ def test_legacy_cutover_and_reroll_charge_only_the_new_run(
         implementation_cost_usd=0.5,
         caller_threads=("legacy-caller",),
         latest_review="2026-04-27T10:00:00Z",
-        lane_sessions={**{lane: 0 for lane in review_costs.LANES}, "review_t1": 1},
+        lane_sessions={**{lane: 0 for lane in review_costs.LANES}, "review_base": 1},
         review_seconds=60,
         tokens=100,
         cost_usd=0.01,
@@ -1016,7 +1016,7 @@ def test_legacy_cutover_and_reroll_charge_only_the_new_run(
     reroll = {
         "round_id": "round-2",
         "rerolled_from_round_id": "round-1",
-        "task_class": "phase_review",
+        "task_class": "base_review",
         "status": "completed",
         "sampled_at": "2026-04-27T10:04:00Z",
         "review_completed_at": "2026-04-27T10:05:00Z",
@@ -1046,7 +1046,7 @@ def test_legacy_cutover_and_reroll_charge_only_the_new_run(
     assert row is not None
     assert row.tokens == 150
     assert row.cost_usd == pytest.approx(0.015)
-    assert row.lane_sessions["review_t1"] == 2
+    assert row.lane_sessions["review_base"] == 2
     assert row.implementation_tokens == 500
     assert row.implementation_costs_refreshed is False
     assert row.review_cost_cutover_at == "2026-04-27T10:00:00Z"
@@ -1069,8 +1069,8 @@ def test_update_review_cost_row_cache_replaces_pr_number_changes(
         caller_threads=(),
         latest_review="2026-04-27T10:00:00Z",
         lane_sessions={
-            "review_t1": 1,
-            "review_t3": 0,
+            "review_base": 1,
+            "review_deep": 0,
             "review_followup": 0,
         },
         review_seconds=60,
@@ -1088,8 +1088,8 @@ def test_update_review_cost_row_cache_replaces_pr_number_changes(
         caller_threads=("caller",),
         latest_review="2026-04-27T10:00:00Z",
         lane_sessions={
-            "review_t1": 1,
-            "review_t3": 0,
+            "review_base": 1,
+            "review_deep": 0,
             "review_followup": 0,
         },
         review_seconds=60,
@@ -1186,8 +1186,8 @@ def test_collect_review_cost_rows_includes_implementation_only_worktree(
     assert row.implementation_tokens == 2000
     assert row.tokens == 0
     assert row.lane_sessions == {
-        "review_t1": 0,
-        "review_t3": 0,
+        "review_base": 0,
+        "review_deep": 0,
         "review_followup": 0,
     }
 
@@ -1271,8 +1271,8 @@ def test_collect_review_cost_rows_includes_wrapper_caller_threads(
     assert len(rows) == 1
     assert rows[0].caller_threads == ("019dd132-4116-71f3-b013-beaa9e5e95bd",)
     assert rows[0].lane_sessions == {
-        "review_t1": 0,
-        "review_t3": 0,
+        "review_base": 0,
+        "review_deep": 0,
         "review_followup": 0,
     }
 
@@ -1356,7 +1356,7 @@ def test_collect_review_cost_rows_skips_sampled_review_placeholders(
         state_dir,
         {
             "round_id": "sampled-t1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "task_id_hint": "feat/costs",
             "status": "sampled",
             "sampled_at": "2026-04-27T10:00:00Z",
@@ -1397,7 +1397,7 @@ def test_collect_review_cost_rows_all_does_not_seed_unrelated_codex_cwds(
         state_dir,
         {
             "round_id": "reviewed-t1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "graded_task_id": "feat/costs",
             "status": "completed",
             "sampled_at": "2026-04-27T10:00:00Z",
@@ -1625,7 +1625,7 @@ def test_collect_review_cost_rows_filters_review_records_by_branch(
         state_dir,
         {
             "round_id": "old-t1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "graded_task_id": "feat/old",
             "status": "completed",
             "sampled_at": "2026-04-27T10:00:00Z",
@@ -1644,7 +1644,7 @@ def test_collect_review_cost_rows_filters_review_records_by_branch(
         state_dir,
         {
             "round_id": "current-t1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "graded_task_id": "feat/current",
             "status": "completed",
             "sampled_at": "2026-04-27T11:00:00Z",
@@ -1665,7 +1665,7 @@ def test_collect_review_cost_rows_filters_review_records_by_branch(
     )
 
     assert len(rows) == 1
-    assert rows[0].lane_sessions["review_t1"] == 1
+    assert rows[0].lane_sessions["review_base"] == 1
     assert rows[0].tokens == 230
     assert rows[0].cost_usd == 0.002
 
