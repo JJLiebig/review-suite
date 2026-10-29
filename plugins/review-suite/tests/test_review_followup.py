@@ -13,6 +13,11 @@ if str(SCRIPT_DIR) not in sys.path:
 import review_followup
 
 
+@pytest.fixture(autouse=True)
+def _isolate_default_state_dir(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(review_followup, "default_state_dir", lambda: tmp_path / "state")
+
+
 def test_load_followup_note_rejects_conflicting_sources() -> None:
     with pytest.raises(ValueError, match="use either --note or --note-file"):
         review_followup.load_followup_note(note="x", note_file="note.txt")
@@ -131,6 +136,8 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(
     assert "unbounded agent-context injection" in str(captured["prompt"])
     assert "=== BEGIN DIFF ===" not in str(captured["prompt"])
     assert captured["review_base"] == "abc123"
+    assert captured["anchor"]["state_dir"] == tmp_path / "state"
+    assert (tmp_path / "state" / "settings.toml").is_file()
     assert captured["anchor"]["lane"] == "review-followup"
     assert captured["anchor"]["reviewed_head"] == "def456"
     assert captured["anchor"]["review_scope"]["commit"] == "abc123"
