@@ -106,6 +106,43 @@ def test_legacy_migration_preserves_non_model_settings_only(tmp_path: Path) -> N
     assert (tmp_path / "settings.toml").read_text() == migrated_text
 
 
+def test_existing_settings_migrate_once_without_losing_overrides(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.toml"
+    original = (
+        '# My pinned policy\n[normal]\nmodel = "gpt-5.6-sol"\nreasoning = "high"\n'
+        'service_tier = "flex"\n[jobs.normal_signoff]\nreasoning = "low"\n'
+        '[orchestrator.stable_defaults]\nnormal_arena_loops = 2\n'
+        '[arena.pools.arena_phase]\nrating_pool_id = "arena-phase-pinned"\n'
+        '[custom]\nnote = "normal is a normal word"\n'
+        'recorded = 2026-10-29T12:00:00Z\nlimit = inf\n[custom.empty]\n'
+    ).encode()
+    settings.write_bytes(original)
+
+    config = load_config(tmp_path)
+
+    assert config["base"] == {
+        "model": "gpt-5.6-sol", "reasoning": "high", "service_tier": "flex"
+    }
+    step = load_orchestrator_profiles(config)["stable"]["base"].steps[-1]
+    assert (step.model, step.reasoning_effort, step.service_tier) == (
+        "gpt-5.6-sol", "low", "flex"
+    )
+    assert config["orchestrator"]["stable_defaults"]["base_arena_loops"] == 2
+    assert config["arena"]["pools"]["arena_base"]["rating_pool_id"] == "arena-phase-pinned"
+    migrated = tomllib.loads(settings.read_text())
+    assert "normal" not in migrated
+    assert migrated["custom"] == tomllib.loads(original.decode())["custom"]
+    backups = list(tmp_path.glob("settings-before-base-deep-*.toml"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original
+    saved = settings.read_bytes(), settings.stat().st_mtime_ns
+
+    assert load_config(tmp_path) == config
+    assert (settings.read_bytes(), settings.stat().st_mtime_ns) == saved
+    assert list(tmp_path.glob("settings-before-base-deep-*.toml")) == backups
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
 def test_existing_toml_is_authoritative_over_legacy_json(tmp_path: Path) -> None:
     (tmp_path / "config.json").write_text("invalid old JSON", encoding="utf-8")
     override = "[arena]\nenabled = true\n"
@@ -135,13 +172,22 @@ def test_invalid_user_settings_are_not_overwritten(tmp_path: Path) -> None:
     assert (tmp_path / "settings.toml").read_text() == override
 
 
-def test_concurrent_first_loads_publish_complete_settings(tmp_path: Path) -> None:
+@pytest.mark.parametrize("existing_settings", [False, True])
+def test_concurrent_first_loads_publish_complete_settings(
+    tmp_path: Path, existing_settings: bool
+) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     (tmp_path / "config.json").write_text(
         json.dumps({"arena": {"enabled": True}}),
         encoding="utf-8",
     )
+    if existing_settings:
+        (tmp_path / "settings.toml").write_text(
+            '[normal]\nmodel = "gpt-6.1-sol"\nreasoning = "medium"\n'
+            '[arena]\nenabled = true\n',
+            encoding="utf-8",
+        )
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(load_config, [tmp_path] * 16))
     assert all(result == results[0] for result in results)

@@ -107,8 +107,12 @@ inherit the base or deep defaults. Review history and ratings live beside the
 settings file. If only legacy `config.json` exists, the first run migrates its
 non-model settings and keeps the original as a backup.
 
-Existing installations must migrate the renamed settings and review history
-once before using this version. Stop review, daemon, tray, and API writers first:
+On first load, existing `settings.toml` overrides are renamed automatically.
+The original is saved beside it as `settings-before-base-deep-<id>.toml`; later
+loads leave the migrated settings alone.
+
+Existing review history and saved snapshots use the offline migration below.
+Stop review, daemon, tray, and API writers first:
 
 ```powershell
 python plugins/review-suite/scripts/migrate_review_names.py --state-dir "$HOME/.codex/state/review-suite"

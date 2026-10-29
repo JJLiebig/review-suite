@@ -187,3 +187,52 @@ def test_deep_classification_uses_stage_evidence_and_keeps_unknown_fields() -> N
     assert migrated["future_field"] == original["future_field"]
     assert migrated["review_brief"] == original["review_brief"]
     assert migrated["reviewer_output"] == original["reviewer_output"]
+
+
+@pytest.mark.parametrize("deep_source", ["signoff", "arena"])
+def test_nested_followup_chains_keep_the_deep_origin_after_restart(
+    tmp_path: Path, deep_source: str
+) -> None:
+    state = tmp_path / "state"
+    round_dir = state / "orchestrator/review-rounds/rounds"
+    source_id = "z-original"
+    source = {
+        "round_id": source_id,
+        "orchestrator_step": "deep-signoff"
+        if deep_source == "signoff"
+        else "arena-pr-review",
+        "task_class": "phase_review" if deep_source == "signoff" else "pr_review",
+        "public_task": "review_t1" if deep_source == "signoff" else "review_t3",
+    }
+    _save(round_dir / f"{source_id}.json", source)
+    for round_id, parent_id in (
+        ("b-followup", source_id),
+        ("a-followup", "b-followup"),
+    ):
+        _save(
+            round_dir / f"{round_id}.json",
+            {
+                "round_id": round_id,
+                "orchestrator_step": "followup",
+                "task_class": "phase_review",
+                "public_task": "review-followup",
+                "review_scope": {"source_round_id": parent_id},
+            },
+        )
+    cycle_file = state / "orchestrator/cycles/cycle.json"
+    _save(
+        cycle_file, {"rounds": [{"round_id": "a-followup", "lane": "review-followup"}]}
+    )
+    migrate_names(state, [], apply=True)
+    for name in ("a-followup", "b-followup"):
+        migrated = json.loads((round_dir / f"{name}.json").read_text())
+        assert migrated["task_class"] == "deep_review"
+        assert migrated["public_task"] == "review-followup"
+    assert json.loads(cycle_file.read_text())["rounds"] == [
+        {
+            "round_id": "a-followup",
+            "lane": "review-followup",
+            "task_class": "deep_review",
+        },
+    ]
+    assert migrate_names(state, [], apply=True) == {"status": "unchanged", "files": 0}
