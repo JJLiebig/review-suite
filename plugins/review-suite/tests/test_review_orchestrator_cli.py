@@ -222,7 +222,7 @@ def _stub_review(
             )
         return {
             "round_id": round_id,
-            "lane": "review_t1",
+            "lane": "review_base",
             "kind": "review",
             "status": "completed",
             "blocked": False,
@@ -284,7 +284,7 @@ def _stub_review_with_terminal(
             )
         return {
             "round_id": round_id,
-            "lane": "review_t1",
+            "lane": "review_base",
             "kind": "review",
             "status": "completed",
             "blocked": False,
@@ -351,31 +351,31 @@ def _stub_followup(
     return calls
 
 
-def _use_compact_normal_profile(
+def _use_compact_base_profile(
     monkeypatch: pytest.MonkeyPatch, state_dir: Path, *, include_deep: bool = False
 ) -> dict[str, object]:
     config = _review_discovery_config(deepcopy(review.load_config(state_dir)))
     profiles = config["orchestrator"]["profiles"]["stable"]
-    profiles["normal"]["steps"] = [
+    profiles["base"]["steps"] = [
         {
             "name": "broad-discovery",
             "count": 1,
-            "model_ref": "signoff_normal_model",
+            "model_ref": "signoff_base_model",
         },
-        *profiles["normal"]["steps"],
+        *profiles["base"]["steps"],
     ]
     if include_deep:
         profiles["deep"]["steps"] = [
             {
                 "name": "broad-discovery",
                 "count": 1,
-                "model_ref": "signoff_normal_model",
+                "model_ref": "signoff_base_model",
             },
             profiles["deep"]["steps"][0],
             {
                 "name": "deep-discovery",
                 "count": 1,
-                "model_ref": "signoff_normal_model",
+                "model_ref": "signoff_base_model",
             },
             profiles["deep"]["steps"][-1],
         ]
@@ -383,16 +383,16 @@ def _use_compact_normal_profile(
     return config
 
 
-def _use_single_step_normal_profile(
+def _use_single_step_base_profile(
     monkeypatch: pytest.MonkeyPatch, state_dir: Path
 ) -> None:
     config = deepcopy(review.load_config(state_dir))
-    normal = config["orchestrator"]["profiles"]["stable"]["normal"]
-    normal["steps"] = [
+    base = config["orchestrator"]["profiles"]["stable"]["base"]
+    base["steps"] = [
         {
-            "name": "precision-signoff",
+            "name": "base-signoff",
             "count": 2,
-            "model_ref": "signoff_normal_model",
+            "model_ref": "signoff_base_model",
             "rerun_on_findings": True,
         }
     ]
@@ -426,26 +426,26 @@ def _write_cycle_payload(
 def test_profile_resolution_serializes_configured_arena_pool(tmp_path: Path) -> None:
     config = review.load_config(tmp_path / "state")
     config["arena"]["enabled"] = True
-    config["orchestrator"]["stable_defaults"]["normal_arena_loops"] = 1
+    config["orchestrator"]["stable_defaults"]["base_arena_loops"] = 1
     resolution = review.resolve_orchestrator_profile(
-        config, mode="normal", selection="stable"
+        config, mode="base", selection="stable"
     )
 
     state = review._apply_profile_resolution({"selection": {}}, resolution)
 
     arena_step = state["review_plan"]["steps"][0]
-    assert arena_step["name"] == "arena-phase-review"
+    assert arena_step["name"] == "arena-base-review"
     assert arena_step["rating_pool_id"] == "arena-phase-gpt-5.6-v1"
     assert arena_step["reporting_pool"] is True
     assert len(arena_step["variant_groups"]) == 13
-    assert arena_step["variant_ids"] == config["arena"]["pools"]["arena_phase"]["variant_ids"]
+    assert arena_step["variant_ids"] == config["arena"]["pools"]["arena_base"]["variant_ids"]
 
 
 def _enable_arena(state_dir: Path) -> None:
     state_dir.mkdir(parents=True)
     (state_dir / "settings.toml").write_text(
         "[arena]\nenabled = true\n"
-        "[orchestrator.stable_defaults]\nnormal_arena_loops = 1\n",
+        "[orchestrator.stable_defaults]\nbase_arena_loops = 1\n",
         encoding="utf-8",
     )
 
@@ -478,7 +478,7 @@ def test_repo_no_arena_preference_handles_spaces_and_can_be_cleared(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--skip-deslop",
             "--cd",
             str(repo),
@@ -525,7 +525,7 @@ def test_no_arena_skips_arena_for_one_cycle_without_setting_repo_preference(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--skip-deslop",
             "--no-arena",
             "--cd",
@@ -557,19 +557,19 @@ def test_model_override_prefixes_provider_model_and_defaults_reasoning(
     resolved = review._config_with_model_override(config, override)
     defaults = resolved["orchestrator"]["stable_defaults"]
     assert (
-        defaults["signoff_normal_model"]
+        defaults["signoff_base_model"]
         == "opencode::opencode-go/deepseek-v4.1-flash-high"
     )
     assert (
         defaults["signoff_deep_model"]
         == "opencode::opencode-go/deepseek-v4.1-flash-high"
     )
-    assert resolved["normal"]["model"] == "opencode::opencode-go/deepseek-v4.1-flash"
+    assert resolved["base"]["model"] == "opencode::opencode-go/deepseek-v4.1-flash"
 
 
 def test_model_override_drops_opencode_service_tier(tmp_path: Path) -> None:
     config = review.load_config(tmp_path / "state")
-    config["orchestrator"]["stable_defaults"]["signoff_normal_model"] = (
+    config["orchestrator"]["stable_defaults"]["signoff_base_model"] = (
         "gpt-6-astra-medium-fast"
     )
 
@@ -580,7 +580,7 @@ def test_model_override_drops_opencode_service_tier(tmp_path: Path) -> None:
 
     defaults = resolved["orchestrator"]["stable_defaults"]
     assert (
-        defaults["signoff_normal_model"] == "opencode::opencode-go/glm-5.3-flash-high"
+        defaults["signoff_base_model"] == "opencode::opencode-go/glm-5.3-flash-high"
     )
     fast_step = review.resolve_orchestrator_profile(
         resolved, mode="fast", selection="stable"
@@ -605,7 +605,7 @@ def test_opencode_model_override_accepts_supported_reasoning(tmp_path: Path) -> 
     )
 
     defaults = resolved["orchestrator"]["stable_defaults"]
-    assert defaults["signoff_normal_model"] == "opencode::opencode-go/glm-5.3-flash-max"
+    assert defaults["signoff_base_model"] == "opencode::opencode-go/glm-5.3-flash-max"
 
 
 def test_opencode_model_override_rejects_unsupported_reasoning(tmp_path: Path) -> None:
@@ -629,13 +629,13 @@ def test_model_override_accepts_codex_model_and_reasoning_only(tmp_path: Path) -
     config = review.load_config(tmp_path / "state")
     config["orchestrator"]["stable_defaults"].update(
         {
-            "signoff_normal_model": "gpt-6-sol-medium",
+            "signoff_base_model": "gpt-6-sol-medium",
             "signoff_deep_model": "gpt-6-astra-xhigh",
         }
     )
     resolved = review._config_with_model_override(config, {"reasoning": "high"})
     defaults = resolved["orchestrator"]["stable_defaults"]
-    assert defaults["signoff_normal_model"] == "gpt-6-sol-high"
+    assert defaults["signoff_base_model"] == "gpt-6-sol-high"
     assert defaults["signoff_deep_model"] == "gpt-6-astra-high"
 
 
@@ -683,7 +683,7 @@ def test_model_override_persists_into_fast_cycle_plan(
         "model": "opencode::opencode-go/deepseek-v4.1-flash"
     }
     step = state["review_plan"]["steps"][0]
-    assert step["name"] == "fast-signoff"
+    assert step["name"] == "base-signoff"
     assert step["model"] == "opencode::opencode-go/deepseek-v4.1-flash"
     assert step["reasoning_effort"] == "high"
     assert step["service_tier"] is None
@@ -696,7 +696,7 @@ def test_model_override_survives_restart_mode(
     _stub_review(monkeypatch, "fast-round-1", "deep-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
+    _use_compact_base_profile(monkeypatch, state_dir, include_deep=True)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/model-restart")
@@ -771,9 +771,21 @@ def _assert_github_handoff(
         assert "blocked_by" not in payload
 
 
-def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor(
+@pytest.mark.parametrize(
+    ("lane", "task_class", "step_name", "effort", "intro"),
+    [
+        ("review_base", "base_review", "base-signoff", "xhigh", "Perform a base review"),
+        ("review_deep", "deep_review", "deep-signoff", "medium", "Perform a deep review"),
+    ],
+)
+def test_orchestrator_review_helper_records_stage_category_without_predecision_anchor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    lane: str,
+    task_class: str,
+    step_name: str,
+    effort: str,
+    intro: str,
 ) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -844,11 +856,12 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
     )
 
     result = review_suite_arena.run_orchestrator_review_step(
-        lane="review_t1",
-        step_name="precision",
+        lane=lane,
+        task_class=task_class,
+        step_name=step_name,
         reviewer_count=1,
         model="gpt-5.5",
-        reasoning_effort="medium",
+        reasoning_effort=effort,
         service_tier="flex",
         review_cwd=repo,
         state_dir=state_dir,
@@ -863,15 +876,17 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
 
     prompt = str(captured["prompt"])
     assert prompt.strip()
-    assert "Review this implementation slice" in prompt
+    assert intro in prompt
     assert "Reviewer output is advisory risk input" in prompt
     assert "=== BEGIN DIFF ===" not in prompt
     assert "manual_prompt_mode" not in dict(captured["review_scope"])
     assert dict(captured["round_payload"])["runs"][0]["service_tier"] == "flex"
+    assert dict(captured["round_payload"])["task_class"] == task_class
+    assert dict(captured["round_payload"])["public_task"] == lane
     assert result["reviewed_head"] == head
     assert result["output_refs"] == ["rollout://alpha"]
     assert banner_calls == [
-        {"task_name": "review 1/2 precision", "round_id": result["round_id"]}
+        {"task_name": f"review 1/2 {step_name}", "round_id": result["round_id"]}
     ]
     assert anchor_calls == []
     assert len(refresh_calls) == 1
@@ -881,7 +896,7 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
     assert completion_events == ["findings", "cost"]
 
 
-def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
+def test_orchestrator_arena_helper_uses_deep_prompt_for_deep_review(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -971,9 +986,9 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
     )
 
     result = review_suite_arena.run_orchestrated_arena_round(
-        lane="review_t3",
-        task_class="pr_review",
-        step_name="arena-pr-review",
+        lane="review_deep",
+        task_class="deep_review",
+        step_name="arena-deep-review",
         rating_pool_id="arena-deep-gpt-5.6-v1",
         variant_groups=[["a", "b", "c", "d"]],
         variant_ids=["a", "b", "c", "d", "e"],
@@ -989,15 +1004,15 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
     )
 
     prompt = str(captured["prompt"])
-    assert "Review this PR-ready branch diff" in prompt
-    assert "Review this implementation slice" not in prompt
+    assert "Perform a deep review" in prompt
+    assert "Perform a base review of this implementation slice" not in prompt
     assert "manual_prompt_mode" not in dict(captured["review_scope"])
-    assert dict(captured["round_payload"])["task_class"] == "pr_review"
+    assert dict(captured["round_payload"])["task_class"] == "deep_review"
     assert (
         dict(captured["round_payload"])["task_id_hint"]
         == "feature/orchestrator-arena-pr"
     )
-    assert "Review this PR-ready branch diff" in str(
+    assert "Perform a deep review of this branch diff" in str(
         dict(captured["round_payload"])["requested_prompt"]
     )
     assert dict(captured["round_payload"])["review_scope"] == dict(
@@ -1005,11 +1020,11 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
     )
     assert dict(captured["round_payload"])["review_cwd"] == str(repo)
     assert dict(captured["round_payload"])["progress_interval_seconds"] == 1
-    assert select_calls[0]["task_class"] == "pr_review"
+    assert select_calls[0]["task_class"] == "deep_review"
     assert select_calls[0]["rating_pool_id"] == "arena-deep-gpt-5.6-v1"
     assert select_calls[0]["variant_groups"] == [["a", "b", "c", "d"]]
     assert select_calls[0]["variant_ids"] == ["a", "b", "c", "d", "e"]
-    assert result["lane"] == "review_t3"
+    assert result["lane"] == "review_deep"
     assert result["reviewed_head"] == head
     assert result["arena_round"] is True
     assert result["grading_required"] is True
@@ -1027,14 +1042,14 @@ def test_decision_action_surfaces_arena_grade_command(tmp_path: Path) -> None:
         "pending_action": {
             "kind": "decision",
             "round_id": "arena-round-1",
-            "lane": "review_t3",
+            "lane": "review_deep",
         },
         "identity": {"branch": "feature/arena"},
         "deslop": {"tracked": False, "status": "closed"},
         "rounds": [
             {
                 "round_id": "arena-round-1",
-                "lane": "review_t3",
+                "lane": "review_deep",
                 "grading_required": True,
                 "arena_round": True,
                 "status": "completed",
@@ -1081,7 +1096,7 @@ def test_arena_recovery_action_surfaces_single_reroll(tmp_path: Path) -> None:
         "pending_action": {
             "kind": "arena-blocked",
             "round_id": "arena-round-1",
-            "lane": "review_t3",
+            "lane": "review_deep",
             "step_index": 0,
             "step": "arena-discovery",
         },
@@ -1090,7 +1105,7 @@ def test_arena_recovery_action_surfaces_single_reroll(tmp_path: Path) -> None:
         "rounds": [
             {
                 "round_id": "arena-round-1",
-                "lane": "review_t3",
+                "lane": "review_deep",
                 "grading_required": True,
                 "arena_round": True,
                 "status": "completed",
@@ -1125,14 +1140,14 @@ def test_arena_recovery_action_rerolls_one_blocked_slot_at_a_time(
         "pending_action": {
             "kind": "arena-blocked",
             "round_id": "arena-round-1",
-            "lane": "review_t1",
+            "lane": "review_base",
         },
         "identity": {"cwd": str(repo), "base": "main", "branch": "feature/arena"},
         "deslop": {"tracked": False, "status": "closed"},
         "rounds": [
             {
                 "round_id": "arena-round-1",
-                "lane": "review_t1",
+                "lane": "review_base",
                 "grading_required": False,
                 "arena_round": True,
                 "status": "completed",
@@ -1166,14 +1181,14 @@ def test_arena_recovery_action_advances_after_dismissed_blocked_round(
         "pending_action": {
             "kind": "arena-blocked",
             "round_id": "arena-round-1",
-            "lane": "review_t1",
+            "lane": "review_base",
         },
         "identity": {"branch": "feature/arena"},
         "deslop": {"tracked": False, "status": "closed"},
         "rounds": [
             {
                 "round_id": "arena-round-1",
-                "lane": "review_t1",
+                "lane": "review_base",
                 "grading_required": False,
                 "arena_round": True,
                 "status": "dismissed",
@@ -1204,7 +1219,7 @@ def test_arena_recovery_action_surfaces_run_for_sampled_replacement(
         "pending_action": {
             "kind": "arena-blocked",
             "round_id": "arena-round-2",
-            "lane": "review_t3",
+            "lane": "review_deep",
             "step_index": 0,
             "step": "arena-discovery",
         },
@@ -1213,7 +1228,7 @@ def test_arena_recovery_action_surfaces_run_for_sampled_replacement(
         "rounds": [
             {
                 "round_id": "arena-round-2",
-                "lane": "review_t3",
+                "lane": "review_deep",
                 "grading_required": True,
                 "arena_round": True,
                 "status": "sampled",
@@ -1245,13 +1260,13 @@ def test_arena_recovery_backend_runs_internal_action(
         "pending_action": {
             "kind": "arena-blocked",
             "round_id": "arena-round-2",
-            "lane": "review_t3",
+            "lane": "review_deep",
         },
         "identity": {"cwd": str(repo), "base": "main", "branch": "feature/arena"},
         "rounds": [
             {
                 "round_id": "arena-round-2",
-                "lane": "review_t3",
+                "lane": "review_deep",
                 "grading_required": True,
                 "arena_round": True,
                 "status": "sampled",
@@ -1295,7 +1310,7 @@ def test_arena_recovery_action_surfaces_resume_for_running_replacement(
         "pending_action": {
             "kind": "arena-blocked",
             "round_id": "arena-round-2",
-            "lane": "review_t3",
+            "lane": "review_deep",
             "step_index": 0,
             "step": "arena-discovery",
         },
@@ -1305,7 +1320,7 @@ def test_arena_recovery_action_surfaces_resume_for_running_replacement(
         "rounds": [
             {
                 "round_id": "arena-round-2",
-                "lane": "review_t3",
+                "lane": "review_deep",
                 "grading_required": True,
                 "arena_round": True,
                 "status": "running",
@@ -1335,14 +1350,14 @@ def test_decision_rejects_ungraded_arena_round(tmp_path: Path) -> None:
         "pending_action": {
             "kind": "decision",
             "round_id": "arena-round-1",
-            "lane": "review_t3",
+            "lane": "review_deep",
         },
         "identity": {"branch": "feature/arena"},
         "review_progress": {"next_step_index": 1, "completed_steps": []},
         "rounds": [
             {
                 "round_id": "arena-round-1",
-                "lane": "review_t3",
+                "lane": "review_deep",
                 "grading_required": True,
                 "arena_round": True,
                 "status": "completed",
@@ -1362,14 +1377,14 @@ def test_decision_rejects_blocked_review_round(tmp_path: Path) -> None:
         "pending_action": {
             "kind": "decision",
             "round_id": "blocked-round-1",
-            "lane": "review_t1",
+            "lane": "review_base",
         },
         "identity": {"branch": "feature/blocked"},
         "review_progress": {"next_step_index": 1, "completed_steps": []},
         "rounds": [
             {
                 "round_id": "blocked-round-1",
-                "lane": "review_t1",
+                "lane": "review_base",
                 "review_blocked": True,
                 "status": "completed",
                 "reviewed_head": "head-1",
@@ -1396,7 +1411,7 @@ def test_id_retries_legacy_uninspected_followup_without_resetting_cycle(
     followup_calls = _stub_followup(monkeypatch, "retry-round")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.py", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/recovery")
@@ -1471,7 +1486,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     )
     repo = tmp_path / "repo"
     state_dir = tmp_path / "default-state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/review-shell")
@@ -1479,7 +1494,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
 
     args = [
         "--mode",
-        "normal",
+        "base",
         "--cd",
         str(repo),
         "--base",
@@ -1529,7 +1544,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     state = _cycle_payload(state_dir, public_id)
     assert len(state["rounds"]) == 1
     assert state["rounds"][0]["round_id"] == "phase_review-round-1"
-    assert state["rounds"][0]["lane"] == "review_t1"
+    assert state["rounds"][0]["lane"] == "review_base"
     assert state["rounds"][0]["review_status"] == "completed"
     assert state["rounds"][0]["output_refs"] == ["rollout://phase_review-round-1/alpha"]
     assert len(review_calls) == 1
@@ -1558,14 +1573,14 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert state["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 1,
-        "step": "precision-signoff",
+        "step": "base-signoff",
     }
     assert state["review_progress"]["completed_steps"] == [
         {
             "index": 0,
             "name": "broad-discovery",
             "round_id": "phase_review-round-1",
-            "lane": "review_t1",
+            "lane": "review_base",
             "reviewed_head": state["rounds"][0]["reviewed_head"],
         }
     ]
@@ -1586,7 +1601,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert review_calls[0]["step_name"] == "broad-discovery"
     assert review_calls[0]["step_position"] == 1
     assert review_calls[0]["step_total"] == 2
-    assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["step_name"] == "base-signoff"
     assert review_calls[1]["step_position"] == 2
     assert review_calls[1]["step_total"] == 2
     state = _cycle_payload(state_dir, public_id)
@@ -1680,7 +1695,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert len(review_calls) == 2
 
 
-def test_new_cycle_defaults_to_normal_without_mode(
+def test_new_cycle_defaults_to_base_without_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _stub_deslop(monkeypatch)
@@ -1703,11 +1718,11 @@ def test_new_cycle_defaults_to_normal_without_mode(
     )
 
     state = _cycle_payload(state_dir, str(created["review"]))
-    assert state["mode"] == {"requested": "normal", "effective": "normal"}
+    assert state["mode"] == {"requested": "base", "effective": "base"}
     mode_action = next(
         action for action in review.build_parser()._actions if action.dest == "mode"
     )
-    assert tuple(mode_action.choices) == ("fast", "normal", "deep")
+    assert tuple(mode_action.choices) == ("fast", "base", "deep")
 
 
 def test_head_change_waits_for_failed_deslop_retry(
@@ -1717,7 +1732,7 @@ def test_head_change_waits_for_failed_deslop_retry(
     review_calls = _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _use_single_step_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/deslop-head-change")
@@ -1727,7 +1742,7 @@ def test_head_change_waits_for_failed_deslop_retry(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -1761,7 +1776,7 @@ def test_create_with_skip_deslop_runs_review_without_sidecar(
     review_calls = _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/no-deslop")
@@ -1884,7 +1899,7 @@ def test_skip_deslop_does_not_resume_same_head_sidecar_cycle(
     review_calls = _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/no-deslop")
@@ -1894,7 +1909,7 @@ def test_skip_deslop_does_not_resume_same_head_sidecar_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -1907,7 +1922,7 @@ def test_skip_deslop_does_not_resume_same_head_sidecar_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--skip-deslop",
             "--cd",
             str(repo),
@@ -1940,7 +1955,7 @@ def test_id_auto_records_structured_clean_and_runs_next_step(
     review_calls = _stub_review_with_terminal(monkeypatch, "clean", "clean")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/auto-clean")
@@ -1950,7 +1965,7 @@ def test_id_auto_records_structured_clean_and_runs_next_step(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -1966,7 +1981,7 @@ def test_id_auto_records_structured_clean_and_runs_next_step(
     assert state["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 1,
-        "step": "precision-signoff",
+        "step": "base-signoff",
     }
 
     exit_code, final = _run_review_after_cleanup(
@@ -1999,7 +2014,7 @@ def test_id_auto_records_structured_findings_before_fix_loop(
     review_calls = _stub_review_with_terminal(monkeypatch, "findings", "clean")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/auto-findings")
@@ -2009,7 +2024,7 @@ def test_id_auto_records_structured_findings_before_fix_loop(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--review-brief",
             "# Goal\n\nKeep the implementation within the frozen contract.",
             "--cd",
@@ -2054,12 +2069,12 @@ def test_auto_decision_requires_terminal_command(tmp_path: Path) -> None:
         "pending_action": {
             "kind": "decision",
             "round_id": "round-1",
-            "lane": "review_t1",
+            "lane": "review_base",
         },
         "rounds": [
             {
                 "round_id": "round-1",
-                "lane": "review_t1",
+                "lane": "review_base",
                 "status": "decision-pending",
                 "review_status": "completed",
                 "runs": [
@@ -2082,12 +2097,12 @@ def test_auto_decision_rejects_blocked_terminal_round(tmp_path: Path) -> None:
         "pending_action": {
             "kind": "decision",
             "round_id": "round-1",
-            "lane": "review_t1",
+            "lane": "review_base",
         },
         "rounds": [
             {
                 "round_id": "round-1",
-                "lane": "review_t1",
+                "lane": "review_base",
                 "status": "decision-pending",
                 "review_status": "completed",
                 "runs": [
@@ -2129,12 +2144,12 @@ def test_auto_decision_waits_for_arena_grade(tmp_path: Path) -> None:
         "pending_action": {
             "kind": "decision",
             "round_id": "arena-round-1",
-            "lane": "review_t3",
+            "lane": "review_deep",
         },
         "rounds": [
             {
                 "round_id": "arena-round-1",
-                "lane": "review_t3",
+                "lane": "review_deep",
                 "status": "decision-pending",
                 "review_status": "completed",
                 "grading_required": True,
@@ -2171,13 +2186,13 @@ def test_pending_ungraded_arena_amend_still_records_findings(tmp_path: Path) -> 
         "pending_action": {
             "kind": "decision",
             "round_id": "arena-round-1",
-            "lane": "review_t3",
+            "lane": "review_deep",
         },
         "review_heads": {},
         "rounds": [
             {
                 "round_id": "arena-round-1",
-                "lane": "review_t3",
+                "lane": "review_deep",
                 "status": "decision-pending",
                 "reviewed_head": "head-1",
                 "review_status": "completed",
@@ -2202,7 +2217,7 @@ def test_pending_ungraded_arena_amend_still_records_findings(tmp_path: Path) -> 
 
 @pytest.mark.parametrize("structured", [False, True])
 @pytest.mark.parametrize("changed_path", ["tests/test_app.py", "app.py"])
-@pytest.mark.parametrize("mode", ["fast", "normal"])
+@pytest.mark.parametrize("mode", ["fast", "base"])
 def test_changed_head_does_not_turn_completed_clean_output_into_findings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, structured: bool, changed_path: str, mode: str,
 ) -> None:
@@ -2210,7 +2225,7 @@ def test_changed_head_does_not_turn_completed_clean_output_into_findings(
     calls = _stub_review(monkeypatch, "clean-round", "new-head-round")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _use_single_step_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.py", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/clean-head-change")
@@ -2232,7 +2247,7 @@ def test_changed_head_does_not_turn_completed_clean_output_into_findings(
     if changed_path.startswith("tests/"):
         assert len(calls) == 1
         assert saved["review_heads"]["last_reviewed_head"] == current
-        if mode == "normal":
+        if mode == "base":
             assert result["done"] is False
             assert saved["validation"]["ci"] == "unknown"
             _run_review(monkeypatch, ["--id", public_id, "--focused-validation", "passed", "--full-suite", "passed", "--ci", "passed"])
@@ -2260,14 +2275,14 @@ def _legacy_clean_followup_checkpoint(tmp_path: Path) -> tuple[Path, Path, dict,
     state = review.create_cycle(cwd=repo, base="main", branch="feature/recovery", head=source_head,
                                 merge_base=base, requested_mode="deep", effective_mode="deep",
                                 selection="auto", effective_selection="stable", review_brief="Frozen contract")
-    state["review_plan"] = {"steps": [{"kind": "review", "name": f"review-{i}", "lane": "review_t1"} for i in range(4)]}
+    state["review_plan"] = {"steps": [{"kind": "review", "name": f"review-{i}", "lane": "review_base"} for i in range(4)]}
     for index, head in enumerate((base, first)):
-        state = review.record_findings_decision(state, round_id=f"prior-{index}", lane="review_t1",
+        state = review.record_findings_decision(state, round_id=f"prior-{index}", lane="review_base",
                                                reviewed_head=head, reviewed_tree=_git(repo, "rev-parse", f"{head}^{{tree}}"))
         state = review.record_followup_clean(state, round_id=f"prior-clean-{index}", reviewed_head=source_head)
-    state = mark_review_step_pending(state, round_id="source", lane="review_t1", step_index=2,
+    state = mark_review_step_pending(state, round_id="source", lane="review_base", step_index=2,
                                            step_name="review-2", reviewed_head=source_head)
-    state = review.record_findings_decision(state, round_id="source", lane="review_t1", reviewed_head=source_head,
+    state = review.record_findings_decision(state, round_id="source", lane="review_base", reviewed_head=source_head,
                                            reviewed_tree=_git(repo, "rev-parse", f"{source_head}^{{tree}}"))
     state = review.record_convergence_decision(state, decision="CONTINUE")
     reviewed = _commit_file(repo, "app.py", "fixed\n", "fix")
@@ -2352,7 +2367,7 @@ def test_clean_correction_rejects_unproven_or_changed_review(
     elif failure == "contract":
         before["convergence"].update(reason="contract_conflict", conflict="scope")
     elif failure == "later-round":
-        before["rounds"].append({"round_id": "later", "lane": "review_t1"})
+        before["rounds"].append({"round_id": "later", "lane": "review_base"})
     elif failure == "running":
         write_round(state_dir / "orchestrator" / "review-rounds", {
             "round_id": "live", "review_scope": {"source_round_id": "source"}, "runs": [{"pid": os.getpid()}],
@@ -2397,7 +2412,7 @@ def _automatic_findings_cycle(
         state = review.record_findings_decision(
             state,
             round_id=f"prior-{index}",
-            lane="review_t1",
+            lane="review_base",
             reviewed_head=head,
             reviewed_tree=_git(repo, "rev-parse", f"{head}^{{tree}}"),
         )
@@ -2411,14 +2426,14 @@ def _automatic_findings_cycle(
         )
     state["review_plan"] = {
         "steps": [
-            {"kind": "review", "name": f"signoff-{i}", "lane": "review_t1"}
+            {"kind": "review", "name": f"signoff-{i}", "lane": "review_base"}
             for i in range(1 if final_step else 2)
         ]
     }
     state = mark_review_step_pending(
         state,
         round_id="automatic",
-        lane="review_t1",
+        lane="review_base",
         step_index=0,
         step_name="signoff-0",
         reviewed_head=head,
@@ -2427,7 +2442,7 @@ def _automatic_findings_cycle(
         state = review.record_findings_decision(
             state,
             round_id="automatic",
-            lane="review_t1",
+            lane="review_base",
             reviewed_head=head,
             reviewed_tree=_git(repo, "rev-parse", f"{head}^{{tree}}"),
         )
@@ -2445,7 +2460,7 @@ def _automatic_findings_cycle(
     state["decisions"].append(
         {
             "round_id": "precision-clean",
-            "lane": "review_t1",
+            "lane": "review_base",
             "command": "clean",
             "reviewed_head": head,
         }
@@ -2624,7 +2639,7 @@ def test_caller_disagreement_rejects_stale_uninspected_or_consumed_decisions(
     elif failure == "older-schema":
         before["schema_version"] = 0
     elif failure == "later-round":
-        before["rounds"].append({"round_id": "later", "lane": "review_t1"})
+        before["rounds"].append({"round_id": "later", "lane": "review_base"})
     elif failure == "earlier-findings":
         before["decisions"][-2]["command"] = "findings"
     elif failure == "same-tree":
@@ -2698,7 +2713,7 @@ def test_wsl_flag_persists_to_orchestrated_steps(
     review_calls = _stub_review(monkeypatch, "phase_review-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _use_single_step_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/wsl-review")
@@ -2706,7 +2721,7 @@ def test_wsl_flag_persists_to_orchestrated_steps(
 
     args = [
         "--mode",
-        "normal",
+        "base",
         "--cd",
         str(repo),
         "--base",
@@ -2808,7 +2823,7 @@ def test_id_show_findings_prefers_open_cleanup_then_latest_review_without_runnin
 
     args = [
         "--mode",
-        "normal",
+        "base",
         "--cd",
         str(repo),
         "--base",
@@ -2826,7 +2841,7 @@ def test_id_show_findings_prefers_open_cleanup_then_latest_review_without_runnin
     state["rounds"].append(
         {
             "round_id": "empty-later-round",
-            "lane": "review_t1",
+            "lane": "review_base",
             "round_state_dir": str(round_state_dir),
             "runs": [],
         }
@@ -2834,15 +2849,15 @@ def test_id_show_findings_prefers_open_cleanup_then_latest_review_without_runnin
     state["pending_action"] = {
         "kind": "decision",
         "round_id": "empty-later-round",
-        "lane": "review_t1",
+        "lane": "review_base",
     }
     _write_cycle_payload(state_dir, public_id, state)
     write_round(
         round_state_dir,
         {
             "round_id": round_id,
-            "task_class": "phase_review",
-            "public_task": "review_t1",
+            "task_class": "base_review",
+            "public_task": "review_base",
             "review_cwd": str(repo),
             "runs": [
                 {
@@ -2858,7 +2873,7 @@ def test_id_show_findings_prefers_open_cleanup_then_latest_review_without_runnin
         round_state_dir,
         {
             "round_id": "empty-later-round",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "completed",
             "runs": [],
         },
@@ -3029,7 +3044,7 @@ def test_id_collects_running_round_without_spawning_duplicate(
 
     args = [
         "--mode",
-        "normal",
+        "base",
         "--cd",
         str(repo),
         "--base",
@@ -3047,7 +3062,7 @@ def test_id_collects_running_round_without_spawning_duplicate(
     state["pending_action"] = {
         "kind": "collect-review-step",
         "round_id": round_id,
-        "lane": "review_t1",
+        "lane": "review_base",
         "step_index": 0,
         "step": "broad-discovery",
         "round_state_dir": "state/orchestrator/review-rounds",
@@ -3059,7 +3074,7 @@ def test_id_collects_running_round_without_spawning_duplicate(
         resume_calls.append(dict(kwargs))
         return {
             "round_id": round_id,
-            "lane": "review_t1",
+            "lane": "review_base",
             "kind": "review",
             "status": "completed",
             "blocked": False,
@@ -3106,7 +3121,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     review_calls = _stub_review(monkeypatch, "normal-round-1", "deep-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
+    _use_compact_base_profile(monkeypatch, state_dir, include_deep=True)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/restart-deep")
@@ -3116,7 +3131,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -3168,12 +3183,12 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert new_state["restart"]["token"] == f"{old_state['cycle_key']}:deep"
     assert new_state["restart"]["supersedes"] == old_id
     assert new_state["restart"]["supersedes_cycle_key"] == old_state["cycle_key"]
-    assert new_state["restart"]["from_mode"] == "normal"
+    assert new_state["restart"]["from_mode"] == "base"
     assert review._is_successor_cycle(new_state) is True
     assert review._successor_needs_locked_resume(new_state) is False
     assert [step["name"] for step in new_state["review_plan"]["steps"]] == [
         "broad-discovery",
-        "precision-signoff",
+        "base-signoff",
         "deep-discovery",
         "deep-signoff",
     ]
@@ -3235,7 +3250,7 @@ def test_restart_brief_supersedes_invalid_cycle_with_fresh_same_mode_ladder(
     invocation_wsl: bool,
 ) -> None:
     _stub_deslop(monkeypatch)
-    _use_compact_normal_profile(monkeypatch, tmp_path / "state", include_deep=True)
+    _use_compact_base_profile(monkeypatch, tmp_path / "state", include_deep=True)
     review_calls = _stub_review(monkeypatch, "old-round", "replacement-round")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -3415,7 +3430,7 @@ def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
     tmp_path: Path,
     followup_pending: bool | str,
 ) -> None:
-    _use_compact_normal_profile(monkeypatch, tmp_path / "state", include_deep=True)
+    _use_compact_base_profile(monkeypatch, tmp_path / "state", include_deep=True)
     review_calls = _stub_review(monkeypatch, "old-round", "new-round")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -3840,7 +3855,7 @@ def test_repeat_continue_restores_completed_unclassified_round(
         legacy = review.record_findings_decision(
             legacy,
             round_id=f"round-{index}",
-            lane="review_t1",
+            lane="review_base",
             reviewed_head=f"head-{index}",
         )
     legacy = review.record_convergence_decision(legacy, decision="CONTINUE")
@@ -3891,7 +3906,7 @@ def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
     review_calls = _stub_review(monkeypatch, "fast-round-1", "deep-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
+    _use_compact_base_profile(monkeypatch, state_dir, include_deep=True)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/restart-fast")
@@ -3947,7 +3962,7 @@ def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
         for action in review.build_parser()._actions
         if action.dest == "restart_mode"
     )
-    assert tuple(restart_action.choices) == ("normal", "deep")
+    assert tuple(restart_action.choices) == ("base", "deep")
 
 
 def test_restart_mode_requires_escalation_reason_and_stricter_mode(
@@ -3965,7 +3980,7 @@ def test_restart_mode_requires_escalation_reason_and_stricter_mode(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -3997,7 +4012,7 @@ def test_restart_mode_requires_escalation_reason_and_stricter_mode(
             "--id",
             public_id,
             "--restart-mode",
-            "normal",
+            "base",
             "--reason",
             "try downgrade",
         ],
@@ -4021,7 +4036,7 @@ def test_restart_mode_rejects_dirty_worktree(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -4077,7 +4092,7 @@ def test_restart_mode_rejects_changed_head(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -4147,7 +4162,7 @@ def test_closure_dismissal_persists_without_bypassing_gates_or_identity(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -4249,7 +4264,7 @@ def test_cleanup_drift_requires_dismissal_after_changes_without_material_fixes(
     cleanup_calls = _stub_deslop(monkeypatch)
     reviews = _stub_review(monkeypatch)
     repo, state_dir = tmp_path / "repo", tmp_path / "state"
-    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _use_single_step_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "README.md", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/drift")
@@ -4258,7 +4273,7 @@ def test_cleanup_drift_requires_dismissal_after_changes_without_material_fixes(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -4375,7 +4390,7 @@ def test_review_step_output_is_not_reprinted_by_review_py(
         print("Output:\nalpha:\nReviewer body.")
         return {
             "round_id": "phase_review-round-1",
-            "lane": "review_t1",
+            "lane": "review_base",
             "kind": "review",
             "status": "completed",
             "blocked": False,
@@ -4436,7 +4451,7 @@ def test_id_rejects_creation_context_flags(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -4475,7 +4490,7 @@ def test_id_rejects_creation_context_flags(
     message = errors[0][0]
     assert "--id already selects review context" in message
     assert "remove --mode, --cd, --base" in message
-    assert "mode normal" in message
+    assert "mode base" in message
     assert str(repo.resolve()) in message
 
 
@@ -4572,7 +4587,7 @@ def test_github_review_rejects_cycle_before_local_green(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -4687,7 +4702,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
     followup_calls = _stub_followup(monkeypatch, "github-followup-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _use_single_step_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/github-findings")
@@ -4697,7 +4712,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -4749,7 +4764,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
     )
     assert len(followup_calls) == 0
     assert len(review_calls) == 2
-    assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["step_name"] == "base-signoff"
     assert review_calls[1]["step_position"] == 1
     assert review_calls[1]["step_total"] == 1
     state = _cycle_payload(state_dir, public_id)
@@ -4786,7 +4801,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _use_single_step_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
 
@@ -4794,7 +4809,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5038,7 +5053,7 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
     review_calls = _stub_review(monkeypatch, "signoff-round-1", "signoff-round-2")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _use_single_step_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/github-amend")
@@ -5048,7 +5063,7 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5109,7 +5124,7 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
     )
 
     assert len(review_calls) == 2
-    assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["step_name"] == "base-signoff"
     assert review_calls[1]["review_scope"]["reviewed_head"] == amended_head
     state = _cycle_payload(state_dir, public_id)
     assert state["validation"]["full_suite"] == "unknown"
@@ -5141,7 +5156,7 @@ def test_mode_rerun_after_pending_github_head_change_reuses_same_id_for_signoff(
     review_calls = _stub_review(monkeypatch, "signoff-round-1", "signoff-round-2")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _use_single_step_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/github-head-change-mode-rerun")
@@ -5151,7 +5166,7 @@ def test_mode_rerun_after_pending_github_head_change_reuses_same_id_for_signoff(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5176,7 +5191,7 @@ def test_mode_rerun_after_pending_github_head_change_reuses_same_id_for_signoff(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5204,7 +5219,7 @@ def test_patch_equivalent_rebase_after_cleanup_keeps_local_signoff(
     review_calls = _stub_review(monkeypatch, "signoff-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _use_single_step_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     base_at_review = _commit_file(repo, "README.md", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/green-base-drift")
@@ -5214,7 +5229,7 @@ def test_patch_equivalent_rebase_after_cleanup_keeps_local_signoff(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5243,7 +5258,7 @@ def test_patch_equivalent_rebase_after_cleanup_keeps_local_signoff(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5285,7 +5300,7 @@ def test_github_result_after_amend_requires_same_id_signoff(
     _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _use_single_step_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/github-result-amend")
@@ -5295,7 +5310,7 @@ def test_github_result_after_amend_requires_same_id_signoff(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5333,7 +5348,7 @@ def test_mode_rerun_after_pending_review_amend_reuses_existing_cycle(
     review_calls = _stub_review(monkeypatch, "phase_review-round-1", output="[P1] Concrete regression.")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
+    _use_compact_base_profile(monkeypatch, state_dir, include_deep=True)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/deslop-amend")
@@ -5343,7 +5358,7 @@ def test_mode_rerun_after_pending_review_amend_reuses_existing_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5366,7 +5381,7 @@ def test_mode_rerun_after_pending_review_amend_reuses_existing_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5412,7 +5427,7 @@ def test_mode_rerun_allows_non_overlapping_merge_base_drift_without_rerunning_de
     review_calls = _stub_review(monkeypatch, "phase_review-round-1", output="[P1] Concrete regression.")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     base_at_review = _commit_file(repo, "README.md", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/base-drift")
@@ -5422,7 +5437,7 @@ def test_mode_rerun_allows_non_overlapping_merge_base_drift_without_rerunning_de
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5445,7 +5460,7 @@ def test_mode_rerun_allows_non_overlapping_merge_base_drift_without_rerunning_de
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5486,7 +5501,7 @@ def test_mode_rerun_after_non_equivalent_base_drift_starts_fresh_cycle(
     _stub_review(monkeypatch, "phase_review-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "README.md", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/base-drift-edit")
@@ -5496,7 +5511,7 @@ def test_mode_rerun_after_non_equivalent_base_drift_starts_fresh_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5517,7 +5532,7 @@ def test_mode_rerun_after_non_equivalent_base_drift_starts_fresh_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5545,7 +5560,7 @@ def test_mode_rerun_after_initial_review_commit_reuses_cycle(
     )
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/deslop-new-commit")
@@ -5555,7 +5570,7 @@ def test_mode_rerun_after_initial_review_commit_reuses_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5571,7 +5586,7 @@ def test_mode_rerun_after_initial_review_commit_reuses_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5599,7 +5614,7 @@ def test_mode_rerun_after_overlapping_merge_base_drift_starts_fresh_cycle(
     _stub_review(monkeypatch, "phase_review-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "one\ntwo\nthree\nfour\n", "base")
     _git(repo, "checkout", "-b", "feature/base-overlap")
@@ -5609,7 +5624,7 @@ def test_mode_rerun_after_overlapping_merge_base_drift_starts_fresh_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5630,7 +5645,7 @@ def test_mode_rerun_after_overlapping_merge_base_drift_starts_fresh_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5656,7 +5671,7 @@ def test_mode_rerun_after_initial_review_reset_reuses_cycle(
     _stub_review(monkeypatch, "phase_review-round-1", output="[P1] Concrete regression.")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     base_head = _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/deslop-reset")
@@ -5666,7 +5681,7 @@ def test_mode_rerun_after_initial_review_reset_reuses_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5682,7 +5697,7 @@ def test_mode_rerun_after_initial_review_reset_reuses_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5710,7 +5725,7 @@ def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
     )
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/pending-amend")
@@ -5720,7 +5735,7 @@ def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5747,7 +5762,7 @@ def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
     assert exit_code == 0
     assert verification["review"] == public_id
     assert len(review_calls) == 2
-    assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["step_name"] == "base-signoff"
     state = _cycle_payload(state_dir, public_id)
     assert state["decisions"][0]["command"] == "findings"
     assert state["decisions"][0]["reviewed_head"] == original_head
@@ -5766,7 +5781,7 @@ def test_id_rerun_after_pending_decision_equivalent_base_drift_updates_reviewed_
     )
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "README.md", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/pending-base-drift")
@@ -5776,7 +5791,7 @@ def test_id_rerun_after_pending_decision_equivalent_base_drift_updates_reviewed_
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5830,7 +5845,7 @@ def test_id_rerun_after_findings_fix_allows_non_overlapping_merge_base_drift(
     )
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     base_at_review = _commit_file(repo, "README.md", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/fix-after-base-drift")
@@ -5840,7 +5855,7 @@ def test_id_rerun_after_findings_fix_allows_non_overlapping_merge_base_drift(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5874,7 +5889,7 @@ def test_id_rerun_after_findings_fix_allows_non_overlapping_merge_base_drift(
     assert exit_code == 0
     assert verification["review"] == public_id
     assert len(review_calls) == 2
-    assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["step_name"] == "base-signoff"
     state = _cycle_payload(state_dir, public_id)
     assert state["identity"]["head"] == fixed_head
     assert state["identity"]["merge_base"] == current_base
@@ -5912,7 +5927,7 @@ def test_id_findings_fix_allows_overlapping_base_drift(
     )
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
+    _use_compact_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "spec.md", "base\nshared\n", "base")
     _git(repo, "checkout", "-b", "feature/fix-after-overlap")
@@ -5925,7 +5940,7 @@ def test_id_findings_fix_allows_overlapping_base_drift(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -5976,7 +5991,7 @@ def test_id_findings_fix_allows_overlapping_base_drift(
     assert exit_code == 0
     assert verification["review"] == public_id
     assert len(review_calls) == 2
-    assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["step_name"] == "base-signoff"
     assert review_calls[1]["review_scope"]["reviewed_head"] == fixed_head
     state = _cycle_payload(state_dir, public_id)
     assert state["identity"]["head"] == fixed_head
@@ -5995,7 +6010,7 @@ def test_id_findings_fix_allows_overlapping_base_drift(
     "mode,github,remaining",
     [
         ("fast", False, False),
-        ("normal", True, False),
+        ("base", True, False),
         ("deep", False, True),
     ],
 )
@@ -6016,9 +6031,9 @@ def test_validated_fixes_preserve_findings_and_remaining_gates_without_review(
     config = deepcopy(review.load_config(state_dir))
     steps = [
         {
-            "name": "precision-signoff",
+            "name": "base-signoff",
             "count": 2,
-            "model_ref": "signoff_normal_model",
+            "model_ref": "signoff_base_model",
             "rerun_on_findings": True,
         }
     ]
@@ -6113,7 +6128,7 @@ def test_clean_followup_note_does_not_leak_to_later_review_steps(
     config = deepcopy(review.load_config(tmp_path / "state"))
     config["orchestrator"]["profiles"]["stable"]["deep"]["steps"] = [
         {
-            "name": "precision-signoff",
+            "name": "base-signoff",
             "count": 1,
             "model_ref": "signoff_deep_model",
             "rerun_on_findings": True,
@@ -6156,7 +6171,7 @@ def test_clean_followup_note_does_not_leak_to_later_review_steps(
     )
 
     assert rerun_ready["Action"]["note"] == (
-        "Clean follow-up is not final signoff; run review step 1/2 precision-signoff "
+        "Clean follow-up is not final signoff; run review step 1/2 base-signoff "
         "before treating the review as green."
     )
 
@@ -6184,8 +6199,8 @@ def test_followup_automatic_verdict_releases_owned_round(
     repo, state_dir = tmp_path / "repo", tmp_path / "state"
     config = deepcopy(review.load_config(state_dir))
     config["orchestrator"]["profiles"]["stable"]["deep"]["steps"] = [
-        {"name": "initial", "count": 1, "model_ref": "signoff_normal_model"}
-    ] + ([{"name": "remaining", "count": 1, "model_ref": "signoff_normal_model"}] if remaining else [])
+        {"name": "initial", "count": 1, "model_ref": "signoff_base_model"}
+    ] + ([{"name": "remaining", "count": 1, "model_ref": "signoff_base_model"}] if remaining else [])
     monkeypatch.setattr(review, "load_config", lambda _: config)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
@@ -6287,7 +6302,7 @@ def test_validation_flags_do_not_run_expensive_resume(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -6323,13 +6338,13 @@ def test_validation_flags_do_not_run_expensive_resume(
 
 @pytest.mark.parametrize("resume", ["id", "acknowledge", "mode"])
 @pytest.mark.parametrize("edit_kind", ["commit", "amend"])
-def test_cleanup_edits_precede_first_normal_signoff_and_final_fixes_do_not_repeat_cleanup(
+def test_cleanup_edits_precede_first_base_signoff_and_final_fixes_do_not_repeat_cleanup(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resume: str, edit_kind: str
 ) -> None:
     review_calls = _stub_review(monkeypatch, "signoff-1", "signoff-2")
     cleanup_calls = _stub_deslop(monkeypatch)
     repo, state_dir = tmp_path / "repo", tmp_path / "state"
-    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _use_single_step_base_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/cleanup")
@@ -6338,7 +6353,7 @@ def test_cleanup_edits_precede_first_normal_signoff_and_final_fixes_do_not_repea
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "base",
             "--cd",
             str(repo),
             "--base",
@@ -6365,7 +6380,7 @@ def test_cleanup_edits_precede_first_normal_signoff_and_final_fixes_do_not_repea
         else _commit_file(repo, "app.txt", "simplified\n", "cleanup")
     )
     resume_args = (
-        ["--mode", "normal", "--cd", str(repo), "--base", "main"]
+        ["--mode", "base", "--cd", str(repo), "--base", "main"]
         if resume == "mode"
         else ["--id", public_id]
         + (["--deslop-done"] if resume == "acknowledge" else [])
@@ -6459,7 +6474,7 @@ def test_fast_manual_github_findings_keeps_re_review_action(
     )
     assert "--decision clean" in _assert_decision_action(signoff["Action"])["clean"]
     assert len(review_calls) == 2
-    assert review_calls[1]["step_name"] == "fast-signoff"
+    assert review_calls[1]["step_name"] == "base-signoff"
 
     _, final_clean = _run_review_after_cleanup(
         monkeypatch,

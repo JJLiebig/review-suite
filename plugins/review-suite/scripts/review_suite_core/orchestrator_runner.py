@@ -66,12 +66,12 @@ from .workflow_state import (
 )
 
 
-INITIAL_REVIEW_LANE = "review_t1"
+INITIAL_REVIEW_LANE = "review_base"
 FOLLOWUP_REVIEW_LANE = "review-followup"
 ARENA_BLOCKED_REASON = "arena review round blocked before caller grading; reroll or dismiss the arena round before continuing"
 ARENA_LANES_BY_TASK_CLASS = {
-    "phase_review": "review_t1",
-    "pr_review": "review_t3",
+    "base_review": "review_base",
+    "deep_review": "review_deep",
 }
 
 
@@ -553,6 +553,8 @@ def _attach_review_result(
     for item in list(state.get("rounds") or []):
         if not isinstance(item, dict) or str(item.get("round_id") or "") != round_id:
             continue
+        if task_class := review_result.get("task_class"):
+            item["task_class"] = str(task_class)
         item["review_status"] = str(review_result.get("status") or "")
         item["review_blocked"] = bool(review_result.get("blocked"))
         output_refs = [
@@ -765,7 +767,7 @@ def _run_profile_review_once(
         step_index, step = _next_profile_step(state)
     if _step_kind(step) != "review":
         raise ValueError("profile step is not a review step")
-    lane = str(step.get("lane") or INITIAL_REVIEW_LANE).strip() or INITIAL_REVIEW_LANE
+    lane = str(step["lane"])
     cwd = _identity_cwd(state)
     scope = _review_scope(state, cwd)
     fix_context = _fix_verification_context(state)
@@ -800,6 +802,7 @@ def _run_profile_review_once(
 
     review_result = run_review_step(
         lane=lane,
+        task_class=str(step["task_class"]),
         step_name=str(step["name"]),
         step_position=step_position,
         step_total=step_total,
@@ -1341,7 +1344,13 @@ def _run_followup_review_once(
                 }
                 save_cycle(state_dir, owned, claim_followup=True)
 
+    source_round = _round_by_id(state, source_round_id)
+    source_lane = str(source_round.get("lane") or active.get("lane") or "")
+    task_class = str(source_round.get("task_class") or (
+        "deep_review" if source_lane == "review_deep" else "base_review"
+    ))
     review_result = run_followup_review_step(
+        task_class=task_class,
         model=model_config.model,
         reasoning_effort=model_config.reasoning_effort,
         service_tier=model_config.service_tier,

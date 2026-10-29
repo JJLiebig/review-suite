@@ -8,7 +8,7 @@ Shipped defaults, without personal overrides. Arena is optional and **disabled b
 Review Fast:
 Final signoff (2x gpt-6.1-sol medium) -> Done
 
-Review Normal:
+Review Base:
 Optional Arena (36 variants / 13 loops) -> Cleanup once (gpt-6.1-sol medium) -> Final signoff (2x gpt-6.1-sol medium) -> GitHub review -> Done
 
 Review Deep:
@@ -16,6 +16,6 @@ Review (2x gpt-6.1-sol medium) -> Optional Arena (48 variants / 13 loops) -> Cle
 
 ```
 
-Reviewers report findings; fixes require relevant validation. Eligible docs/test-only or low-risk P2-or-lower fixes do not repeat review (see [review strategy](review-strategy.md)). In normal/deep modes, cleanup runs once before final signoff and does not repeat after later fixes. Required validation must pass before completion. GitHub review uses its service-selected model.
+Reviewers report findings; fixes require relevant validation. Eligible docs/test-only or low-risk P2-or-lower fixes do not repeat review (see [review strategy](review-strategy.md)). In base/deep modes, cleanup runs once before final signoff and does not repeat after later fixes. Required validation must pass before completion. GitHub review uses its service-selected model.
 
 Regenerate with `uv run --locked python scripts/generate-workflow.py`. CI runs the same command with `--check` to catch stale output.

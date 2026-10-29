@@ -58,11 +58,11 @@ from review_suite_core import (
     write_text,
 )
 
-TASK_CLASSES = ("phase_review", "pr_review")
+TASK_CLASSES = ("base_review", "deep_review")
 PAIR_SELECTION_MODES = ("legacy", "slight_bias", "true_scramble")
 LOCAL_REVIEW_LANE_STAGE_RANK = {
-    "review_t1": 1,
-    "review_t3": 3,
+    "review_base": 1,
+    "review_deep": 3,
 }
 STALE_REVIEW_STATE_TTL_SECONDS = 24 * 60 * 60
 RUN_LOG_FILENAME = "runs.jsonl"
@@ -206,17 +206,17 @@ def normalize_commit_spec(
     raise ValueError("--commit accepts one sha or two shas")
 
 
-def build_phase_instructions(target_label: str) -> str:
+def build_base_instructions(target_label: str) -> str:
     return (
-        "Review this implementation slice for correctness and regression risk.\n"
+        "Perform a base review of this implementation slice for correctness and regression risk.\n"
         f"The review target is {target_label}.\n"
         f"{build_correctness_review_contract()}"
     )
 
 
-def build_pr_instructions(target_label: str) -> str:
+def build_deep_instructions(target_label: str) -> str:
     return (
-        "Review this PR-ready branch diff for correctness and regression risk.\n"
+        "Perform a deep review of this branch diff for correctness and regression risk.\n"
         f"The review target is {target_label}.\n"
         f"{build_correctness_review_contract()}"
     )
@@ -1781,18 +1781,18 @@ def review_label(task_class: str) -> str:
     public = public_task_name(task_class)
     if public != task_class:
         return public
-    if task_class == "phase_review":
-        return "phase"
-    if task_class == "pr_review":
-        return "pr"
+    if task_class == "base_review":
+        return "base"
+    if task_class == "deep_review":
+        return "deep"
     return str(task_class)
 
 
 def public_task_name(task_class: str) -> str:
-    if task_class == "phase_review":
-        return "review_t1"
-    if task_class == "pr_review":
-        return "review_t3"
+    if task_class == "base_review":
+        return "review_base"
+    if task_class == "deep_review":
+        return "review_deep"
     return str(task_class)
 
 

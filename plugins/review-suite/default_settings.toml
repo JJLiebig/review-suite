@@ -1,7 +1,7 @@
 # Shipped defaults. User overrides: ~/.codex/state/review-suite/settings.toml
-# All jobs use normal except final deep signoff, which uses deep.
+# All jobs use base except final deep signoff, which uses deep.
 
-[normal]
+[base]
 model = "gpt-6.1-sol"
 reasoning = "medium"
 
@@ -9,10 +9,10 @@ reasoning = "medium"
 model = "gpt-6.1-sol"
 reasoning = "xhigh"
 
-# Optional per-job overrides inherit omitted fields from normal/deep:
+# Optional per-job overrides inherit omitted fields from base/deep:
 # [jobs.deslop]
 # model = "gpt-5.6-luna"
-# Jobs: plan, deslop, followup, normal_signoff, deep_signoff. service_tier may also be set (fast/flex).
+# Jobs: plan, deslop, followup, base_signoff, deep_signoff. service_tier may also be set (fast/flex).
 
 [jobs.plan]
 model = "gpt-6-astra"

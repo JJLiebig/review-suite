@@ -10,21 +10,21 @@ from .model_labels import (
     supported_reasoning_efforts_text,
 )
 
-SUPPORTED_MODES = ("fast", "normal", "deep")
+SUPPORTED_MODES = ("fast", "base", "deep")
 SUPPORTED_SELECTIONS = ("stable", "auto")
 # Retain the removed mode's rank only so persisted brief cycles can restart upward.
-MODE_STRICTNESS_ORDER = {"fast": 0, "brief": 1, "normal": 2, "deep": 3}
-RESTART_TARGET_MODES = ("normal", "deep")
+MODE_STRICTNESS_ORDER = {"fast": 0, "brief": 1, "base": 2, "deep": 3}
+RESTART_TARGET_MODES = ("base", "deep")
 SUPPORTED_SELECTION_REASONS = (
     "explicit_stable",
     "auto_stable_profile",
 )
 SUPPORTED_STEP_KINDS = ("review", "arena")
-SUPPORTED_ARENA_LANES = ("review_t1", "review_t3")
-SUPPORTED_ARENA_TASK_CLASSES = ("phase_review", "pr_review")
+SUPPORTED_ARENA_LANES = ("review_base", "review_deep")
+SUPPORTED_ARENA_TASK_CLASSES = ("base_review", "deep_review")
 ARENA_LANES_BY_TASK_CLASS = {
-    "phase_review": "review_t1",
-    "pr_review": "review_t3",
+    "base_review": "review_base",
+    "deep_review": "review_deep",
 }
 
 
@@ -383,9 +383,12 @@ def _normalize_step(
         raise ValueError(
             f"{field} cannot combine rerun_on_findings with max_review_rounds"
         )
+    task_class = "deep_review" if name == f"deep-signoff{name_suffix}" else "base_review"
     return OrchestratorProfileStep(
         kind=kind,
         name=name,
+        lane=ARENA_LANES_BY_TASK_CLASS[task_class],
+        task_class=task_class,
         count=_positive_int(raw_step.get("count"), field=f"{field}.count"),
         model=model,
         reasoning_effort=effort,

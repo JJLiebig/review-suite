@@ -30,14 +30,14 @@ from review_suite_local import (
     write_json,
 )
 
-LANES = ("review_t1", "review_t3", "review_followup")
+LANES = ("review_base", "review_deep", "review_followup")
 TASK_TO_LANE = {
-    "phase_review": "review_t1",
-    "pr_review": "review_t3",
+    "base_review": "review_base",
+    "deep_review": "review_deep",
 }
 PUBLIC_TASK_TO_LANE = {
-    "review_t1": "review_t1",
-    "review_t3": "review_t3",
+    "review_base": "review_base",
+    "review_deep": "review_deep",
     "review-followup": "review_followup",
     "review_followup": "review_followup",
 }
@@ -1002,7 +1002,7 @@ def collect_review_cost_rows(
 
     for payload in _iter_review_round_payloads(state_dir):
         lane = _record_lane(payload)
-        if lane not in {"review_t1", "review_t3", "review_followup"}:
+        if lane not in {"review_base", "review_deep", "review_followup"}:
             continue
         normalized_cwd = str(normalize_record_review_cwd_value(payload) or "")
         if not normalized_cwd:
@@ -1147,7 +1147,7 @@ def render_review_cost_markdown(rows: list[ReviewCostRow]) -> str:
     lines = [
         "# Review Cost Ledger",
         "",
-        "Generated from local review-suite state. T1/T3/FU columns are reviewer session counts.",
+        "Generated from local review-suite state. Base/Deep/FU columns are reviewer session counts.",
         "",
     ]
     if not rows:
@@ -1159,7 +1159,7 @@ def render_review_cost_markdown(rows: list[ReviewCostRow]) -> str:
             [
                 f"# {repo}",
                 "",
-                "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | T1 | T3 | FU | Review Time | Review Tokens | Review Cost | Total Cost |",
+                "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | Base | Deep | FU | Review Time | Review Tokens | Review Cost | Total Cost |",
                 "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
@@ -1184,8 +1184,8 @@ def render_review_cost_markdown(rows: list[ReviewCostRow]) -> str:
                         _md_cell(row.worker_model),
                         format_compact_number(row.implementation_tokens),
                         f"${row.implementation_cost_usd:.2f}",
-                        str(row.lane_sessions.get("review_t1", 0)),
-                        str(row.lane_sessions.get("review_t3", 0)),
+                        str(row.lane_sessions.get("review_base", 0)),
+                        str(row.lane_sessions.get("review_deep", 0)),
                         str(row.lane_sessions.get("review_followup", 0)),
                         _md_cell(format_duration(row.review_seconds)),
                         format_compact_number(row.tokens),

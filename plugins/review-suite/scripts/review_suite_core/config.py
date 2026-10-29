@@ -6,9 +6,12 @@ import tempfile
 import tomllib
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import date, time
 from pathlib import Path
 from typing import Any
 
+from .name_migration import rename_payload
+from .orchestrator_store import orchestrator_store_lock
 from .model_labels import (
     SUPPORTED_REASONING_EFFORTS,
     SUPPORTED_SERVICE_TIERS,
@@ -104,7 +107,7 @@ def _read_toml(path: Path) -> dict[str, Any]:
 
 
 def _toml_value(value: Any) -> str:
-    # Migration writes JSON-compatible values as TOML inline tables/arrays.
+    # Preserve TOML values while rewriting renamed settings.
     if isinstance(value, dict):
         return (
             "{ "
@@ -117,6 +120,10 @@ def _toml_value(value: Any) -> str:
         )
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    if isinstance(value, float):
+        return str(value)
     if value is None:
         raise ValueError("cannot migrate a null array item to TOML")
     return json.dumps(value, ensure_ascii=False)
@@ -130,12 +137,12 @@ def _toml_settings(settings: dict[str, Any], path: tuple[str, ...] = ()) -> str:
     ]
     header = "[" + ".".join(json.dumps(key, ensure_ascii=False) for key in path) + "]\n"
     return (
-        (header if path and values else "")
+        (header if path and (values or not settings) else "")
         + "".join(values)
         + "".join(
             "\n" + _toml_settings(value, (*path, key))
             for key, value in settings.items()
-            if isinstance(value, dict) and value
+            if isinstance(value, dict)
         )
     )
 
@@ -168,7 +175,7 @@ def _migrate_settings(legacy: dict[str, Any]) -> dict[str, Any]:
     for tool, settings in lens.items():
         if settings:
             if tool == "default":
-                migrated["normal"] = settings
+                migrated["base"] = settings
             else:
                 migrated.setdefault("jobs", {})[tool.removeprefix("review-")] = settings
     for profile in migrated.get("orchestrator", {}).get("profiles", {}).values():
@@ -178,7 +185,7 @@ def _migrate_settings(legacy: dict[str, Any]) -> dict[str, Any]:
                     step["model_ref"] = (
                         "signoff_deep_model"
                         if step.get("name") == "deep-signoff"
-                        else "signoff_normal_model"
+                        else "signoff_base_model"
                     )
     return migrated
 
@@ -206,7 +213,7 @@ def _create_user_settings(path: Path, defaults: dict[str, Any]) -> None:
 
 
 def _job_model(config: dict[str, Any], job: str) -> dict[str, Any]:
-    group = "deep" if job == "deep_signoff" else "normal"
+    group = "deep" if job == "deep_signoff" else "base"
     base = config.get(group)
     jobs = config.get("jobs", {})
     if not isinstance(base, dict):
@@ -234,7 +241,7 @@ def _resolved_config(config: dict[str, Any]) -> dict[str, Any]:
         _job_model(config, job)
     defaults = config["orchestrator"]["stable_defaults"]
     for ref, job in {
-        "signoff_normal_model": "normal_signoff",
+        "signoff_base_model": "base_signoff",
         "signoff_deep_model": "deep_signoff",
     }.items():
         model = _job_model(config, job)
@@ -251,9 +258,32 @@ def load_config(state_dir: Path | None = None) -> dict[str, Any]:
     )
     defaults = _deep_merge(defaults, _read_toml(default_config_path()))
     path = user_config_path(state_dir)
-    if not path.exists():
-        _create_user_settings(path, defaults)
-    return _resolved_config(_deep_merge(defaults, _read_toml(path)))
+    with orchestrator_store_lock(state_dir=path.parent, name="settings"):
+        if not path.exists():
+            _create_user_settings(path, defaults)
+        original = path.read_bytes()
+        overrides = _read_toml(path)
+        renamed = rename_payload(overrides, settings=True, deep_rounds=set())
+        resolved = _resolved_config(_deep_merge(defaults, renamed))
+        if renamed != overrides:
+            content = _toml_settings(renamed)
+            # Preserve the original before atomically publishing the renamed overrides.
+            with tempfile.NamedTemporaryFile(
+                dir=path.parent, prefix="settings-before-base-deep-", suffix=".toml", delete=False
+            ) as backup:
+                backup.write(original)
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent, suffix=".tmp", delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(content)
+            try:
+                if path.read_bytes() != original:
+                    raise ValueError(f"settings changed during migration; retry: {path}")
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return resolved
 
 
 def _non_empty_text(value: Any, *, field: str) -> str:

@@ -59,7 +59,7 @@ def test_grade_records_garbage_flags_and_penalizes_placements(tmp_path: Path) ->
             {
                 "settings": {"promotion_min_samples": 20},
                 "variants": [
-                    {"id": variant, "state": "active", "task_classes": ["phase_review"]}
+                    {"id": variant, "state": "active", "task_classes": ["base_review"]}
                     for variant in ("model-a", "model-b", "model-c")
                 ],
             }
@@ -71,7 +71,7 @@ def test_grade_records_garbage_flags_and_penalizes_placements(tmp_path: Path) ->
         {
             "round_id": "garbage-round",
             "repo_name": "test-repo",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "selection_mode": "scramble",
             "reporting_pool": True,
             "status": "completed",
@@ -124,7 +124,7 @@ def test_grade_records_garbage_flags_and_penalizes_placements(tmp_path: Path) ->
     summary = json.loads((state_dir / "summary.json").read_text(encoding="utf-8"))
     rows = {
         row["variant_id"]: row
-        for row in summary["task_classes"]["phase_review"]["leaderboard"]
+        for row in summary["task_classes"]["base_review"]["leaderboard"]
     }
     assert rows["model-b"]["elo"] > rows["model-a"]["elo"]
     assert rows["model-a"]["low_quality_loss_rate"] == 100
@@ -193,7 +193,7 @@ def test_public_round_result_does_not_repeat_streamed_output() -> None:
     result = public_round_result(
         {
             "round_id": "round-123",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "completed",
             "runs": [
                 {
@@ -221,11 +221,11 @@ def test_blocking_round_error_uses_compact_action_for_completed_round(
             "status": "completed",
             "runs": [{"review_status": "completed", "grade_blocked": False}],
         },
-        action="review_t1",
+        action="review_base",
         state_dir=tmp_path / "state",
     )
 
-    assert str(error) == "pending round blocks review_t1: round-123"
+    assert str(error) == "pending round blocks review_base: round-123"
     assert "grade_command" not in str(error)
     assert "dismiss_command" not in str(error)
     assert set(error.action_payload) == {"cmd", "dismiss_cmd"}
@@ -243,10 +243,10 @@ def test_blocking_round_error_uses_compact_action_for_running_round() -> None:
             "status": "running",
             "runs": [{"review_status": "running"}],
         },
-        action="review_t3",
+        action="review_deep",
     )
 
-    assert str(error) == "pending round blocks review_t3: round-456 (running)"
+    assert str(error) == "pending round blocks review_deep: round-456 (running)"
     assert set(error.action_payload) == {"dismiss_cmd"}
     assert "cmd" not in error.action_payload
     assert "dismiss-round" in str(error.action_payload["dismiss_cmd"])
@@ -260,7 +260,7 @@ def test_blocking_round_error_uses_configured_rating_pool(tmp_path: Path) -> Non
             "rating_pool_id": "discovery-phase-gpt-5.6-v1",
             "runs": [{"review_status": "completed", "grade_blocked": False}],
         },
-        action="review_t1",
+        action="review_base",
         state_dir=tmp_path,
     )
 
@@ -319,7 +319,7 @@ def test_cmd_show_round_prints_stored_reviewer_outputs(tmp_path: Path, capsys) -
         tmp_path,
         {
             "round_id": "round-1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "completed",
             "runs": [
                 {
@@ -369,8 +369,8 @@ def test_cmd_costs_uses_cache_and_ignores_stale_legacy_lock(
         caller_threads=(),
         latest_review="2026-04-27T10:00:00Z",
         lane_sessions={
-            "review_t1": 2,
-            "review_t3": 0,
+            "review_base": 2,
+            "review_deep": 0,
             "review_followup": 0,
         },
         review_seconds=123.0,
@@ -432,8 +432,8 @@ def test_cmd_costs_renders_all_cached_rows_for_scoped_report(
         caller_threads=(),
         latest_review="2026-04-26T10:00:00Z",
         lane_sessions={
-            "review_t1": 1,
-            "review_t3": 0,
+            "review_base": 1,
+            "review_deep": 0,
             "review_followup": 0,
         },
         review_seconds=60,
@@ -451,8 +451,8 @@ def test_cmd_costs_renders_all_cached_rows_for_scoped_report(
         caller_threads=(),
         latest_review="2026-04-27T10:00:00Z",
         lane_sessions={
-            "review_t1": 2,
-            "review_t3": 0,
+            "review_base": 2,
+            "review_deep": 0,
             "review_followup": 0,
         },
         review_seconds=123.0,
@@ -538,8 +538,8 @@ def test_cmd_costs_scoped_stale_implementation_points_to_full_rebuild(
         caller_threads=(),
         latest_review="2026-04-27T10:00:00Z",
         lane_sessions={
-            "review_t1": 1,
-            "review_t3": 0,
+            "review_base": 1,
+            "review_deep": 0,
             "review_followup": 0,
         },
         review_seconds=1,
@@ -623,7 +623,7 @@ def test_cmd_show_last_prints_latest_outputs_per_local_lane(
         tmp_path,
         {
             "round_id": "older-t1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "completed",
             "sampled_at": "2026-04-25T09:00:00Z",
             "review_cwd": str(repo),
@@ -641,7 +641,7 @@ def test_cmd_show_last_prints_latest_outputs_per_local_lane(
         tmp_path,
         {
             "round_id": "latest-t1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "completed",
             "sampled_at": "2026-04-25T10:00:00Z",
             "review_cwd": str(repo),
@@ -673,7 +673,7 @@ def test_cmd_show_round_finds_orchestrator_review_rounds(
         tmp_path / "orchestrator" / "review-rounds",
         {
             "round_id": "orchestrator-round",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "completed",
             "runs": [
                 {
@@ -705,7 +705,7 @@ def test_cmd_show_last_filters_orchestrator_review_rounds_by_repo(
         tmp_path / "orchestrator" / "review-rounds",
         {
             "round_id": "orchestrator-latest",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "completed",
             "sampled_at": "2026-05-27T10:00:00Z",
             "review_cwd": str(repo),
@@ -721,7 +721,7 @@ def test_cmd_show_last_filters_orchestrator_review_rounds_by_repo(
     )
 
     result = cmd_show_last(
-        Namespace(cd=str(repo), task="review_t1", state_dir=str(tmp_path), json=False)
+        Namespace(cd=str(repo), task="review_base", state_dir=str(tmp_path), json=False)
     )
 
     captured = capsys.readouterr()
@@ -1047,7 +1047,7 @@ def test_record_grade_refreshes_arena_state_without_cost_work(
 
     round_payload = {
         "round_id": "round-1",
-        "task_class": "phase_review",
+        "task_class": "base_review",
         "review_cwd": str(tmp_path),
     }
     monkeypatch.setattr(
@@ -1107,7 +1107,7 @@ def test_record_grade_refreshes_arena_state_without_cost_work(
 def test_run_benchmarked_round_rejects_partial_grade_inputs(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="direct grading requires"):
         run_benchmarked_round(
-            task_class="pr_review",
+            task_class="deep_review",
             review_cwd=tmp_path,
             roster_path=tmp_path / "roster.json",
             rubric_path=tmp_path / "rubric.json",
@@ -1147,7 +1147,7 @@ def test_run_benchmarked_round_direct_grade_uses_latest_pending_round(
     )
     monkeypatch.setattr(
         "review_suite_arena.find_pending_rounds_for_caller",
-        lambda **kwargs: [{"round_id": "latest-round", "task_class": "pr_review"}],
+        lambda **kwargs: [{"round_id": "latest-round", "task_class": "deep_review"}],
     )
 
     def fake_record_grade_result(**kwargs):
@@ -1162,7 +1162,7 @@ def test_run_benchmarked_round_direct_grade_uses_latest_pending_round(
     )
 
     result = run_benchmarked_round(
-        task_class="pr_review",
+        task_class="deep_review",
         review_cwd=tmp_path,
         roster_path=tmp_path / "roster.json",
         rubric_path=tmp_path / "rubric.json",
@@ -1190,7 +1190,7 @@ def test_run_benchmarked_round_direct_grade_uses_latest_pending_round(
     assert captured["rank_groups"] == ["alpha", "bravo"]
     assert captured["basis"] == BASIS
     assert emitted == [
-        {"status": "graded", "round_id": "latest-round", "task": "review_t3"}
+        {"status": "graded", "round_id": "latest-round", "task": "review_deep"}
     ]
 
 
@@ -1211,14 +1211,14 @@ def test_run_benchmarked_round_emits_round_banner_and_compact_payload(
     monkeypatch.setattr("review_suite_arena.load_operational_state", lambda path: {})
     monkeypatch.setattr(
         "review_suite_arena.select_pair",
-        lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review"},
+        lambda **kwargs: {"round_id": "round-1", "task_class": "base_review"},
     )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "review_suite_arena.run_round",
         lambda **kwargs: {
             "round_id": "round-1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "runs": [],
         },
     )
@@ -1242,7 +1242,7 @@ def test_run_benchmarked_round_emits_round_banner_and_compact_payload(
     )
 
     result = run_benchmarked_round(
-        task_class="phase_review",
+        task_class="base_review",
         review_cwd=tmp_path,
         roster_path=tmp_path / "roster.json",
         rubric_path=tmp_path / "rubric.json",
@@ -1261,7 +1261,7 @@ def test_run_benchmarked_round_emits_round_banner_and_compact_payload(
         rank_groups=None,
         basis=None,
         note=None,
-        public_task_name="review_t1",
+        public_task_name="review_base",
     )
 
     assert result == 0
@@ -1270,9 +1270,9 @@ def test_run_benchmarked_round_emits_round_banner_and_compact_payload(
     assert "round_id" not in emitted[-1]
     assert "runs" not in emitted[-1]
     assert "status" not in emitted[-1]
-    assert anchor_calls[0]["lane"] == "review_t1"
+    assert anchor_calls[0]["lane"] == "review_base"
     assert anchor_calls[0]["task_id"] == "branch-1"
-    assert "[review-suite] round review_t1 round-1" in capsys.readouterr().err
+    assert "[review-suite] round review_base round-1" in capsys.readouterr().err
 
 
 def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_next_steps(
@@ -1291,7 +1291,7 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
     monkeypatch.setattr("review_suite_arena.load_operational_state", lambda path: {})
     monkeypatch.setattr(
         "review_suite_arena.select_pair",
-        lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review"},
+        lambda **kwargs: {"round_id": "round-1", "task_class": "base_review"},
     )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
     monkeypatch.setattr(
@@ -1304,7 +1304,7 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
         "review_suite_arena.run_round",
         lambda **kwargs: {
             "round_id": "round-1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "runs": [],
         },
     )
@@ -1338,7 +1338,7 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
     )
 
     result = run_benchmarked_round(
-        task_class="phase_review",
+        task_class="base_review",
         review_cwd=tmp_path,
         roster_path=tmp_path / "roster.json",
         rubric_path=tmp_path / "rubric.json",
@@ -1357,7 +1357,7 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
         rank_groups=None,
         basis=None,
         note=None,
-        public_task_name="review_t1",
+        public_task_name="review_base",
     )
 
     assert result == 0
@@ -1389,7 +1389,7 @@ def test_run_benchmarked_round_warns_for_deep_review_without_model_names(
         "review_suite_arena.select_pair",
         lambda **kwargs: {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "runs": [
                 {
                     "slot": "alpha",
@@ -1407,7 +1407,7 @@ def test_run_benchmarked_round_warns_for_deep_review_without_model_names(
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "review_suite_arena.run_round",
-        lambda **kwargs: {"round_id": "round-1", "task_class": "pr_review", "runs": []},
+        lambda **kwargs: {"round_id": "round-1", "task_class": "deep_review", "runs": []},
     )
     monkeypatch.setattr(
         "review_suite_arena.public_round_result",
@@ -1426,7 +1426,7 @@ def test_run_benchmarked_round_warns_for_deep_review_without_model_names(
     )
 
     result = run_benchmarked_round(
-        task_class="pr_review",
+        task_class="deep_review",
         review_cwd=tmp_path,
         roster_path=tmp_path / "roster.json",
         rubric_path=tmp_path / "rubric.json",
@@ -1445,7 +1445,7 @@ def test_run_benchmarked_round_warns_for_deep_review_without_model_names(
         rank_groups=None,
         basis=None,
         note=None,
-        public_task_name="review_t3",
+        public_task_name="review_deep",
     )
 
     assert result == 0
@@ -1461,7 +1461,7 @@ def test_run_benchmarked_round_dry_run_rejects_direct_grade_inputs(
 ) -> None:
     with pytest.raises(ValueError, match="cannot be combined with direct grading"):
         run_benchmarked_round(
-            task_class="phase_review",
+            task_class="base_review",
             review_cwd=tmp_path,
             roster_path=tmp_path / "roster.json",
             rubric_path=tmp_path / "rubric.json",
@@ -1480,7 +1480,7 @@ def test_run_benchmarked_round_dry_run_rejects_direct_grade_inputs(
             rank_groups=["alpha"],
             basis="valid_findings_vs_none",
             note=None,
-            public_task_name="review_t1",
+            public_task_name="review_base",
             dry_run=True,
         )
 
@@ -1498,14 +1498,14 @@ def test_run_benchmarked_round_dry_run_does_not_persist_or_launch(
                 "id": "alpha-low",
                 "model": "gpt-5.5",
                 "reasoning_effort": "low",
-                "task_classes": ["phase_review"],
+                "task_classes": ["base_review"],
                 "state": "active",
             },
             {
                 "id": "bravo-low",
                 "model": "gpt-5.6",
                 "reasoning_effort": "low",
-                "task_classes": ["phase_review"],
+                "task_classes": ["base_review"],
                 "state": "active",
             },
         ],
@@ -1528,7 +1528,7 @@ def test_run_benchmarked_round_dry_run_does_not_persist_or_launch(
     )
 
     exit_code = run_benchmarked_round(
-        task_class="phase_review",
+        task_class="base_review",
         review_cwd=tmp_path,
         roster_path=tmp_path / "roster.json",
         rubric_path=tmp_path / "rubric.json",
@@ -1547,7 +1547,7 @@ def test_run_benchmarked_round_dry_run_does_not_persist_or_launch(
         rank_groups=None,
         basis=None,
         note=None,
-        public_task_name="review_t1",
+        public_task_name="review_base",
         dry_run=True,
     )
 
@@ -1591,7 +1591,7 @@ def test_run_benchmarked_round_dirty_base_guard_does_not_persist_sampled_round(
 
     with pytest.raises(ValueError, match="clean worktree"):
         run_benchmarked_round(
-            task_class="phase_review",
+            task_class="base_review",
             review_cwd=tmp_path,
             roster_path=tmp_path / "roster.json",
             rubric_path=tmp_path / "rubric.json",
@@ -1610,7 +1610,7 @@ def test_run_benchmarked_round_dirty_base_guard_does_not_persist_sampled_round(
             rank_groups=None,
             basis=None,
             note=None,
-            public_task_name="review_t1",
+            public_task_name="review_base",
         )
 
     assert writes == []
@@ -1645,7 +1645,7 @@ def test_run_benchmarked_round_runtime_guard_does_not_persist_sampled_round(
 
     with pytest.raises(ValueError, match="--wsl"):
         run_benchmarked_round(
-            task_class="phase_review",
+            task_class="base_review",
             review_cwd=tmp_path,
             roster_path=tmp_path / "roster.json",
             rubric_path=tmp_path / "rubric.json",
@@ -1664,7 +1664,7 @@ def test_run_benchmarked_round_runtime_guard_does_not_persist_sampled_round(
             rank_groups=None,
             basis=None,
             note=None,
-            public_task_name="review_t1",
+            public_task_name="review_base",
         )
 
     assert writes == []
@@ -1686,14 +1686,14 @@ def test_run_benchmarked_round_interactive_blocked_round_skips_final_toon(
     monkeypatch.setattr("review_suite_arena.load_operational_state", lambda path: {})
     monkeypatch.setattr(
         "review_suite_arena.select_pair",
-        lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review"},
+        lambda **kwargs: {"round_id": "round-1", "task_class": "base_review"},
     )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "review_suite_arena.run_round",
         lambda **kwargs: {
             "round_id": "round-1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "runs": [
                 {"slot": "alpha", "review_status": "timeout", "grade_blocked": True}
             ],
@@ -1726,7 +1726,7 @@ def test_run_benchmarked_round_interactive_blocked_round_skips_final_toon(
     )
 
     result = run_benchmarked_round(
-        task_class="phase_review",
+        task_class="base_review",
         review_cwd=tmp_path,
         roster_path=tmp_path / "roster.json",
         rubric_path=tmp_path / "rubric.json",
@@ -1745,7 +1745,7 @@ def test_run_benchmarked_round_interactive_blocked_round_skips_final_toon(
         rank_groups=None,
         basis=None,
         note=None,
-        public_task_name="review_t1",
+        public_task_name="review_base",
     )
 
     assert result == 0
@@ -1758,16 +1758,16 @@ def test_run_benchmarked_round_direct_grade_rejects_ambiguous_caller_pending_rou
     monkeypatch.setattr(
         "review_suite_arena.find_pending_rounds_for_caller",
         lambda **kwargs: [
-            {"round_id": "round-a", "task_class": "pr_review"},
-            {"round_id": "round-b", "task_class": "pr_review"},
+            {"round_id": "round-a", "task_class": "deep_review"},
+            {"round_id": "round-b", "task_class": "deep_review"},
         ],
     )
 
     with pytest.raises(
-        ValueError, match="multiple pending pr_review rounds found for this caller"
+        ValueError, match="multiple pending deep_review rounds found for this caller"
     ):
         run_benchmarked_round(
-            task_class="pr_review",
+            task_class="deep_review",
             review_cwd=tmp_path,
             roster_path=tmp_path / "roster.json",
             rubric_path=tmp_path / "rubric.json",
@@ -1807,14 +1807,14 @@ def test_run_benchmarked_round_complete_grade_inputs_without_pending_falls_throu
     monkeypatch.setattr("review_suite_arena.load_operational_state", lambda path: {})
     monkeypatch.setattr(
         "review_suite_arena.select_pair",
-        lambda **kwargs: {"round_id": "new-round", "task_class": "pr_review"},
+        lambda **kwargs: {"round_id": "new-round", "task_class": "deep_review"},
     )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "review_suite_arena.run_round",
         lambda **kwargs: {
             "round_id": "new-round",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "runs": [],
         },
     )
@@ -1836,7 +1836,7 @@ def test_run_benchmarked_round_complete_grade_inputs_without_pending_falls_throu
     monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: None)
 
     result = run_benchmarked_round(
-        task_class="pr_review",
+        task_class="deep_review",
         review_cwd=tmp_path,
         roster_path=tmp_path / "roster.json",
         rubric_path=tmp_path / "rubric.json",
@@ -1884,7 +1884,7 @@ def test_run_benchmarked_round_direct_grade_without_caller_uses_single_repo_pend
         lambda state_dir: [
             {
                 "round_id": "repo-round",
-                "task_class": "pr_review",
+                "task_class": "deep_review",
                 "status": "completed",
                 "review_cwd_normalized": str(tmp_path),
                 "runs": [
@@ -1915,7 +1915,7 @@ def test_run_benchmarked_round_direct_grade_without_caller_uses_single_repo_pend
     )
 
     result = run_benchmarked_round(
-        task_class="pr_review",
+        task_class="deep_review",
         review_cwd=tmp_path,
         roster_path=tmp_path / "roster.json",
         rubric_path=tmp_path / "rubric.json",
@@ -1939,7 +1939,7 @@ def test_run_benchmarked_round_direct_grade_without_caller_uses_single_repo_pend
     assert result == 0
     assert captured["round_id"] == "repo-round"
     assert emitted == [
-        {"status": "graded", "round_id": "repo-round", "task": "review_t3"}
+        {"status": "graded", "round_id": "repo-round", "task": "review_deep"}
     ]
 
 
@@ -1967,7 +1967,7 @@ def test_run_benchmarked_round_direct_grade_with_caller_falls_back_to_unique_rep
         lambda state_dir: [
             {
                 "round_id": "repo-round",
-                "task_class": "pr_review",
+                "task_class": "deep_review",
                 "status": "completed",
                 "review_cwd_normalized": str(tmp_path),
                 "runs": [
@@ -1998,7 +1998,7 @@ def test_run_benchmarked_round_direct_grade_with_caller_falls_back_to_unique_rep
     )
 
     result = run_benchmarked_round(
-        task_class="pr_review",
+        task_class="deep_review",
         review_cwd=tmp_path,
         roster_path=tmp_path / "roster.json",
         rubric_path=tmp_path / "rubric.json",
@@ -2022,7 +2022,7 @@ def test_run_benchmarked_round_direct_grade_with_caller_falls_back_to_unique_rep
     assert result == 0
     assert captured["round_id"] == "repo-round"
     assert emitted == [
-        {"status": "graded", "round_id": "repo-round", "task": "review_t3"}
+        {"status": "graded", "round_id": "repo-round", "task": "review_deep"}
     ]
 
 
@@ -2037,14 +2037,14 @@ def test_run_benchmarked_round_direct_grade_without_caller_rejects_ambiguous_rep
         lambda state_dir: [
             {
                 "round_id": "round-a",
-                "task_class": "pr_review",
+                "task_class": "deep_review",
                 "status": "completed",
                 "review_cwd_normalized": str(tmp_path),
                 "runs": [],
             },
             {
                 "round_id": "round-b",
-                "task_class": "pr_review",
+                "task_class": "deep_review",
                 "status": "completed",
                 "review_cwd_normalized": str(tmp_path),
                 "runs": [],
@@ -2052,9 +2052,9 @@ def test_run_benchmarked_round_direct_grade_without_caller_rejects_ambiguous_rep
         ],
     )
 
-    with pytest.raises(ValueError, match="multiple pending pr_review rounds found"):
+    with pytest.raises(ValueError, match="multiple pending deep_review rounds found"):
         run_benchmarked_round(
-            task_class="pr_review",
+            task_class="deep_review",
             review_cwd=tmp_path,
             roster_path=tmp_path / "roster.json",
             rubric_path=tmp_path / "rubric.json",
@@ -2088,7 +2088,7 @@ def test_cmd_reroll_slot_records_workflow_anchor_when_completed(
         "review_suite_arena.load_round",
         lambda state_dir, round_id: {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "review_cwd": str(tmp_path),
             "review_cwd_normalized": "old-normalized-cwd",
             "review_scope": {"base": "main", "reviewed_head": "head-sha"},
@@ -2100,7 +2100,7 @@ def test_cmd_reroll_slot_records_workflow_anchor_when_completed(
     )
     monkeypatch.setattr(
         "review_suite_arena.build_reroll_slot_payload",
-        lambda **kwargs: {"round_id": "round-2", "task_class": "pr_review", "runs": []},
+        lambda **kwargs: {"round_id": "round-2", "task_class": "deep_review", "runs": []},
     )
     run_calls: list[dict[str, object]] = []
     writes: list[dict[str, object]] = []
@@ -2109,7 +2109,7 @@ def test_cmd_reroll_slot_records_workflow_anchor_when_completed(
         run_calls.append(dict(kwargs))
         assert kwargs["prompt"] == "Stored reroll prompt"
         assert kwargs["review_scope"] == {"base": "main", "reviewed_head": "head-sha"}
-        return {"round_id": "round-2", "task_class": "pr_review", "runs": []}
+        return {"round_id": "round-2", "task_class": "deep_review", "runs": []}
 
     monkeypatch.setattr("review_suite_arena.run_round", fake_run_round)
     monkeypatch.setattr(
@@ -2161,7 +2161,7 @@ def test_cmd_reroll_slot_records_workflow_anchor_when_completed(
     assert writes[0]["arena_round"] is True
     assert writes[0]["grading_required"] is True
     assert writes[0]["reporting_pool"] is True
-    assert anchor_calls[0]["lane"] == "review_t3"
+    assert anchor_calls[0]["lane"] == "review_deep"
     assert anchor_calls[0]["task_id"] == "branch-1"
 
 
@@ -2176,12 +2176,12 @@ def test_cmd_reroll_slot_skips_workflow_anchor_for_orchestrated_round(
         "review_suite_arena.load_round",
         lambda state_dir, round_id: {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "review_cwd": str(tmp_path),
             "review_scope": {"base": "main", "reviewed_head": "head-sha"},
             "requested_prompt": "Stored reroll prompt",
             "arena_round": True,
-            "orchestrator_step": "arena-pr-review",
+            "orchestrator_step": "arena-deep-review",
             "grading_required": True,
         },
     )
@@ -2189,7 +2189,7 @@ def test_cmd_reroll_slot_skips_workflow_anchor_for_orchestrated_round(
         "review_suite_arena.build_reroll_slot_payload",
         lambda **kwargs: {
             "round_id": "round-2",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "arena_round": False,
             "orchestrator_step": "",
             "runs": [],
@@ -2198,7 +2198,7 @@ def test_cmd_reroll_slot_skips_workflow_anchor_for_orchestrated_round(
     writes: list[dict[str, object]] = []
     monkeypatch.setattr(
         "review_suite_arena.run_round",
-        lambda **kwargs: {"round_id": "round-2", "task_class": "pr_review", "runs": []},
+        lambda **kwargs: {"round_id": "round-2", "task_class": "deep_review", "runs": []},
     )
     monkeypatch.setattr(
         "review_suite_arena.public_round_result",
@@ -2239,7 +2239,7 @@ def test_cmd_reroll_slot_skips_workflow_anchor_for_orchestrated_round(
 
     assert result == 0
     assert writes[0]["arena_round"] is True
-    assert writes[0]["orchestrator_step"] == "arena-pr-review"
+    assert writes[0]["orchestrator_step"] == "arena-deep-review"
     assert anchor_calls == []
 
 
@@ -2254,7 +2254,7 @@ def test_cmd_run_round_records_workflow_anchor_when_completed(
         "review_suite_arena.load_round",
         lambda state_dir, round_id: {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "review_cwd": str(tmp_path),
             "review_scope": {"base": "main", "reviewed_head": "head-sha"},
             "requested_prompt": "Stored arena prompt",
@@ -2268,7 +2268,7 @@ def test_cmd_run_round_records_workflow_anchor_when_completed(
         assert kwargs["review_scope"] == {"base": "main", "reviewed_head": "head-sha"}
         return {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "review_scope": {"base": "main", "reviewed_head": "head-sha"},
             "runs": [
                 {
@@ -2318,7 +2318,7 @@ def test_cmd_run_round_records_workflow_anchor_when_completed(
     assert emitted[0]["Action"]["cmd"]
     assert "runs" not in emitted[0]
     assert len(run_calls) == 1
-    assert anchor_calls[0]["lane"] == "review_t3"
+    assert anchor_calls[0]["lane"] == "review_deep"
     assert anchor_calls[0]["task_id"] == "branch-1"
     assert "Run-round body" in capsys.readouterr().out
 
@@ -2333,12 +2333,12 @@ def test_cmd_run_round_skips_workflow_anchor_for_orchestrated_round(
         "review_suite_arena.load_round",
         lambda state_dir, round_id: {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "review_cwd": str(tmp_path),
             "review_scope": {"base": "main", "reviewed_head": "head-sha"},
             "requested_prompt": "Stored arena prompt",
             "arena_round": True,
-            "orchestrator_step": "arena-pr-review",
+            "orchestrator_step": "arena-deep-review",
             "grading_required": True,
         },
     )
@@ -2346,7 +2346,7 @@ def test_cmd_run_round_skips_workflow_anchor_for_orchestrated_round(
         "review_suite_arena.run_round",
         lambda **kwargs: {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "review_scope": {"base": "main", "reviewed_head": "head-sha"},
             "runs": [
                 {
@@ -2401,7 +2401,7 @@ def test_cmd_resume_round_records_workflow_anchor_when_completed(
         "review_suite_arena.load_round",
         lambda state_dir, round_id: {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "running",
             "review_cwd": str(tmp_path),
             "review_scope": {"base": "main"},
@@ -2411,7 +2411,7 @@ def test_cmd_resume_round_records_workflow_anchor_when_completed(
         "review_suite_arena.collect_round_results",
         lambda **kwargs: {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "review_scope": {"base": "main"},
             "runs": [
                 {
@@ -2452,7 +2452,7 @@ def test_cmd_resume_round_records_workflow_anchor_when_completed(
     assert result == 0
     assert emitted[0]["Action"]["cmd"]
     assert "runs" not in emitted[0]
-    assert anchor_calls[0]["lane"] == "review_t3"
+    assert anchor_calls[0]["lane"] == "review_deep"
     assert anchor_calls[0]["task_id"] == "branch-1"
     assert "Resume body" in capsys.readouterr().out
 
@@ -2467,12 +2467,12 @@ def test_cmd_resume_round_skips_workflow_anchor_for_orchestrated_round(
         "review_suite_arena.load_round",
         lambda state_dir, round_id: {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "status": "running",
             "review_cwd": str(tmp_path),
             "review_scope": {"base": "main"},
             "arena_round": True,
-            "orchestrator_step": "arena-pr-review",
+            "orchestrator_step": "arena-deep-review",
             "grading_required": True,
         },
     )
@@ -2480,7 +2480,7 @@ def test_cmd_resume_round_skips_workflow_anchor_for_orchestrated_round(
         "review_suite_arena.collect_round_results",
         lambda **kwargs: {
             "round_id": "round-1",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "review_scope": {"base": "main"},
             "runs": [
                 {
@@ -2530,7 +2530,7 @@ def test_resume_orchestrator_review_step_collects_existing_running_round(
     collect_calls: list[dict[str, object]] = []
     round_payload = {
         "round_id": "phase_review-round-1",
-        "task_class": "phase_review",
+        "task_class": "base_review",
         "status": "running",
         "review_cwd": str(review_cwd),
         "review_scope": {"base": "main", "reviewed_head": "head-1"},
@@ -2557,7 +2557,7 @@ def test_resume_orchestrator_review_step_collects_existing_running_round(
                     "model": "gpt-5.5",
                     "reasoning_effort": "medium",
                     "service_tier": "flex",
-                    "task_classes": ["phase_review"],
+                    "task_classes": ["base_review"],
                 }
             ],
         }
@@ -2588,7 +2588,7 @@ def test_resume_orchestrator_review_step_collects_existing_running_round(
 
     result = resume_orchestrator_review_step(
         round_id="phase_review-round-1",
-        lane="review_t1",
+        lane="review_base",
         step_name="precision",
         review_cwd=review_cwd,
         state_dir=state_dir,
@@ -2608,13 +2608,13 @@ def test_resume_orchestrator_review_step_collects_existing_running_round(
         )
     )
     assert saved["task_id_hint"] == "branch-1"
-    assert saved["public_task"] == "review_t1"
+    assert saved["public_task"] == "review_base"
     assert saved["orchestrator_step"] == "precision"
 
 
 def test_normalize_arena_task_class_accepts_public_aliases() -> None:
-    assert _normalize_arena_task_class("review_t1") == "phase_review"
-    assert _normalize_arena_task_class("review_t3") == "pr_review"
+    assert _normalize_arena_task_class("review_base") == "base_review"
+    assert _normalize_arena_task_class("review_deep") == "deep_review"
 
 
 def test_cmd_sample_emits_public_task_alias(monkeypatch, tmp_path) -> None:
@@ -2637,7 +2637,7 @@ def test_cmd_sample_emits_public_task_alias(monkeypatch, tmp_path) -> None:
             captured.update(kwargs)
             or {
                 "round_id": "round-1",
-                "task_class": "phase_review",
+                "task_class": "base_review",
                 "status": "sampled",
                 "runs": [],
             }
@@ -2650,7 +2650,7 @@ def test_cmd_sample_emits_public_task_alias(monkeypatch, tmp_path) -> None:
 
     result = __import__("review_suite_arena").cmd_sample(
         Namespace(
-            task_class="review_t1",
+            task_class="review_base",
             caller_id=None,
             roster=str(tmp_path / "roster.json"),
             state_dir=str(tmp_path / "state"),
@@ -2661,12 +2661,12 @@ def test_cmd_sample_emits_public_task_alias(monkeypatch, tmp_path) -> None:
     )
 
     assert result == 0
-    assert captured["task_class"] == "phase_review"
+    assert captured["task_class"] == "base_review"
     assert captured["review_cwd"] == repo_root
     assert emitted == [
         {
             "round_id": "round-1",
-            "task": "review_t1",
+            "task": "review_base",
             "status": "sampled",
             "sampled_at": None,
             "reviewers": [],
@@ -2701,7 +2701,7 @@ def test_cmd_sample_dry_run_emits_selection_without_writing(
         "review_suite_arena.select_pair",
         lambda **kwargs: {
             "round_id": "round-1",
-            "task_class": "phase_review",
+            "task_class": "base_review",
             "status": "sampled",
             "runs": [
                 {
@@ -2726,7 +2726,7 @@ def test_cmd_sample_dry_run_emits_selection_without_writing(
 
     result = __import__("review_suite_arena").cmd_sample(
         Namespace(
-            task_class="review_t1",
+            task_class="review_base",
             caller_id=None,
             roster=str(tmp_path / "roster.json"),
             state_dir=str(tmp_path / "state"),
@@ -2743,7 +2743,7 @@ def test_cmd_sample_dry_run_emits_selection_without_writing(
     assert emitted == [
         {
             "status": "dry_run",
-            "task": "review_t1",
+            "task": "review_base",
             "round_id": "round-1",
             "selection_mode": None,
             "selection_pairing": None,

@@ -67,7 +67,7 @@ def test_commit_refreshes_workflow_without_including_unstaged_edits(tmp_path: Pa
     settings_path = "plugins/review-suite/default_settings.toml"
     settings = repo / settings_path
     staged_settings = (
-        '[normal]\nmodel = "hook-test-model"\nreasoning = "medium"\n'
+        '[base]\nmodel = "hook-test-model"\nreasoning = "medium"\n'
         '[deep]\nmodel = "hook-test-model"\nreasoning = "xhigh"\n'
     )
     settings.write_text(staged_settings, encoding="utf-8")

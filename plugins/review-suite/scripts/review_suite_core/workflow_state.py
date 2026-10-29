@@ -26,8 +26,8 @@ FOLLOWUP_CYCLE_LIMIT = 2
 SAME_TIER_REVIEW_CAUTION_THRESHOLD = 6
 SAME_TIER_REVIEW_HIGH_PRESSURE_THRESHOLD = 10
 LANE_STAGE_RANK = {
-    "review_t1": 1,
-    "review_t3": 3,
+    "review_base": 1,
+    "review_deep": 3,
 }
 EFFECTIVE_BASE_METADATA_KEYS = (
     "base_upstream",
@@ -257,7 +257,7 @@ def anchor_updates_branch_state(
         return reviewed_head == current_head
     if scope.get("commit") or scope.get("commit_end"):
         return False
-    if lane in {"review_t1", "review_t3"}:
+    if lane in {"review_base", "review_deep"}:
         return reviewed_head == current_head
     if scope.get("base"):
         return reviewed_head == current_head
@@ -877,7 +877,7 @@ def latest_full_review_anchor(state: dict[str, Any] | None) -> dict[str, Any] | 
         item for item in list(state.get("anchors") or []) if isinstance(item, dict)
     ]
     for anchor in reversed(anchors):
-        if str(anchor.get("lane") or "") in {"review_t1", "review_t3"}:
+        if str(anchor.get("lane") or "") in {"review_base", "review_deep"}:
             return anchor
     return None
 
@@ -892,8 +892,8 @@ def latest_followup_pressure_checkpoint_anchor(
     ]
     for anchor in reversed(anchors):
         if str(anchor.get("lane") or "") in {
-            "review_t1",
-            "review_t3",
+            "review_base",
+            "review_deep",
             "review-github",
         }:
             return anchor
@@ -914,8 +914,8 @@ def latest_base_review_context_anchor(
     fallback: dict[str, Any] | None = None
     for anchor in reversed(anchors):
         if str(anchor.get("lane") or "") not in {
-            "review_t1",
-            "review_t3",
+            "review_base",
+            "review_deep",
         }:
             continue
         scope = dict(anchor.get("review_scope") or {})
@@ -1102,7 +1102,7 @@ def branch_review_pressure(
     full_review_anchor_count = sum(
         1
         for item in anchors
-        if str(item.get("lane") or "") in {"review_t1", "review_t3"}
+        if str(item.get("lane") or "") in {"review_base", "review_deep"}
     )
     if commits_since_base < BRANCH_PRESSURE_MAX_COMMITS:
         return None

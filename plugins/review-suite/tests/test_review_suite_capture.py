@@ -326,7 +326,7 @@ def test_collect_round_results_persists_each_exited_reviewer_immediately(
 
     round_payload = {
         "round_id": "round-live-capture",
-        "task_class": "pr_review",
+        "task_class": "deep_review",
         "selection_mode": "scramble",
         "status": "running",
         "runs": [
@@ -512,7 +512,7 @@ def test_collect_round_results_resolves_identical_parallel_launches_by_parent(
 
     round_payload = {
         "round_id": "round-1",
-        "task_class": "pr_review",
+        "task_class": "deep_review",
         "selection_mode": "scramble",
         "status": "running",
         "runs": [
@@ -658,7 +658,7 @@ def test_collect_round_results_rejects_child_lookup_when_launcher_id_is_missing(
 
     round_payload = {
         "round_id": "round-2",
-        "task_class": "pr_review",
+        "task_class": "deep_review",
         "selection_mode": "scramble",
         "status": "running",
         "runs": [
@@ -746,7 +746,7 @@ def test_collect_round_results_matches_review_child_created_after_default_window
 
     round_payload = {
         "round_id": "round-slow-child",
-        "task_class": "pr_review",
+        "task_class": "deep_review",
         "selection_mode": "scramble",
         "status": "running",
         "runs": [
@@ -836,7 +836,7 @@ def test_collect_round_results_retries_child_lookup_after_launcher_match(
 
     round_payload = {
         "round_id": "round-3",
-        "task_class": "pr_review",
+        "task_class": "deep_review",
         "selection_mode": "scramble",
         "status": "running",
         "runs": [
@@ -1006,15 +1006,15 @@ def test_default_roster_includes_current_model_pricing() -> None:
         if variant["model"] == "gpt-6-astra"
     }
     assert astra_layout == {
-        "low": (["phase_review", "pr_review"], "active"),
-        "medium": (["phase_review", "pr_review"], "active"),
-        "high": (["pr_review"], "active"),
-        "xhigh": (["pr_review"], "active"),
-        "max": (["pr_review"], "active"),
+        "low": (["base_review", "deep_review"], "active"),
+        "medium": (["base_review", "deep_review"], "active"),
+        "high": (["deep_review"], "active"),
+        "xhigh": (["deep_review"], "active"),
+        "max": (["deep_review"], "active"),
     }
     assert not any(
         variant["model"].startswith("gpt-5.4")
-        for task_class in ("phase_review", "pr_review")
+        for task_class in ("base_review", "deep_review")
         for variant in review_suite_local.eligible_variants(roster, task_class)
     )
 
@@ -1052,8 +1052,8 @@ def test_default_roster_includes_current_model_pricing() -> None:
 @pytest.mark.parametrize(
     "pool_name,task_class,efforts",
     [
-        ("arena_phase", "phase_review", ("low", "high", "max")),
-        ("arena_deep", "pr_review", ("high", "max")),
+        ("arena_base", "base_review", ("low", "high", "max")),
+        ("arena_deep", "deep_review", ("high", "max")),
     ],
 )
 def test_opencode_arena_selection_launches_current_versions(
@@ -1137,7 +1137,7 @@ def test_collect_round_results_preserves_foreign_review_cwd_for_capture(
     completed = review_suite_local.collect_round_results(
         round_payload={
             "round_id": "round-foreign-cwd",
-            "task_class": "pr_review",
+            "task_class": "deep_review",
             "selection_mode": "scramble",
             "status": "running",
             "runs": [

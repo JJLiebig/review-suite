@@ -1,6 +1,6 @@
 ---
 name: review
-description: "Run local code review/status; choose `fast`, `normal`, or `deep` by risk."
+description: "Run local code review/status; choose `fast`, `base`, or `deep` by risk."
 ---
 
 # Review
@@ -18,14 +18,14 @@ Path rules:
 - Follow the emitted `Action`; its commands should use installed-launcher paths for runtime-backed runs.
 
 Mode:
-- Omit `--mode` for `normal`, the default for ordinary changes.
-- Use `--mode fast` for UI-only, local presentation, and other small, well-tested changes. It runs dual signoff using the configured normal model with no Arena or GitHub review; convergence and bounded closure match the other modes.
+- Omit `--mode` for `base`, the default for ordinary changes.
+- Use `--mode fast` for UI-only, local presentation, and other small, well-tested changes. It runs dual signoff using the configured base model with no Arena or GitHub review; convergence and bounded closure match the other modes.
 - Use `--mode deep` for billing, login/authentication, authorization/security, business-critical systems, database integrity or migrations, concurrency, and similarly critical or high-blast-radius logic.
 - Treat those mappings as risk heuristics. A nominally UI-only change that crosses a trust or data-integrity boundary is not `fast`.
 
 Rules:
 - Run validation relevant to the changed surface before dispatch. Start any required slow checks after dispatch and track their final status. Run a full suite only when repository requirements or reachable effects justify it; record an explicit reason when waiving an unnecessary full-suite or CI gate.
-- Immediately before final correctness signoff, normal and deep modes run one bounded pass for frozen-brief conformance and local cleanup. Fast mode currently excludes this pass. Handle or dismiss its output, then close it with `review.py --id <id> --deslop-done`. Accepted edits proceed to final signoff on the new exact head. Cleanup runs once per cycle and does not restart after final-review or GitHub fixes.
+- Immediately before final correctness signoff, base and deep modes run one bounded pass for frozen-brief conformance and local cleanup. Fast mode currently excludes this pass. Handle or dismiss its output, then close it with `review.py --id <id> --deslop-done`. Accepted edits proceed to final signoff on the new exact head. Cleanup runs once per cycle and does not restart after final-review or GitHub fixes.
 - Three distinct caller-accepted findings heads require a durable `CONTINUE`, `REPLAN`, or `RESLICE` decision; `CONTINUE` is available once for one additional fix head and its correctness decision. Report conflicts with the frozen goal, acceptance, scope, stop condition, owner, authorized behavior, or unit boundary immediately with `review.py --id <id> --contract-conflict <dimension>`.
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
 - There is no `--allow-dirty` override.

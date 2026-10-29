@@ -6,7 +6,7 @@ arena_external_publish_enabled = false
 [arena]
 enabled = false
 
-[arena.pools.discovery_phase]
+[arena.pools.discovery_base]
 rating_pool_id = "discovery-phase-gpt-5.6-v1"
 variant_groups = [
   ["gpt-5.5-medium", "gpt-5.6-sol-medium", "gpt-5.6-terra-medium", "gpt-5.6-luna-medium"],
@@ -18,7 +18,7 @@ variant_groups = [
   ["gpt-5.5-xhigh", "gpt-5.6-sol-xhigh", "gpt-5.6-terra-xhigh", "gpt-5.6-luna-xhigh"],
 ]
 
-[arena.pools.arena_phase]
+[arena.pools.arena_base]
 rating_pool_id = "arena-phase-gpt-5.6-v1"
 reporting = true
 variant_ids = ["gpt-5.5-low", "gpt-5.5-medium", "gpt-5.6-luna-medium", "gpt-5.6-luna-high", "gpt-5.6-luna-xhigh", "gpt-5.6-luna-max", "gpt-5.6-terra-medium", "gpt-5.6-terra-high", "gpt-5.6-terra-xhigh", "gpt-6.1-terra-low", "gpt-6.1-terra-medium", "gpt-6.1-terra-high", "gpt-6.1-terra-xhigh", "gpt-5.6-sol-low", "gpt-5.6-sol-medium", "gpt-6-astra-low", "gpt-6-astra-medium", "deepseek-v4.1-flash-1017-low", "deepseek-v4.1-flash-1017-high", "deepseek-v4.1-flash-1017-max", "glm-5.3-flash-low", "glm-5.3-flash-high", "glm-5.3-flash-max", "gpt-6-sol-low", "gpt-6.1-sol-low", "gpt-6-sol-medium", "gpt-6.1-sol-medium", "gpt-6-luna-low", "gpt-6-luna-medium", "gpt-6-luna-high", "gpt-6-luna-xhigh", "gpt-6-luna-max", "claude-opus-5.5-low", "claude-opus-5.5-medium", "claude-sonnet-5.5-low", "claude-sonnet-5.5-medium"]
@@ -69,5 +69,5 @@ variant_groups = [
 auto_promotion_enabled = false
 
 [orchestrator.stable_defaults]
-normal_arena_loops = 13
+base_arena_loops = 13
 deep_arena_loops = 13

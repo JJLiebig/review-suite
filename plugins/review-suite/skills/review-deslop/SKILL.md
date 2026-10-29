@@ -5,7 +5,7 @@ description: "Run an explicit one-off simplification review for a completed impl
 
 # Review Deslop
 
-Use only for an explicit cleanup pass. Normal `review` runs manage their own one-shot cleanup pass immediately before final correctness signoff.
+Use only for an explicit cleanup pass. Ordinary `review` runs manage their own one-shot cleanup pass immediately before final correctness signoff.
 
 ```powershell
 <python> <review-suite-plugin-root>/scripts/review_deslop.py --cd <repo-root>
