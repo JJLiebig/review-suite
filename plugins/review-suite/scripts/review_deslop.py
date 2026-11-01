@@ -157,18 +157,23 @@ def build_prompt(
         "Skip cleanup; this is the post-edit conformance rerun.\n"
         if conformance_only
         else (
-            "For cleanup, review over-engineering only, not correctness. "
+            "For cleanup, review over-engineering, including over-validation, not general correctness. "
             "One line per finding: `<file>:L<line>: <tag>: <what to cut>. <replacement>.` "
             "Tags: `delete` dead or speculative code; `stdlib` reinvented standard library; "
             "`native` platform replacements; `yagni` unused abstractions or flexibility; "
-            "`shrink` same behavior in fewer lines.\n"
+            "`shrink` same behavior in fewer lines; `overcheck` unnecessary or harmful checks.\n"
+            "Every finding must state its trigger path: how realistic input or state reaches the affected code in normal operation, starting at the data entry point or caller. "
+            "Omit concerns without a reachable path, or list them under `Scope questions / suggestions (non-findings)` without severity. "
+            "If repository instructions reference a data entry or architecture map, use it to determine where data enters. "
+            "Flag over-validation when a check, limit, strict parse, or dropped data rejects valid realistic input, re-checks a guarantee already provided by the producer or type system, rejects unknown fields the code does not use, invents missing values, or blocks a rollback; suggest removing or loosening it. "
+            "Never flag authentication, authorization, sender/signature verification, idempotency, database and data-integrity constraints, output encoding, or restrictions on outbound requests to private addresses for removal. "
         )
     )
     return (
         target_block
         + conformance
         + cleanup
-        + "Do not redesign ownership, add abstractions, broaden scope, or change behavior.\n"
+        + "Do not redesign ownership, add abstractions, or broaden scope. Preserve behavior except when removing or loosening an overcheck to restore valid behavior.\n"
         + focus_block
         + "\nBegin with exactly `Conformance: CONFORMS`, `Conformance: MATERIALLY_DRIFTED`, or `Conformance: NOT_APPLICABLE`.\n"
         + "Report only concrete cleanup findings. Skip style-only comments.\n"

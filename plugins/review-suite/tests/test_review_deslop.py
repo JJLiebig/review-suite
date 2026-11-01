@@ -384,10 +384,10 @@ def test_main_uses_generic_read_only_deslop_review(
     assert captured["run_codex"]["review_root"] == tmp_path
     prompt = str(captured["run_codex"]["prompt"])
     assert "base branch `origin/main`" in prompt
-    assert "review over-engineering only, not correctness" in prompt
+    assert "review over-engineering, including over-validation, not general correctness" in prompt
     assert all(
         f"`{tag}`" in prompt
-        for tag in ("delete", "stdlib", "native", "yagni", "shrink")
+        for tag in ("delete", "stdlib", "native", "yagni", "shrink", "overcheck")
     )
     assert "=== BEGIN DIFF ===" not in prompt
     assert "diff --git" not in prompt

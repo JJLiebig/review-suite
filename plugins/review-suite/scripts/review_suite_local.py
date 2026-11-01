@@ -232,9 +232,11 @@ def terminal_review_result_instruction() -> str:
 def build_correctness_review_contract() -> str:
     return (
         "Reviewer output is advisory risk input, not authoritative product direction.\n"
-        "Return every concrete finding you can support; do not stop after the first issue.\n"
+        "Report material findings supported by evidence; prioritize impact and validity over finding count.\n"
         "For each finding, include severity, file path and line number when available, violated invariant or owner/source of truth when clear, and fix suggestion.\n"
         "Explain the triggering input or scenario, expected behavior, actual behavior, and affected code path for each finding; support the failure with concrete code or test evidence.\n"
+        "Every finding must state its trigger path: how realistic input or state reaches the affected code in normal operation, starting at the data entry point or caller. Omit concerns without a reachable path, or list them under `Scope questions / suggestions (non-findings)` without severity. If repository instructions reference a data entry or architecture map, use it to determine where data enters. \n"
+        "Flag over-validation when a check, limit, strict parse, or dropped data rejects valid realistic input, re-checks a guarantee already provided by the producer or type system, rejects unknown fields the code does not use, invents missing values, or blocks a rollback; suggest removing or loosening it. Never flag authentication, authorization, sender/signature verification, idempotency, database and data-integrity constraints, output encoding, or restrictions on outbound requests to private addresses for removal. \n"
         "When a finding relies on a repository-specific rule, verify the applicable project instruction file and cite its path and smallest supporting line range in the finding; respect scoped precedence and explicit user instructions, and do not invent rules or findings merely because an instruction file exists.\n"
         "A finding is only valid when it identifies a concrete correctness, regression, integration, security, accessibility, or maintainability risk against stated requirements, docs, code invariants, or explicit contracts.\n"
         "Do not treat UX preference, product-scope speculation, backwards-compat speculation, or alternative product direction as a blocking finding.\n"
@@ -243,7 +245,7 @@ def build_correctness_review_contract() -> str:
         "Do not recommend code changes that reverse explicit product intent.\n"
         "When discussing validation, distinguish focused seam validation from full-suite/CI validation: focused review-relevant checks can be enough to launch the next review round before slow full-suite/CI completes; full-suite/CI remains a merge-readiness requirement.\n"
         "Record full-suite/CI validation status when relevant as pending, passed, failed, or explicitly waived with a reason; do not call a PR final or merge-ready while that status is unknown, and investigate/fix relevant failures first.\n"
-        "When applicable, flag correctness-relevant risks from oversized or hard-to-stage diffs, external integration surface breaks, missing regression or integration coverage, and unbounded agent-context injection.\n"
+        "When applicable, flag correctness-relevant risks from oversized or hard-to-stage diffs, external integration surface breaks, missing regression or integration coverage only for reachable regressions, and unbounded agent-context injection.\n"
         "Skip style-only comments. If there are no issues, say 'No findings.'\n"
         "Do not suggest localized guards when the evidence points to broader ownership, fallback, retry, lifecycle, concurrency, or persistence issues.\n"
         f"{terminal_review_result_instruction()}"
