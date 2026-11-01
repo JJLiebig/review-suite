@@ -164,8 +164,8 @@ def build_prompt(
             "`shrink` same behavior in fewer lines; `overcheck` unnecessary or harmful checks.\n"
             "For `overcheck`, name the valid realistic input it rejects or the guarantee it duplicates, starting from where the data enters. "
             "If repository instructions reference a data entry or architecture map, use it to determine where data enters. "
-            "Flag over-validation when a check, limit, strict parse, or dropped data rejects valid realistic input, re-checks a guarantee already provided by the producer or type system, rejects unknown fields the code does not use, invents missing values, or blocks a rollback; suggest removing or loosening it. "
-            "Never flag authentication, authorization, sender/signature verification, idempotency, database and data-integrity constraints, output encoding, or restrictions on outbound requests to private addresses for removal. "
+            "Flag over-validation when a check, limit or strict parse rejects valid realistic input or re-checks a guarantee the producer, contract or type system already provides; suggest removing or loosening it. "
+            "Never flag authentication, authorization, idempotency, data-integrity constraints, output encoding or other security boundaries for removal. "
         )
     )
     return (
