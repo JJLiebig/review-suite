@@ -157,18 +157,22 @@ def build_prompt(
         "Skip cleanup; this is the post-edit conformance rerun.\n"
         if conformance_only
         else (
-            "For cleanup, review over-engineering only, not correctness. "
+            "For cleanup, review over-engineering, including over-validation, not general correctness. "
             "One line per finding: `<file>:L<line>: <tag>: <what to cut>. <replacement>.` "
             "Tags: `delete` dead or speculative code; `stdlib` reinvented standard library; "
             "`native` platform replacements; `yagni` unused abstractions or flexibility; "
-            "`shrink` same behavior in fewer lines.\n"
+            "`shrink` same behavior in fewer lines; `overcheck` unnecessary or harmful checks.\n"
+            "For `overcheck`, name the valid realistic input it rejects or the guarantee it duplicates, starting from where the data enters. "
+            "If repository instructions reference a data entry or architecture map, use it to determine where data enters. "
+            "Flag over-validation when a check, limit or strict parse rejects valid realistic input or re-checks a guarantee the producer, contract or type system already provides; suggest removing or loosening it. "
+            "Never flag authentication, authorization, idempotency, data-integrity constraints, output encoding or other security boundaries for removal. "
         )
     )
     return (
         target_block
         + conformance
         + cleanup
-        + "Do not redesign ownership, add abstractions, broaden scope, or change behavior.\n"
+        + "Do not redesign ownership, add abstractions, or broaden scope. Preserve behavior except when removing or loosening an overcheck to restore valid behavior.\n"
         + focus_block
         + "\nBegin with exactly `Conformance: CONFORMS`, `Conformance: MATERIALLY_DRIFTED`, or `Conformance: NOT_APPLICABLE`.\n"
         + "Report only concrete cleanup findings. Skip style-only comments.\n"

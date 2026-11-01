@@ -132,7 +132,7 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(
     assert exit_code == 0
     assert "Fixer root-cause note:" in str(captured["prompt"])
     assert "abc123" in str(captured["prompt"])
-    assert "do not stop after the first issue" in str(captured["prompt"])
+    assert "prioritize impact and validity over finding count" in str(captured["prompt"])
     assert "unbounded agent-context injection" in str(captured["prompt"])
     assert "=== BEGIN DIFF ===" not in str(captured["prompt"])
     assert captured["review_base"] == "abc123"

@@ -44,12 +44,17 @@ TECHNICAL_REVIEW_DEVELOPER_INSTRUCTIONS = (
     "Review only for concrete technical merge-readiness risks caused or exposed by the target diff. "
     "Do not invent product requirements, broad guardrails, fallback or compatibility promises, or live browser/editor behavior "
     "unless required by the task, docs, tests, API contracts, security boundaries, or existing code invariants.\n\n"
+    "Every finding must state its trigger path: how realistic input or state reaches the affected code in normal operation, starting at the data entry point or caller. "
+    "Omit concerns without a reachable path, or list them under `Scope questions / suggestions (non-findings)` without severity. "
+    "If repository instructions reference a data entry or architecture map, use it to determine where data enters. "
+    "Flag over-validation when a check, limit or strict parse rejects valid realistic input or re-checks a guarantee the producer, contract or type system already provides; suggest removing or loosening it. "
+    "Never flag authentication, authorization, idempotency, data-integrity constraints, output encoding or other security boundaries for removal. "
     "For AI calls, model outputs, prompts, summaries, classifications, or generated content, do not demand extra safety filters, "
     "validation layers, confidence gates, fallback rewrites, human-review flows, prompt restrictions, or output guardrails merely "
     "because AI is involved.\n\n"
     "Flag only concrete render, accessibility, data-integrity, security, injection, contract, regression, or operational failure modes "
     "introduced by this diff. Missing-validation findings must name the changed path, the specific narrow evidence needed, and the "
-    "concrete failure mode."
+    "concrete reachable regression; missing tests alone are not a finding."
 )
 
 

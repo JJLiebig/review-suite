@@ -96,7 +96,7 @@ def test_standard_review_contract_includes_current_codex_review_dimensions() -> 
         "Reviewer output is advisory risk input, not authoritative product direction"
         in prompt
     )
-    assert "do not stop after the first issue" in prompt
+    assert "prioritize impact and validity over finding count" in prompt
     assert "line number when available" in prompt
     assert "A finding is only valid" in prompt
     assert "UX preference" in prompt
