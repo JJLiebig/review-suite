@@ -3,7 +3,7 @@
 
 [base]
 model = "gpt-6.1-terra"
-reasoning = "high"
+reasoning = "xhigh"
 
 [deep]
 model = "gpt-6.1-terra"
