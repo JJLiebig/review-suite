@@ -22,6 +22,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from review_suite_runtime_bootstrap import launcher_script_path
+from review_suite_core.arena_lifecycle import (
+    ArenaRetiredError,
+    arena_launch_guard,
+    resolve_roster_lifecycle,
+)
 from rollout_capture import (
     DEFAULT_SQLITE_STATE_PATH,
     REVIEW_SUBAGENT_SOURCE,
@@ -549,7 +554,9 @@ def state_lock(
             pass
 
 
-def load_roster(path: Path) -> dict[str, Any]:
+def load_roster(
+    path: Path, *, state_dir: Path | None = None, persist_retirements: bool = True
+) -> dict[str, Any]:
     roster = read_json(path)
     ids = set()
     for variant in roster.get("variants", []):
@@ -565,7 +572,11 @@ def load_roster(path: Path) -> dict[str, Any]:
                 raise ValueError(
                     f"variant {variant_id} has invalid task_class: {task_class}"
                 )
-    return roster
+    roster["_roster_path"] = str(path.resolve())
+    return resolve_roster_lifecycle(
+        roster, state_dir=state_dir,
+        persist=state_dir is not None and persist_retirements,
+    )
 
 
 def load_rubric(path: Path) -> dict[str, Any]:
@@ -757,6 +768,7 @@ def variant_is_arena_eligible(
 
 
 def eligible_variants(roster: dict[str, Any], task_class: str) -> list[dict[str, Any]]:
+    roster = resolve_roster_lifecycle(roster)
     return [
         variant
         for variant in roster["variants"]
@@ -2233,10 +2245,28 @@ def select_pair(
     variant_groups: list[list[str]] | None = None,
     variant_ids: list[str] | None = None,
 ) -> dict[str, Any]:
+    roster = resolve_roster_lifecycle(roster)
     settings = roster.get("settings", {})
     excluded_variant_ids = excluded_variant_ids or set()
     schedule_index: int | None = None
     if variant_groups is not None:
+        # Frozen plans and user overrides may still name retired generations.
+        # Preserve the pool identity and field size, replacing their schedule
+        # with balanced selection from the remaining configured contestants.
+        retired_ids = {
+            str(variant["id"])
+            for variant in roster["variants"]
+            if variant.get("state") == "retired"
+        } | set(roster.get("_arena_retirements", {}).get("variants", {}))
+        configured_ids = variant_ids or list(dict.fromkeys(
+            variant_id for group in variant_groups for variant_id in group
+        ))
+        has_retired = any(
+            variant_id in retired_ids
+            for variant_id in configured_ids + [v for group in variant_groups for v in group]
+        )
+        if has_retired:
+            variant_ids = [v for v in configured_ids if v not in retired_ids]
         pool_id = str(rating_pool_id or "").strip()
         pool_record_count = sum(
             1
@@ -2244,7 +2274,7 @@ def select_pair(
             if record.get("task_class") == task_class
             and record.get("rating_pool_id") == pool_id
         )
-        if variant_ids and pool_record_count >= len(variant_groups):
+        if has_retired or (variant_ids and pool_record_count >= len(variant_groups)):
             selected = _balanced_configured_variant_group(
                 roster=roster,
                 operational_state=operational_state,
@@ -2338,6 +2368,7 @@ def select_pair(
                 "slot": PUBLIC_REVIEWER_LABELS[idx],
                 "variant_id": variant["id"],
                 "model": variant["model"],
+                **({"model_id": variant["model_id"]} if "model_id" in variant else {}),
                 "reasoning_effort": variant["reasoning_effort"],
             }
             for idx, variant in enumerate(selected)
@@ -2913,6 +2944,7 @@ def build_reroll_slot_payload(
     slot: str,
     seed: int | None,
 ) -> dict[str, Any]:
+    roster = resolve_roster_lifecycle(roster)
     if round_payload.get("status") != "completed":
         raise ValueError(
             f"round {round_payload['round_id']} must be completed before rerolling a slot"
@@ -2941,8 +2973,11 @@ def build_reroll_slot_payload(
         }
         excluded_variant_ids = set(prior_excluded_variant_ids)
         cooling = _active_cooldowns(operational_state, str(round_payload["task_class"]))
+        current_variant = variant_index(roster).get(str(replacement_source["variant_id"]))
         if (
             unsupported_variant_ids
+            or current_variant is None
+            or not variant_is_arena_eligible(current_variant, str(round_payload["task_class"]))
             or block_reason == "review_timed_out"
             or str(replacement_source["variant_id"]) in cooling
         ):
@@ -3645,6 +3680,7 @@ def collect_completed_review_capture(
     return {
         "slot": slot,
         "variant_id": variant_id,
+        **({"model_id": variant["model_id"]} if "model_id" in variant else {}),
         "service_tier": variant_service_tier(variant),
         "title": title,
         "command": command,
@@ -3812,7 +3848,54 @@ def _review_run_title(
     return f"{title}::retry{capacity_retry_attempts}"
 
 
+def _is_arena_round(payload: dict[str, Any]) -> bool:
+    return bool(payload.get("selection_mode") or payload.get("arena_round") or payload.get("rating_pool_id"))
+
+
+def _current_arena_roster(
+    payload: dict[str, Any], roster: dict[str, Any], state_dir: Path
+) -> dict[str, Any]:
+    # Orchestrator plans can outlive the copied runtime that created them.
+    # Their policy always comes from the installed version running now.
+    source = (
+        default_roster_path()
+        if payload.get("arena_round")
+        else payload.get("roster_path") or roster.get("_roster_path")
+    )
+    if source:
+        payload["roster_path"] = str(source)
+        return load_roster(Path(str(source)), state_dir=state_dir)
+    return resolve_roster_lifecycle(roster, state_dir=state_dir, persist=True)
+
+
 def _launch_reviewer_process(
+    *,
+    round_payload: dict[str, Any],
+    run: dict[str, Any],
+    variant: dict[str, Any],
+    review_cwd: Path,
+    prompt: str,
+    review_scope: dict[str, Any],
+    allow_unsafe_windows_wsl_fallback: bool,
+    state_dir: Path | None = None,
+) -> dict[str, Any]:
+    kwargs = dict(
+        round_payload=round_payload, run=run, variant=variant,
+        review_cwd=review_cwd, prompt=prompt, review_scope=review_scope,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+    )
+    if not _is_arena_round(round_payload):
+        return _launch_reviewer_process_unchecked(**kwargs)
+    if state_dir is None:
+        raise ValueError("Arena reviewer launch requires its retirement state directory")
+    current = {"variants": [variant]}
+    if round_payload.get("roster_path"):
+        current["_roster_path"] = round_payload["roster_path"]
+    with arena_launch_guard(current, state_dir=state_dir, variant_id=str(run["variant_id"])):
+        return _launch_reviewer_process_unchecked(**kwargs)
+
+
+def _launch_reviewer_process_unchecked(
     *,
     round_payload: dict[str, Any],
     run: dict[str, Any],
@@ -3949,6 +4032,13 @@ def _maybe_retry_capacity_run(
     )
     if summary and summary.get("grade_block_reason") != "selected_model_at_capacity":
         return False
+    if _is_arena_round(round_payload):
+        current = variant_index(_current_arena_roster(
+            round_payload, {"variants": list(indexed.values())}, state_dir
+        )).get(str(run["variant_id"]))
+        if current is None or current.get("state") == "retired":
+            # Keep the existing attempt's output; retirement forbids a new call.
+            return False
     retry_attempts = int(run.get("capacity_retry_attempts", 0) or 0)
     if not cleanup_pending and retry_attempts >= CAPACITY_RETRY_MAX_ATTEMPTS:
         return False
@@ -3984,17 +4074,27 @@ def _maybe_retry_capacity_run(
     ):
         run.pop(transient_key, None)
     time.sleep(CAPACITY_RETRY_DELAY_SECONDS)
-    _launch_reviewer_process(
-        round_payload=round_payload,
-        run=run,
-        variant=indexed[str(run["variant_id"])],
-        review_cwd=review_cwd,
-        prompt=str(round_payload.get("requested_prompt") or ""),
-        review_scope=deepcopy(round_payload.get("review_scope") or {}),
-        allow_unsafe_windows_wsl_fallback=bool(
-            round_payload.get("allow_unsafe_windows_wsl_fallback")
-        ),
-    )
+    try:
+        _launch_reviewer_process(
+            round_payload=round_payload,
+            run=run,
+            variant=indexed[str(run["variant_id"])],
+            state_dir=state_dir,
+            review_cwd=review_cwd,
+            prompt=str(round_payload.get("requested_prompt") or ""),
+            review_scope=deepcopy(round_payload.get("review_scope") or {}),
+            allow_unsafe_windows_wsl_fallback=bool(
+                round_payload.get("allow_unsafe_windows_wsl_fallback")
+            ),
+        )
+    except ArenaRetiredError as exc:
+        # Retirement may arrive during the retry delay. Finalize this blocked
+        # slot so the other running reviewers can finish and the user can reroll.
+        run.update(summary)
+        run.update(
+            review_status="retired", status_summary=str(exc),
+            grade_blocked=True, grade_block_reason="selected_model_retired",
+        )
     write_round(state_dir, round_payload)
     return True
 
@@ -4043,6 +4143,17 @@ def launch_round(
     progress_interval_seconds: int = 30,
     allow_unsafe_windows_wsl_fallback: bool = False,
 ) -> dict[str, Any]:
+    if _is_arena_round(round_payload):
+        roster = _current_arena_roster(round_payload, roster, state_dir)
+        current = variant_index(roster)
+        for run in round_payload.get("runs", []):
+            if _run_is_finalized(run):
+                continue
+            variant = current.get(str(run["variant_id"]))
+            if variant is None or variant.get("state") == "retired":
+                raise ValueError(
+                    f"Arena reviewer {run['variant_id']} is retired or no longer in the roster; reroll or dismiss this round"
+                )
     indexed = variant_index(roster)
     review_cwd = review_cwd.resolve()
     if round_payload.get("status") not in {"sampled", "failed"}:
@@ -4069,16 +4180,26 @@ def launch_round(
         if launched_count:
             time.sleep(MULTI_REVIEW_DISPATCH_STAGGER_SECONDS)
         variant = indexed[run["variant_id"]]
-        _launch_reviewer_process(
-            round_payload=round_payload,
-            run=run,
-            variant=variant,
-            review_cwd=review_cwd,
-            prompt=prompt,
-            review_scope=review_scope,
-            allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-        )
-        launched_count += 1
+        try:
+            _launch_reviewer_process(
+                round_payload=round_payload,
+                run=run,
+                variant=variant,
+                state_dir=state_dir,
+                review_cwd=review_cwd,
+                prompt=prompt,
+                review_scope=review_scope,
+                allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+            )
+        except ArenaRetiredError as exc:
+            # Another process can retire a model during the stagger delay.
+            # Keep earlier starts recoverable and dispatch the remaining field.
+            run.update(
+                review_status="retired", status_summary=str(exc),
+                grade_blocked=True, grade_block_reason="selected_model_retired",
+            )
+        else:
+            launched_count += 1
         running_run = deepcopy(run)
         running_payload["runs"] = [
             running_run
@@ -4368,6 +4489,8 @@ def compact_benchmark_run(run: dict[str, Any]) -> dict[str, Any]:
         compacted["tokens_used"] = int(run["tokens_used"])
     if not compacted["service_tier"]:
         compacted.pop("service_tier", None)
+    if run.get("model_id"):
+        compacted["model_id"] = run["model_id"]
     if run.get("actual_model"):
         compacted["actual_model"] = run["actual_model"]
     if run.get("actual_models"):
@@ -4638,6 +4761,7 @@ def aggregate_records(
     *,
     _include_rating_pools: bool = True,
 ) -> dict[str, Any]:
+    roster = resolve_roster_lifecycle(roster)
     settings = roster.get("settings", {})
     k_factor = float(settings.get("elo_k_factor", 24))
     summary: dict[str, Any] = {
@@ -4647,6 +4771,23 @@ def aggregate_records(
     }
     for task_class in TASK_CLASSES:
         active = eligible_variants(roster, task_class)
+        indexed = variant_index(roster)
+        historical_ids = {
+            str(run["variant_id"])
+            for record in records if record.get("task_class") == task_class
+            for run in record.get("runs", [])
+        }
+        active_ids = {str(variant["id"]) for variant in active}
+        retired_ids = {
+            str(variant["id"]) for variant in roster["variants"]
+            if variant.get("state") == "retired"
+        } | set(roster.get("_arena_retirements", {}).get("variants", {}))
+        # Retirement keeps historical rows. Temporary disabled/non-Arena
+        # variants retain their previous visibility; every match is still fit.
+        active = active + [
+            indexed.get(variant_id, {"id": variant_id})
+            for variant_id in sorted((historical_ids & retired_ids) - active_ids)
+        ]
         ratings = {variant["id"]: 1500.0 for variant in active}
         metrics: dict[str, dict[str, Any]] = {
             variant["id"]: {
@@ -4782,6 +4923,10 @@ def aggregate_records(
                 {
                     "variant_id": variant_id,
                     "variant_label": variant_id,
+                    "lifecycle": deepcopy(indexed.get(variant_id, {}).get("lifecycle") or {
+                        "status": "retired" if variant_id in roster.get("_arena_retirements", {}).get("variants", {}) else "active",
+                        **{key: value for key, value in roster.get("_arena_retirements", {}).get("variants", {}).get(variant_id, {}).items() if key in {"retired_at", "reason"}},
+                    }),
                     "sample_count": sample_count,
                     "elo": round(ratings[variant_id], 2),
                     "win_count": bucket["win_count"],
@@ -4909,8 +5054,13 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
             for row in pool["leaderboard"]:
                 if row["sample_count"] == 0:
                     continue
+                retired_label = (
+                    " (retired)"
+                    if (row.get("lifecycle") or {}).get("status") == "retired"
+                    else ""
+                )
                 lines.append(
-                    f"| {format_markdown_inline(row['variant_label'])} | {format_decimal(row['elo'])} | {row['sample_count']} | {row['wtl']} | "
+                    f"| {format_markdown_inline(row['variant_label'])}{retired_label} | {format_decimal(row['elo'])} | {row['sample_count']} | {row['wtl']} | "
                     f"{row['valid_finding_count']}/{row['finding_opportunity_count']} | {format_decimal(row['valid_finding_rate'])} | "
                     f"{format_decimal(row['missed_bug_loss_rate'])} | {format_decimal(row['low_quality_loss_rate'])} | {format_decimal(row['median_elapsed_seconds'])} | "
                     f"{format_compact_tokens(row['median_total_tokens'])} | {format_cost_cents(row['median_cost_usd'])} |"
@@ -4977,7 +5127,8 @@ def promote(
     state = deepcopy(operational_state)
     state["generated_at"] = utc_now_iso()
     for task_class in TASK_CLASSES:
-        leaderboard = summary["task_classes"][task_class]["leaderboard"]
+        eligible_ids = {variant["id"] for variant in eligible_variants(resolve_roster_lifecycle(roster), task_class)}
+        leaderboard = [row for row in summary["task_classes"][task_class]["leaderboard"] if row["variant_id"] in eligible_ids]
         slot = state["task_classes"][task_class]
         slot["champion_variant_id"] = None
         slot["champion_variant_ids"] = []

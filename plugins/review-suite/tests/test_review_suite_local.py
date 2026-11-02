@@ -2213,6 +2213,10 @@ def test_launch_reviewer_process_writes_prompt_for_prompted_base_mode(
     tmp_path: Path,
 ) -> None:
     captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.default_review_suite_state_dir",
+        lambda: tmp_path / "review-state",
+    )
 
     class FakeStdin:
         def __init__(self) -> None:
