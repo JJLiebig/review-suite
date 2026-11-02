@@ -2724,8 +2724,16 @@ def _reserve_review_brief_restart(
         raise ValueError("--restart-brief must differ from the frozen review brief")
 
     convergence = convergence_summary(state)
+    budget_replan = (
+        state.get("stage") == "convergence-decided"
+        and convergence.get("status") == "DECIDED"
+        and convergence.get("decision") == "REPLAN"
+        and convergence.get("reason") == "budget_exhausted"
+        and bool(state.get("active_findings"))
+    )
     if contract_conflict:
         state = record_contract_replan(state, conflict=contract_conflict)
+    if contract_conflict or budget_replan:
         source_round_id = dict(state["active_findings"])["round_id"]
         round_state_dir = state_dir / "orchestrator" / "review-rounds"
         for path in rounds_dir(round_state_dir).glob("*.json"):
