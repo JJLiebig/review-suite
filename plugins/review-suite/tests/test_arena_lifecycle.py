@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tomllib
 from copy import deepcopy
 from pathlib import Path
 
@@ -86,6 +87,35 @@ def test_policy_uses_declared_release_order_and_retires_every_effort() -> None:
     assert len(eligible_variants(resolved, "base_review")) == 4
     assert len(eligible_variants(resolved, "deep_review")) == 4
     assert data["variants"][0]["state"] == "active"
+
+
+def test_shipped_roster_retires_terra_and_gpt55_without_retiring_luna() -> None:
+    data = load_roster(SCRIPT_DIR.parent / "references" / "roster.json")
+    for task_class in ("base_review", "deep_review"):
+        eligible = {v["id"] for v in eligible_variants(data, task_class)}
+        assert not any(v.startswith(("gpt-5.6-terra-", "gpt-5.5-", "gpt-5.6-sol-")) for v in eligible)
+        assert "gpt-5.6-luna-medium" in eligible
+        assert "gpt-6.1-terra-medium" in eligible
+    terra = next(v for v in data["variants"] if v["id"] == "gpt-5.6-terra-medium")
+    assert terra["lifecycle"]["status"] == "retired"
+    assert terra["lifecycle"]["generation"] == "previous"
+
+
+@pytest.mark.parametrize("pool_name,task_class", [
+    ("discovery_base", "base_review"), ("discovery_deep", "deep_review"),
+    ("arena_base", "base_review"), ("arena_deep", "deep_review"),
+])
+def test_shipped_pools_can_select_four_after_retirement(pool_name: str, task_class: str) -> None:
+    references = SCRIPT_DIR.parent / "references"
+    pool = tomllib.loads((references / "arena_settings.toml").read_text())["arena"]["pools"][pool_name]
+    result = select_pair(
+        roster=load_roster(references / "roster.json"),
+        operational_state=default_operational_state(), records=[], task_class=task_class,
+        review_cwd=None, seed=None, rating_pool_id=pool["rating_pool_id"],
+        variant_groups=pool["variant_groups"], variant_ids=pool.get("variant_ids"),
+    )
+    assert len(result["runs"]) == 4
+    assert not any(run["variant_id"].startswith(("gpt-5.6-terra-", "gpt-5.5-", "gpt-5.6-sol-")) for run in result["runs"])
 
 
 def test_automatic_load_persists_retirement_despite_roster_downgrade(
@@ -277,15 +307,16 @@ def test_retired_history_keeps_metrics_and_existing_ratings(tmp_path: Path) -> N
     )
 
 
-def test_disabled_rows_keep_previous_display_behavior() -> None:
+def test_disabled_history_remains_available_without_becoming_eligible() -> None:
     data = roster(("first", "second"))
     data["variants"][0]["state"] = "disabled"
     result = aggregate_records(
         data, [record(["first-medium", "second-medium"])], default_operational_state()
     )
-    assert "first-medium" not in {
-        r["variant_id"] for r in result["task_classes"]["base_review"]["leaderboard"]
-    }
+    row = next(r for r in result["task_classes"]["base_review"]["leaderboard"] if r["variant_id"] == "first-medium")
+    assert row["sample_count"] == 1
+    assert row["lifecycle"] == {"status": "disabled", "lineage": "family", "generation": "previous"}
+    assert "first-medium" not in {v["id"] for v in eligible_variants(data, "base_review")}
     assert (
         len(result["task_classes"]["base_review"]["recent_rounds"][0]["participants"])
         == 2

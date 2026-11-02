@@ -36,12 +36,12 @@ def model_id(variant: dict[str, Any]) -> str:
     return str(variant.get("model_id") or variant.get("model") or variant["id"])
 
 
-def _lineage_retirements(roster: dict[str, Any]) -> dict[str, str]:
+def _lineage_positions(roster: dict[str, Any]) -> dict[str, tuple[str, int]]:
     lineages = roster.get("lineages", {})
     if not isinstance(lineages, dict):
         raise ValueError("roster lineages must be an object of ordered model ids")
     seen: set[str] = set()
-    retired: dict[str, str] = {}
+    positions: dict[str, tuple[str, int]] = {}
     for lineage, generations in lineages.items():
         if not isinstance(generations, list) or not generations:
             raise ValueError(f"lineage {lineage} must list released model ids in order")
@@ -53,11 +53,9 @@ def _lineage_retirements(roster: dict[str, Any]) -> dict[str, str]:
                     f"model id occurs more than once in lineages: {generation}"
                 )
             seen.add(generation)
-        for generation in generations[:-2]:
-            retired[generation] = (
-                f"Superseded: outside the latest two generations of {lineage}"
-            )
-    return retired
+        for position, generation in enumerate(reversed(generations)):
+            positions[generation] = (lineage, position)
+    return positions
 
 
 def _empty_ledger() -> dict[str, Any]:
@@ -113,7 +111,11 @@ def _resolve(
     ledger = deepcopy(ledger)
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     entry_date = {"retired_at": now} if persist_date else {}
-    retired_models = _lineage_retirements(roster)
+    positions = _lineage_positions(roster)
+    retired_models = {
+        generation: f"Superseded: outside the latest two generations of {lineage}"
+        for generation, (lineage, position) in positions.items() if position >= 2
+    }
     variants_by_model: dict[str, list[dict[str, Any]]] = {}
     for variant in resolved.get("variants", []):
         variants_by_model.setdefault(model_id(variant), []).append(variant)
@@ -157,7 +159,16 @@ def _resolve(
                 },
             }
         else:
-            variant["lifecycle"] = {"status": "active"}
+            variant["lifecycle"] = {
+                "status": "active" if variant.get("state", "active") == "active"
+                and variant.get("arena_eligible", True) is True else "disabled"
+            }
+        if generation in positions:
+            lineage, position = positions[generation]
+            variant["lifecycle"].update(
+                lineage=lineage,
+                generation="current" if position == 0 else "previous" if position == 1 else "older",
+            )
     resolved["_arena_retirements"] = ledger
     return resolved, ledger
 

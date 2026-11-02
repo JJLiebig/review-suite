@@ -9,13 +9,13 @@ enabled = false
 [arena.pools.discovery_base]
 rating_pool_id = "discovery-phase-gpt-5.6-v1"
 variant_groups = [
-  ["gpt-5.5-medium", "gpt-5.6-sol-medium", "gpt-5.6-terra-medium", "gpt-5.6-luna-medium"],
+  ["gpt-6.1-terra-medium", "gpt-6.1-sol-medium", "gpt-6-luna-medium", "gpt-5.6-luna-medium"],
 ]
 
 [arena.pools.discovery_deep]
 rating_pool_id = "discovery-deep-gpt-5.6-v1"
 variant_groups = [
-  ["gpt-5.5-xhigh", "gpt-5.6-sol-xhigh", "gpt-5.6-terra-xhigh", "gpt-5.6-luna-xhigh"],
+  ["gpt-6.1-terra-xhigh", "gpt-6.1-sol-xhigh", "gpt-6-luna-xhigh", "gpt-5.6-luna-xhigh"],
 ]
 
 [arena.pools.arena_base]

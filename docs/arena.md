@@ -57,8 +57,8 @@ its own `model_id`, as the two DeepSeek Flash revisions do. Models without a
 declared lineage can be retired explicitly.
 
 The shipped policy retires GPT-5.6 Sol because GPT-6 Sol and GPT-6.1 Sol follow it.
-GPT-5.6 Terra and GPT-5.6 Luna remain eligible predecessors. Legacy GPT-5.5 is
-explicitly retired, without inventing a relationship to a later model lineage.
+GPT-5.6 Terra and legacy GPT-5.5 are explicitly retired. GPT-5.6 Luna remains an
+eligible predecessor.
 Existing disabled states, task limits, reasoning settings, and ordinary signoff
 jobs are unchanged.
 
@@ -77,7 +77,7 @@ feature; retain a retirement-aware scheduler when rolling back an installation.
 For an optional early retirement of every effort of one generation:
 
 ```powershell
-<python> <plugin-root>/scripts/review_suite_arena.py retire-model --model-id gpt-5.6-terra --reason "No longer useful for my reviews"
+<python> <plugin-root>/scripts/review_suite_arena.py retire-model --model-id MODEL_ID --reason "No longer useful for my reviews"
 ```
 
 This updates the retirement ledger and reports; it does not call any models.
@@ -88,13 +88,13 @@ Stale configured groups automatically select a full group from the remaining
 eligible configured models, or fail clearly if there are too few. Existing
 rating pool IDs are preserved.
 
-Retired models with recorded results remain in `summary.json` and the local
-leaderboard, with their metrics intact. Every historical match continues to
-contribute to ratings. Temporary disabled/non-Arena variants keep their previous
-display behavior. Summary rows expose the additive consumer contract:
+Models with recorded results remain in `summary.json` and the local leaderboard,
+with their metrics intact, including retired and disabled variants. Every
+historical match continues to contribute to ratings. Summary rows include
+their scheduling status and, for declared lineages, their generation position:
 
 ```json
-{"lifecycle": {"status": "retired", "retired_at": "2026-11-02T12:00:00Z", "reason": "Superseded: outside the latest two generations of openai-sol"}}
+{"lifecycle": {"status": "retired", "retired_at": "2026-11-02T12:00:00Z", "reason": "Retired in the roster", "lineage": "openai-terra", "generation": "previous"}}
 ```
 
 Active rows use `{"status":"active"}`. Read-only previews may omit the date for

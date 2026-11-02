@@ -4778,15 +4778,9 @@ def aggregate_records(
             for run in record.get("runs", [])
         }
         active_ids = {str(variant["id"]) for variant in active}
-        retired_ids = {
-            str(variant["id"]) for variant in roster["variants"]
-            if variant.get("state") == "retired"
-        } | set(roster.get("_arena_retirements", {}).get("variants", {}))
-        # Retirement keeps historical rows. Temporary disabled/non-Arena
-        # variants retain their previous visibility; every match is still fit.
         active = active + [
             indexed.get(variant_id, {"id": variant_id})
-            for variant_id in sorted((historical_ids & retired_ids) - active_ids)
+            for variant_id in sorted(historical_ids - active_ids)
         ]
         ratings = {variant["id"]: 1500.0 for variant in active}
         metrics: dict[str, dict[str, Any]] = {
@@ -4924,7 +4918,7 @@ def aggregate_records(
                     "variant_id": variant_id,
                     "variant_label": variant_id,
                     "lifecycle": deepcopy(indexed.get(variant_id, {}).get("lifecycle") or {
-                        "status": "retired" if variant_id in roster.get("_arena_retirements", {}).get("variants", {}) else "active",
+                        "status": "retired" if variant_id in roster.get("_arena_retirements", {}).get("variants", {}) else "disabled",
                         **{key: value for key, value in roster.get("_arena_retirements", {}).get("variants", {}).get(variant_id, {}).items() if key in {"retired_at", "reason"}},
                     }),
                     "sample_count": sample_count,
