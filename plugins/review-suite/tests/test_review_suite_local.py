@@ -596,7 +596,7 @@ def test_build_record_from_grade_uses_explicit_ordered_groups() -> None:
             rank_groups=ranks,
             basis=basis,
             shared_note="Useful findings do not cancel garbage.",
-            low_quality=flagged,
+            low_quality=[f"{reviewer}=scope_bloat" for reviewer in flagged],
         )
         assert flagged_record["placement_v1"]["groups"] == expected_groups
         assert sum(run["low_quality"] for run in flagged_record["runs"]) == len(flagged)
@@ -642,18 +642,23 @@ def test_build_record_from_grade_uses_explicit_ordered_groups() -> None:
         if basis.startswith("tie_") and len(expected_groups) > 1:
             assert flagged_record["placement_v1"]["basis"] == "better_finding_validity"
 
-    with pytest.raises(ValueError, match="unknown low-quality reviewer"):
-        build_record_from_grade(
-            round_payload=round_payload,
-            roster=roster,
-            rubric={"basis": list(review_suite_local.GRADE_BASIS_VALUES)},
-            task_id="task-1",
-            rating_pool_id="arena-phase-v1",
-            rank_groups=["alpha", "bravo,charlie"],
-            basis="better_bug_coverage",
-            shared_note=None,
-            low_quality=["typo"],
-        )
+    for entry, message in (
+        ("typo=fringe", "unknown low-quality reviewer"),
+        ("alpha=typo", "low-quality reason"),
+        ("alpha", "low-quality reason"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            build_record_from_grade(
+                round_payload=round_payload,
+                roster=roster,
+                rubric={"basis": list(review_suite_local.GRADE_BASIS_VALUES)},
+                task_id="task-1",
+                rating_pool_id="arena-phase-v1",
+                rank_groups=["alpha", "bravo,charlie"],
+                basis="better_bug_coverage",
+                shared_note=None,
+                low_quality=[entry],
+            )
 
     configured = json.loads(json.dumps(round_payload))
     configured["rating_pool_id"] = "discovery-phase-gpt-5.6-v1"

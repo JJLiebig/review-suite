@@ -104,9 +104,13 @@ def test_grade_records_garbage_flags_and_penalizes_placements(tmp_path: Path) ->
             "--basis",
             "tie_both_useful",
             "--low-quality",
-            "alpha",
+            "alpha=fringe",
             "--low-quality",
-            "model-c",
+            "alpha=scope_bloat",
+            "--low-quality",
+            "alpha=fringe",
+            "--low-quality",
+            "model-c=false_positive",
             "--roster",
             str(roster_path),
             "--rubric",
@@ -121,6 +125,11 @@ def test_grade_records_garbage_flags_and_penalizes_placements(tmp_path: Path) ->
     record = json.loads((state_dir / "runs.jsonl").read_text(encoding="utf-8"))
     assert record["placement_v1"]["groups"] == [["model-b"], ["model-a", "model-c"]]
     assert [run["low_quality"] for run in record["runs"]] == [True, False, True]
+    assert [run.get("low_quality_reasons") for run in record["runs"]] == [
+        ["fringe", "scope_bloat"],
+        None,
+        ["false_positive"],
+    ]
     summary = json.loads((state_dir / "summary.json").read_text(encoding="utf-8"))
     rows = {
         row["variant_id"]: row
@@ -129,6 +138,23 @@ def test_grade_records_garbage_flags_and_penalizes_placements(tmp_path: Path) ->
     assert rows["model-b"]["elo"] > rows["model-a"]["elo"]
     assert rows["model-a"]["low_quality_loss_rate"] == 100
     assert rows["model-b"]["low_quality_loss_rate"] == 0
+
+    args.low_quality = ["alpha=other", "model-c=false_positive"]
+    assert cmd_grade(args) == 0
+    records = [
+        json.loads(line)
+        for line in (state_dir / "runs.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0]["recorded_at"] == record["recorded_at"]
+    assert records[0]["runs"][0]["low_quality_reasons"] == ["other"]
+    refreshed = json.loads((state_dir / "summary.json").read_text(encoding="utf-8"))
+    refreshed_rows = {
+        row["variant_id"]: row
+        for row in refreshed["task_classes"]["base_review"]["leaderboard"]
+    }
+    assert refreshed_rows["model-a"]["sample_count"] == 1
+    assert refreshed_rows["model-a"]["elo"] == rows["model-a"]["elo"]
 
 
 def test_print_findings_prints_final_reviewer_output(capsys) -> None:
@@ -1058,7 +1084,7 @@ def test_record_grade_refreshes_arena_state_without_cost_work(
         lambda **kwargs: {"recorded_at": "2026-07-10T17:00:00Z"},
     )
     monkeypatch.setattr(
-        "review_suite_arena.append_record_if_new", lambda state_dir, record: True
+        "review_suite_arena.save_benchmark_record", lambda state_dir, record: True
     )
     monkeypatch.setattr(
         "review_suite_arena.write_round",

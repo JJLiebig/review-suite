@@ -42,7 +42,7 @@ from review_suite_local import (
     TASK_CLASSES,
     PUBLIC_REVIEWER_LABELS,
     aggregate_records,
-    append_record_if_new,
+    save_benchmark_record,
     build_base_instructions,
     build_deep_instructions,
     build_local_review_request,
@@ -222,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--low-quality",
         action="append",
-        help="reviewer slot or variant that gave garbage; repeat for each",
+        help="reviewer=reason; repeat for each reason (false_positive, hallucination, fringe, scope_bloat, other)",
     )
     run.add_argument("--note")
 
@@ -298,7 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
     grade.add_argument(
         "--low-quality",
         action="append",
-        help="reviewer slot or variant that gave garbage; repeat for each",
+        help="reviewer=reason; repeat for each reason (false_positive, hallucination, fringe, scope_bloat, other)",
     )
     grade.add_argument("--note")
     grade.add_argument("--roster", default=str(default_roster_path()))
@@ -1737,7 +1737,7 @@ def _record_grade_result(
         shared_note=note,
         low_quality=low_quality,
     )
-    if not append_record_if_new(state_dir, record):
+    if not save_benchmark_record(state_dir, record):
         result: dict[str, object] = {
             "status": "ok",
             "duplicate": True,
