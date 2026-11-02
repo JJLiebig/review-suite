@@ -3714,7 +3714,7 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
 ) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
     review_calls = _stub_review(
-        monkeypatch, "round-1", "round-2", "round-3", "authorized-round", output="[P1] Concrete regression."
+        monkeypatch, "round-1", "round-2", "round-3", "authorized-round", "successor-round", output="[P1] Concrete regression."
     )
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -3726,6 +3726,8 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
     _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
+            "--review-brief",
+            "Original implementation plan",
             "--mode",
             "fast",
             "--cd",
@@ -3820,6 +3822,73 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
     )
     if fourth_decision == "findings":
         assert set(classified["Action"]["choices"]) == {"REPLAN", "RESLICE"}
+        if not fix_before_classification:
+            restart = [
+                "--id", public_id, "--restart-brief", "Approved amended implementation",
+                "--reason", "Approved revised implementation for the remaining valid findings",
+            ]
+            errors: list[str] = []
+            monkeypatch.setattr(
+                review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2
+            )
+            before = _cycle_payload(state_dir, public_id)
+            # A budget stop alone does not authorize replacing the frozen brief.
+            monkeypatch.setattr(sys, "argv", ["review.py", *restart])
+            assert review.main() == 2
+            assert _cycle_payload(state_dir, public_id) == before
+            _run_review_after_cleanup(
+                monkeypatch,
+                ["--id", public_id, "--convergence-decision", "reslice"],
+            )
+            monkeypatch.setattr(sys, "argv", ["review.py", *restart])
+            assert review.main() == 2
+            review.save_cycle(state_dir, before)
+            _run_review_after_cleanup(
+                monkeypatch,
+                ["--id", public_id, "--convergence-decision", "replan"],
+            )
+            before = _cycle_payload(state_dir, public_id)
+            assert len(before["convergence"]["accepted_findings_heads"]) == 4
+            assert before["convergence"]["continue_used"] is True
+            assert before["convergence"]["decisions"] == [
+                {"decision": "CONTINUE", "reason": "budget_exhausted"},
+                {"decision": "REPLAN", "reason": "budget_exhausted"},
+            ]
+            round_state_dir = state_dir / "orchestrator" / "review-rounds"
+            live_round = {
+                "round_id": "live-followup",
+                "review_scope": {"source_round_id": before["active_findings"]["round_id"]},
+                "runs": [{"slot": "alpha", "pid": os.getpid()}],
+            }
+            write_round(round_state_dir, live_round)
+            monkeypatch.setattr(sys, "argv", ["review.py", *restart])
+            assert review.main() == 2
+            assert "follow-up reviewer is running" in errors[-1]
+            assert _cycle_payload(state_dir, public_id) == before
+            live_round["runs"][0]["review_status"] = "completed"
+            write_round(round_state_dir, live_round)
+            _, restarted = _run_review_after_cleanup(monkeypatch, restart)
+            new_id = str(restarted["review"])
+            old_saved = _cycle_payload(state_dir, public_id)
+            successor = _cycle_payload(state_dir, new_id)
+            for key in ("review_brief", "rounds", "active_findings", "decisions", "validation", "convergence"):
+                assert old_saved[key] == before[key]
+            assert old_saved["superseded_by"]["review"] == new_id
+            assert successor["restart"]["supersedes"] == public_id
+            assert successor["restart"]["kind"] == "review-brief-restart"
+            assert successor["mode"] == before["mode"]
+            assert successor["review_brief"] == "Approved amended implementation"
+            assert successor["validation"] == dict.fromkeys(
+                ("review_green", "focused", "full_suite", "ci"), "unknown"
+            )
+            assert successor["convergence"]["accepted_findings_heads"] == []
+            assert successor["decisions"] == []
+            monkeypatch.setattr(sys, "argv", ["review.py", *restart])
+            assert review.main() == 2
+            assert _cycle_payload(state_dir, public_id) == old_saved
+            assert _cycle_payload(state_dir, new_id) == successor
+            assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
+            assert len(review_calls) == 5
     else:
         clean = _cycle_payload(state_dir, public_id)
         assert len(deslop_calls) == 0
