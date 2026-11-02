@@ -57,9 +57,9 @@ its own `model_id`, as the two DeepSeek Flash revisions do. Models without a
 declared lineage can be retired explicitly.
 
 The shipped policy retires GPT-5.6 Sol because GPT-6 Sol and GPT-6.1 Sol follow it.
-GPT-5.6 Terra and legacy GPT-5.5 are explicitly retired. GPT-5.6 Luna remains an
-eligible predecessor.
-Existing disabled states, task limits, reasoning settings, and ordinary signoff
+GPT-5.6 Terra and legacy GPT-5.5 and GPT-5.4 models are explicitly retired.
+GPT-5.6 Luna remains an eligible predecessor.
+Other disabled states, task limits, reasoning settings, and ordinary signoff
 jobs are unchanged.
 
 Retirement is permanent for a model generation. Review Suite stores model and

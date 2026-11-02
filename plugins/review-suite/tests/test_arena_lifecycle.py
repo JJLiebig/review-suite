@@ -89,7 +89,7 @@ def test_policy_uses_declared_release_order_and_retires_every_effort() -> None:
     assert data["variants"][0]["state"] == "active"
 
 
-def test_shipped_roster_retires_terra_and_gpt55_without_retiring_luna() -> None:
+def test_shipped_roster_retires_legacy_models_without_retiring_luna() -> None:
     data = load_roster(SCRIPT_DIR.parent / "references" / "roster.json")
     for task_class in ("base_review", "deep_review"):
         eligible = {v["id"] for v in eligible_variants(data, task_class)}
@@ -99,6 +99,8 @@ def test_shipped_roster_retires_terra_and_gpt55_without_retiring_luna() -> None:
     terra = next(v for v in data["variants"] if v["id"] == "gpt-5.6-terra-medium")
     assert terra["lifecycle"]["status"] == "retired"
     assert terra["lifecycle"]["generation"] == "previous"
+    legacy = [v for v in data["variants"] if v["model_id"] in {"gpt-5.4", "gpt-5.4-mini"}]
+    assert legacy and all(v["lifecycle"]["status"] == "retired" for v in legacy)
 
 
 @pytest.mark.parametrize("pool_name,task_class", [
