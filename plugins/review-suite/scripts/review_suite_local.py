@@ -3153,15 +3153,32 @@ def load_round(state_dir: Path, round_id: str) -> dict[str, Any]:
     return read_json(path)
 
 
-def append_record_if_new(state_dir: Path, record: dict[str, Any]) -> bool:
+def save_benchmark_record(state_dir: Path, record: dict[str, Any]) -> bool:
     with state_lock(state_dir, "runs"):
         record = compact_benchmark_record(record)
         existing_records = read_jsonl(state_dir / RUN_LOG_FILENAME)
         identity = record_identity_key(record)
-        if any(
-            record_identity_key(existing) == identity for existing in existing_records
-        ):
-            return False
+        for existing in existing_records:
+            if record_identity_key(existing) != identity:
+                continue
+            if existing.get("round_id") != record.get("round_id"):
+                return False
+            reasons = {
+                run["variant_id"]: run.get("low_quality_reasons")
+                for run in record["runs"]
+            }
+            changed = False
+            for run in existing["runs"]:
+                updated = reasons[run["variant_id"]]
+                if run.get("low_quality_reasons") != updated:
+                    if updated:
+                        run["low_quality_reasons"] = updated
+                    else:
+                        run.pop("low_quality_reasons", None)
+                    changed = True
+            if changed:
+                write_jsonl(state_dir / RUN_LOG_FILENAME, existing_records)
+            return changed
         append_jsonl(state_dir / RUN_LOG_FILENAME, record)
         return True
 
@@ -4321,7 +4338,6 @@ def record_identity_key(record: dict[str, Any]) -> str:
                 "reviewer_output_ref": run.get("reviewer_output_ref"),
                 "grader_notes": run.get("grader_notes"),
                 "low_quality": run.get("low_quality"),
-                "low_quality_reasons": run.get("low_quality_reasons"),
                 "elapsed_seconds": run.get("elapsed_seconds"),
             }
         )

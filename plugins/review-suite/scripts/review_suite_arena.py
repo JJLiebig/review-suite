@@ -42,7 +42,7 @@ from review_suite_local import (
     TASK_CLASSES,
     PUBLIC_REVIEWER_LABELS,
     aggregate_records,
-    append_record_if_new,
+    save_benchmark_record,
     build_base_instructions,
     build_deep_instructions,
     build_local_review_request,
@@ -1737,7 +1737,7 @@ def _record_grade_result(
         shared_note=note,
         low_quality=low_quality,
     )
-    if not append_record_if_new(state_dir, record):
+    if not save_benchmark_record(state_dir, record):
         result: dict[str, object] = {
             "status": "ok",
             "duplicate": True,
