@@ -36,6 +36,10 @@ from review_suite_core import (
 )
 from review_suite_core.config import default_state_dir
 from review_suite_core.orchestrator_store import orchestrator_store_lock
+from review_suite_core.arena_lifecycle import (
+    resolve_roster_lifecycle,
+    retirement_state_dir,
+)
 from review_suite_local import (
     OPERATIONAL_STATE_FILENAME,
     RUN_LOG_FILENAME,
@@ -320,6 +324,12 @@ def build_parser() -> argparse.ArgumentParser:
     refresh.add_argument("--roster", default=str(default_roster_path()))
     refresh.add_argument("--state-dir", default=str(default_state_dir()))
 
+    retire = sub.add_parser("retire-model", help="Permanently stop an Arena model generation, retaining its history")
+    retire.add_argument("--model-id", required=True, help="Explicit roster model_id; retires every reasoning effort")
+    retire.add_argument("--reason", default="Manually retired from Arena")
+    retire.add_argument("--roster", default=str(default_roster_path()))
+    retire.add_argument("--state-dir", default=str(default_state_dir()))
+
     promote_parser = sub.add_parser("promote")
     promote_parser.add_argument("--roster", default=str(default_roster_path()))
     promote_parser.add_argument("--state-dir", default=str(default_state_dir()))
@@ -412,7 +422,10 @@ def cmd_sample(args: argparse.Namespace) -> int:
     task_class = _normalize_arena_task_class(str(args.task_class))
     caller_id, caller_id_source = resolve_caller_id(args.caller_id)
     review_cwd = _resolve_review_cwd(getattr(args, "cd", None))
-    roster = load_roster(Path(args.roster))
+    roster = load_roster(
+        Path(args.roster), state_dir=Path(args.state_dir),
+        persist_retirements=not bool(getattr(args, "dry_run", False)),
+    )
     state_dir = Path(args.state_dir)
     dry_run = bool(getattr(args, "dry_run", False))
     if not dry_run:
@@ -443,6 +456,7 @@ def cmd_sample(args: argparse.Namespace) -> int:
             )
         )
         return 0
+    payload["roster_path"] = str(Path(args.roster).resolve())
     write_round(state_dir, payload)
     emit_toon(
         public_round_payload(payload, task_name=_public_local_task_name(task_class))
@@ -1150,7 +1164,7 @@ def run_orchestrated_arena_round(
     )
     roster_path = default_roster_path()
     rubric_path = default_rubric_path()
-    roster = load_roster(roster_path)
+    roster = load_roster(roster_path, state_dir=state_dir)
     records = read_jsonl(
         state_dir / RUN_LOG_FILENAME
     ) + ungraded_round_exposure_records(state_dir)
@@ -1528,7 +1542,7 @@ def run_benchmarked_round(
     if dry_run and direct_grade_requested:
         raise ValueError("--dry-run cannot be combined with direct grading inputs")
     if dry_run:
-        roster = load_roster(roster_path)
+        roster = load_roster(roster_path, state_dir=state_dir, persist_retirements=False)
         payload = _select_round_payload(
             roster=roster,
             task_class=task_class,
@@ -1549,7 +1563,7 @@ def run_benchmarked_round(
             task_class=task_class,
         )
         if pending_round is not None:
-            roster = load_roster(roster_path)
+            roster = load_roster(roster_path, state_dir=state_dir)
             rubric = load_rubric(rubric_path)
             result = _record_grade_result(
                 roster=roster,
@@ -1591,7 +1605,7 @@ def run_benchmarked_round(
         review_cwd=review_cwd,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
-    roster = load_roster(roster_path)
+    roster = load_roster(roster_path, state_dir=state_dir)
     rubric = load_rubric(rubric_path)
     payload = _select_round_payload(
         roster=roster,
@@ -1845,7 +1859,10 @@ def cmd_run_round(args: argparse.Namespace) -> int:
         file=sys.stderr,
         flush=True,
     )
-    roster = load_roster(Path(args.roster))
+    roster = load_roster(
+        Path(args.roster), state_dir=Path(args.state_dir),
+        persist_retirements=not bool(getattr(args, "dry_run", False)),
+    )
     state_dir = Path(args.state_dir)
     payload = load_round(state_dir, args.round_id)
     review_scope = copy.deepcopy(payload.get("review_scope") or {})
@@ -1905,7 +1922,10 @@ def cmd_run_round(args: argparse.Namespace) -> int:
 
 
 def cmd_reroll_slot(args: argparse.Namespace) -> int:
-    roster = load_roster(Path(args.roster))
+    roster = load_roster(
+        Path(args.roster), state_dir=Path(args.state_dir),
+        persist_retirements=not bool(getattr(args, "dry_run", False)),
+    )
     state_dir = Path(args.state_dir)
     records = read_jsonl(
         state_dir / RUN_LOG_FILENAME
@@ -2038,7 +2058,10 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
             file=sys.stderr,
             flush=True,
         )
-    roster = load_roster(Path(args.roster))
+    roster = load_roster(
+        Path(args.roster), state_dir=Path(args.state_dir),
+        persist_retirements=not bool(getattr(args, "dry_run", False)),
+    )
     state_dir = Path(args.state_dir)
     payload = load_round(state_dir, args.round_id)
     if payload.get("status") == "completed":
@@ -2385,7 +2408,10 @@ def _cmd_costs(args: argparse.Namespace, *, state_dir: Path) -> int:
 
 
 def cmd_grade(args: argparse.Namespace) -> int:
-    roster = load_roster(Path(args.roster))
+    roster = load_roster(
+        Path(args.roster), state_dir=Path(args.state_dir),
+        persist_retirements=not bool(getattr(args, "dry_run", False)),
+    )
     rubric = load_rubric(Path(args.rubric))
     state_dir = Path(args.state_dir)
     caller_id, caller_id_source = resolve_caller_id(args.caller_id)
@@ -2478,7 +2504,10 @@ def cmd_dismiss_round(args: argparse.Namespace) -> int:
 def cmd_report(args: argparse.Namespace) -> int:
     if getattr(args, "round_id", None):
         return cmd_show_round(args)
-    roster = load_roster(Path(args.roster))
+    roster = load_roster(
+        Path(args.roster), state_dir=Path(args.state_dir),
+        persist_retirements=not bool(getattr(args, "dry_run", False)),
+    )
     state_dir = Path(args.state_dir)
     with (
         state_lock(state_dir, "runs"),
@@ -2499,7 +2528,10 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def cmd_refresh(args: argparse.Namespace) -> int:
-    roster = load_roster(Path(args.roster))
+    roster = load_roster(
+        Path(args.roster), state_dir=Path(args.state_dir),
+        persist_retirements=not bool(getattr(args, "dry_run", False)),
+    )
     state_dir = Path(args.state_dir)
     _refresh_state_and_reports(state_dir=state_dir, roster=roster)
     emit_toon(
@@ -2514,8 +2546,27 @@ def cmd_refresh(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_retire_model(args: argparse.Namespace) -> int:
+    state_dir = retirement_state_dir(Path(args.state_dir))
+    roster = resolve_roster_lifecycle(
+        load_roster(Path(args.roster), state_dir=state_dir),
+        state_dir=state_dir, persist=True,
+        retire_model_id=args.model_id, reason=args.reason,
+    )
+    _refresh_state_and_reports(state_dir=state_dir, roster=roster)
+    nested = _orchestrator_review_state_dir(state_dir)
+    if (nested / RUN_LOG_FILENAME).exists():
+        _refresh_state_and_reports(state_dir=nested, roster=roster)
+    retirement = roster["_arena_retirements"]["models"][args.model_id]
+    emit_toon({"status": "ok", "model_id": args.model_id, "lifecycle": {"status": "retired", **retirement}})
+    return 0
+
+
 def cmd_promote(args: argparse.Namespace) -> int:
-    roster = load_roster(Path(args.roster))
+    roster = load_roster(
+        Path(args.roster), state_dir=Path(args.state_dir),
+        persist_retirements=bool(args.apply),
+    )
     state_dir = Path(args.state_dir)
     with (
         state_lock(state_dir, "runs"),
@@ -2539,7 +2590,10 @@ def cmd_promote(args: argparse.Namespace) -> int:
 
 
 def cmd_compact_runs(args: argparse.Namespace) -> int:
-    roster = load_roster(Path(args.roster))
+    roster = load_roster(
+        Path(args.roster), state_dir=Path(args.state_dir),
+        persist_retirements=bool(args.apply),
+    )
     state_dir = Path(args.state_dir)
     run_log_path = state_dir / RUN_LOG_FILENAME
     with (
@@ -2662,6 +2716,8 @@ def main() -> int:
             return cmd_report(args)
         if args.command == "refresh":
             return cmd_refresh(args)
+        if args.command == "retire-model":
+            return cmd_retire_model(args)
         if args.command == "promote":
             return cmd_promote(args)
         if args.command == "compact-runs":

@@ -1167,7 +1167,7 @@ def test_run_benchmarked_round_direct_grade_uses_latest_pending_round(
             AssertionError("should not check pending before direct grade")
         ),
     )
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_rubric", lambda path: {"categories": []}
     )
@@ -1229,7 +1229,7 @@ def test_run_benchmarked_round_emits_round_banner_and_compact_payload(
     monkeypatch.setattr(
         "review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None
     )
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_rubric", lambda path: {"categories": []}
     )
@@ -1309,7 +1309,7 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
     monkeypatch.setattr(
         "review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None
     )
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_rubric", lambda path: {"categories": []}
     )
@@ -1405,7 +1405,7 @@ def test_run_benchmarked_round_warns_for_deep_review_without_model_names(
     monkeypatch.setattr(
         "review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None
     )
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_rubric", lambda path: {"categories": []}
     )
@@ -1536,7 +1536,7 @@ def test_run_benchmarked_round_dry_run_does_not_persist_or_launch(
             },
         ],
     }
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: roster)
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: roster)
     monkeypatch.setattr("review_suite_arena.emit_toon", emitted.append)
     monkeypatch.setattr(
         "review_suite_arena.write_round",
@@ -1704,7 +1704,7 @@ def test_run_benchmarked_round_interactive_blocked_round_skips_final_toon(
     monkeypatch.setattr(
         "review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None
     )
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_rubric", lambda path: {"categories": []}
     )
@@ -1825,7 +1825,7 @@ def test_run_benchmarked_round_complete_grade_inputs_without_pending_falls_throu
         "review_suite_arena.find_pending_rounds_for_caller", lambda **kwargs: []
     )
     monkeypatch.setattr("review_suite_arena.iter_round_payloads", lambda state_dir: [])
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_rubric", lambda path: {"categories": []}
     )
@@ -1898,7 +1898,7 @@ def test_run_benchmarked_round_direct_grade_without_caller_uses_single_repo_pend
             AssertionError("should not check pending before direct grade")
         ),
     )
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_rubric", lambda path: {"categories": []}
     )
@@ -1981,7 +1981,7 @@ def test_run_benchmarked_round_direct_grade_with_caller_falls_back_to_unique_rep
             AssertionError("should not check pending before direct grade")
         ),
     )
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_rubric", lambda path: {"categories": []}
     )
@@ -2108,7 +2108,7 @@ def test_cmd_reroll_slot_records_workflow_anchor_when_completed(
     anchor_calls: list[dict[str, object]] = []
     emitted: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr("review_suite_arena.read_jsonl", lambda path: [])
     monkeypatch.setattr(
         "review_suite_arena.load_round",
@@ -2196,7 +2196,7 @@ def test_cmd_reroll_slot_skips_workflow_anchor_for_orchestrated_round(
 ) -> None:
     anchor_calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr("review_suite_arena.read_jsonl", lambda path: [])
     monkeypatch.setattr(
         "review_suite_arena.load_round",
@@ -2275,7 +2275,7 @@ def test_cmd_run_round_records_workflow_anchor_when_completed(
     anchor_calls: list[dict[str, object]] = []
     emitted: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_round",
         lambda state_dir, round_id: {
@@ -2354,7 +2354,7 @@ def test_cmd_run_round_skips_workflow_anchor_for_orchestrated_round(
 ) -> None:
     anchor_calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_round",
         lambda state_dir, round_id: {
@@ -2422,7 +2422,7 @@ def test_cmd_resume_round_records_workflow_anchor_when_completed(
     anchor_calls: list[dict[str, object]] = []
     emitted: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_round",
         lambda state_dir, round_id: {
@@ -2488,7 +2488,7 @@ def test_cmd_resume_round_skips_workflow_anchor_for_orchestrated_round(
 ) -> None:
     anchor_calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr(
         "review_suite_arena.load_round",
         lambda state_dir, round_id: {
@@ -2652,7 +2652,7 @@ def test_cmd_sample_emits_public_task_alias(monkeypatch, tmp_path) -> None:
         "review_suite_arena.resolve_caller_id", lambda caller_id: (None, None)
     )
     monkeypatch.setattr("review_suite_arena._resolve_review_cwd", lambda cd: repo_root)
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr("review_suite_arena.read_jsonl", lambda path: [])
     monkeypatch.setattr(
         "review_suite_arena.load_operational_state", lambda path: {"task_classes": {}}
@@ -2712,7 +2712,7 @@ def test_cmd_sample_dry_run_emits_selection_without_writing(
         "review_suite_arena.resolve_caller_id", lambda caller_id: (None, None)
     )
     monkeypatch.setattr("review_suite_arena._resolve_review_cwd", lambda cd: repo_root)
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path, **kwargs: {"variants": []})
     monkeypatch.setattr("review_suite_arena.read_jsonl", lambda path: [])
     monkeypatch.setattr(
         "review_suite_arena.load_operational_state", lambda path: {"task_classes": {}}

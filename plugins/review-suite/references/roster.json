@@ -1,5 +1,15 @@
 {
   "version": 1,
+  "lineages": {
+    "openai-sol": ["gpt-5.6-sol", "gpt-6-sol", "gpt-6.1-sol"],
+    "openai-terra": ["gpt-5.6-terra", "gpt-6.1-terra"],
+    "openai-luna": ["gpt-5.6-luna", "gpt-6-luna"],
+    "openai-astra": ["gpt-6-astra"],
+    "deepseek-flash": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-1017"],
+    "glm-flash": ["glm-5.3-flash"],
+    "anthropic-opus": ["claude-opus-5.5"],
+    "anthropic-sonnet": ["claude-sonnet-5.5"]
+  },
   "settings": {
     "default_bootstrap_target_samples": 8,
     "bootstrap_weight_boost": 2.0,
@@ -19,6 +29,7 @@
   "variants": [
     {
       "id": "gpt-6.1-terra-low",
+      "model_id": "gpt-6.1-terra",
       "model": "gpt-6.1-terra",
       "reasoning_effort": "low",
       "task_classes": ["base_review"],
@@ -28,6 +39,7 @@
     },
     {
       "id": "gpt-6.1-terra-medium",
+      "model_id": "gpt-6.1-terra",
       "model": "gpt-6.1-terra",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -37,6 +49,7 @@
     },
     {
       "id": "gpt-6.1-terra-high",
+      "model_id": "gpt-6.1-terra",
       "model": "gpt-6.1-terra",
       "reasoning_effort": "high",
       "task_classes": ["base_review", "deep_review"],
@@ -46,6 +59,7 @@
     },
     {
       "id": "gpt-6.1-terra-xhigh",
+      "model_id": "gpt-6.1-terra",
       "model": "gpt-6.1-terra",
       "reasoning_effort": "xhigh",
       "task_classes": ["base_review", "deep_review"],
@@ -55,6 +69,7 @@
     },
     {
       "id": "gpt-6.1-terra-max",
+      "model_id": "gpt-6.1-terra",
       "model": "gpt-6.1-terra",
       "reasoning_effort": "max",
       "task_classes": ["deep_review"],
@@ -64,6 +79,7 @@
     },
     {
       "id": "gpt-6.1-sol-low",
+      "model_id": "gpt-6.1-sol",
       "model": "gpt-6.1-sol",
       "reasoning_effort": "low",
       "task_classes": ["base_review"],
@@ -73,6 +89,7 @@
     },
     {
       "id": "gpt-6.1-sol-medium",
+      "model_id": "gpt-6.1-sol",
       "model": "gpt-6.1-sol",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -82,6 +99,7 @@
     },
     {
       "id": "gpt-6.1-sol-high",
+      "model_id": "gpt-6.1-sol",
       "model": "gpt-6.1-sol",
       "reasoning_effort": "high",
       "task_classes": ["deep_review"],
@@ -91,6 +109,7 @@
     },
     {
       "id": "gpt-6.1-sol-xhigh",
+      "model_id": "gpt-6.1-sol",
       "model": "gpt-6.1-sol",
       "reasoning_effort": "xhigh",
       "task_classes": ["deep_review"],
@@ -100,6 +119,7 @@
     },
     {
       "id": "gpt-6.1-sol-max",
+      "model_id": "gpt-6.1-sol",
       "model": "gpt-6.1-sol",
       "reasoning_effort": "max",
       "task_classes": ["deep_review"],
@@ -109,6 +129,7 @@
     },
     {
       "id": "gpt-5.3-codex-low",
+      "model_id": "gpt-5.3-codex",
       "model": "gpt-5.3-codex",
       "reasoning_effort": "low",
       "task_classes": ["base_review"],
@@ -118,6 +139,7 @@
     },
     {
       "id": "gpt-5.3-codex-medium",
+      "model_id": "gpt-5.3-codex",
       "model": "gpt-5.3-codex",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -127,6 +149,7 @@
     },
     {
       "id": "gpt-5.3-codex-high",
+      "model_id": "gpt-5.3-codex",
       "model": "gpt-5.3-codex",
       "reasoning_effort": "high",
       "task_classes": ["deep_review"],
@@ -136,6 +159,7 @@
     },
     {
       "id": "gpt-5.3-codex-xhigh",
+      "model_id": "gpt-5.3-codex",
       "model": "gpt-5.3-codex",
       "reasoning_effort": "xhigh",
       "task_classes": ["deep_review"],
@@ -145,6 +169,7 @@
     },
     {
       "id": "gpt-5.3-codex-spark-low",
+      "model_id": "gpt-5.3-codex-spark",
       "model": "gpt-5.3-codex-spark",
       "reasoning_effort": "low",
       "task_classes": ["base_review"],
@@ -154,6 +179,7 @@
     },
     {
       "id": "gpt-5.3-codex-spark-medium",
+      "model_id": "gpt-5.3-codex-spark",
       "model": "gpt-5.3-codex-spark",
       "reasoning_effort": "medium",
       "task_classes": ["base_review"],
@@ -163,6 +189,7 @@
     },
     {
       "id": "gpt-5.3-codex-spark-high",
+      "model_id": "gpt-5.3-codex-spark",
       "model": "gpt-5.3-codex-spark",
       "reasoning_effort": "high",
       "task_classes": ["base_review"],
@@ -172,6 +199,7 @@
     },
     {
       "id": "gpt-5.3-codex-spark-xhigh",
+      "model_id": "gpt-5.3-codex-spark",
       "model": "gpt-5.3-codex-spark",
       "reasoning_effort": "xhigh",
       "task_classes": ["base_review", "deep_review"],
@@ -181,6 +209,7 @@
     },
     {
       "id": "gpt-5.4-low",
+      "model_id": "gpt-5.4",
       "model": "gpt-5.4",
       "reasoning_effort": "low",
       "task_classes": ["base_review"],
@@ -191,6 +220,7 @@
     },
     {
       "id": "gpt-5.4-mini-medium",
+      "model_id": "gpt-5.4-mini",
       "model": "gpt-5.4-mini",
       "reasoning_effort": "medium",
       "task_classes": ["base_review"],
@@ -200,6 +230,7 @@
     },
     {
       "id": "gpt-5.4-mini-high",
+      "model_id": "gpt-5.4-mini",
       "model": "gpt-5.4-mini",
       "reasoning_effort": "high",
       "task_classes": ["base_review"],
@@ -209,6 +240,7 @@
     },
     {
       "id": "gpt-5.4-mini-xhigh",
+      "model_id": "gpt-5.4-mini",
       "model": "gpt-5.4-mini",
       "reasoning_effort": "xhigh",
       "task_classes": ["deep_review"],
@@ -218,6 +250,7 @@
     },
     {
       "id": "gpt-5.4-medium",
+      "model_id": "gpt-5.4",
       "model": "gpt-5.4",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -228,6 +261,7 @@
     },
     {
       "id": "gpt-5.4-high",
+      "model_id": "gpt-5.4",
       "model": "gpt-5.4",
       "reasoning_effort": "high",
       "task_classes": ["deep_review"],
@@ -238,6 +272,7 @@
     },
     {
       "id": "gpt-5.4-xhigh",
+      "model_id": "gpt-5.4",
       "model": "gpt-5.4",
       "reasoning_effort": "xhigh",
       "task_classes": ["deep_review"],
@@ -248,6 +283,7 @@
     },
     {
       "id": "gpt-5.6-sol-low",
+      "model_id": "gpt-5.6-sol",
       "model": "gpt-5.6-sol",
       "reasoning_effort": "low",
       "task_classes": ["base_review"],
@@ -257,6 +293,7 @@
     },
     {
       "id": "gpt-5.6-sol-medium",
+      "model_id": "gpt-5.6-sol",
       "model": "gpt-5.6-sol",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -266,6 +303,7 @@
     },
     {
       "id": "gpt-5.6-sol-high",
+      "model_id": "gpt-5.6-sol",
       "model": "gpt-5.6-sol",
       "reasoning_effort": "high",
       "task_classes": ["deep_review"],
@@ -275,6 +313,7 @@
     },
     {
       "id": "gpt-5.6-sol-xhigh",
+      "model_id": "gpt-5.6-sol",
       "model": "gpt-5.6-sol",
       "reasoning_effort": "xhigh",
       "task_classes": ["deep_review"],
@@ -284,6 +323,7 @@
     },
     {
       "id": "gpt-5.6-sol-max",
+      "model_id": "gpt-5.6-sol",
       "model": "gpt-5.6-sol",
       "reasoning_effort": "max",
       "task_classes": ["deep_review"],
@@ -293,6 +333,7 @@
     },
     {
       "id": "gpt-6-astra-low",
+      "model_id": "gpt-6-astra",
       "model": "gpt-6-astra",
       "reasoning_effort": "low",
       "task_classes": ["base_review", "deep_review"],
@@ -302,6 +343,7 @@
     },
     {
       "id": "gpt-6-astra-medium",
+      "model_id": "gpt-6-astra",
       "model": "gpt-6-astra",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -311,6 +353,7 @@
     },
     {
       "id": "gpt-6-astra-high",
+      "model_id": "gpt-6-astra",
       "model": "gpt-6-astra",
       "reasoning_effort": "high",
       "task_classes": ["deep_review"],
@@ -320,6 +363,7 @@
     },
     {
       "id": "gpt-6-astra-xhigh",
+      "model_id": "gpt-6-astra",
       "model": "gpt-6-astra",
       "reasoning_effort": "xhigh",
       "task_classes": ["deep_review"],
@@ -329,6 +373,7 @@
     },
     {
       "id": "gpt-6-astra-max",
+      "model_id": "gpt-6-astra",
       "model": "gpt-6-astra",
       "reasoning_effort": "max",
       "task_classes": ["deep_review"],
@@ -338,6 +383,7 @@
     },
     {
       "id": "deepseek-v4.1-flash-low",
+      "model_id": "deepseek-v4.1-flash",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "low",
       "task_classes": ["base_review"],
@@ -346,6 +392,7 @@
     },
     {
       "id": "deepseek-v4.1-flash-high",
+      "model_id": "deepseek-v4.1-flash",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "high",
       "task_classes": ["base_review", "deep_review"],
@@ -354,6 +401,7 @@
     },
     {
       "id": "deepseek-v4.1-flash-max",
+      "model_id": "deepseek-v4.1-flash",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "max",
       "task_classes": ["base_review", "deep_review"],
@@ -362,6 +410,7 @@
     },
     {
       "id": "deepseek-v4.1-flash-1017-low",
+      "model_id": "deepseek-v4.1-flash-1017",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "low",
       "task_classes": ["base_review"],
@@ -370,6 +419,7 @@
     },
     {
       "id": "deepseek-v4.1-flash-1017-high",
+      "model_id": "deepseek-v4.1-flash-1017",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "high",
       "task_classes": ["base_review", "deep_review"],
@@ -378,6 +428,7 @@
     },
     {
       "id": "deepseek-v4.1-flash-1017-max",
+      "model_id": "deepseek-v4.1-flash-1017",
       "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "max",
       "task_classes": ["base_review", "deep_review"],
@@ -386,6 +437,7 @@
     },
     {
       "id": "glm-5.3-flash-low",
+      "model_id": "glm-5.3-flash",
       "model": "opencode::opencode-go/glm-5.3-flash",
       "reasoning_effort": "low",
       "task_classes": ["base_review"],
@@ -394,6 +446,7 @@
     },
     {
       "id": "glm-5.3-flash-high",
+      "model_id": "glm-5.3-flash",
       "model": "opencode::opencode-go/glm-5.3-flash",
       "reasoning_effort": "high",
       "task_classes": ["base_review", "deep_review"],
@@ -402,6 +455,7 @@
     },
     {
       "id": "glm-5.3-flash-max",
+      "model_id": "glm-5.3-flash",
       "model": "opencode::opencode-go/glm-5.3-flash",
       "reasoning_effort": "max",
       "task_classes": ["base_review", "deep_review"],
@@ -410,51 +464,57 @@
     },
     {
       "id": "gpt-5.6-terra-low",
+      "model_id": "gpt-5.6-terra",
       "model": "gpt-5.6-terra",
       "reasoning_effort": "low",
       "task_classes": ["base_review", "deep_review"],
-      "state": "disabled",
+      "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 12.0 }
     },
     {
       "id": "gpt-5.6-terra-medium",
+      "model_id": "gpt-5.6-terra",
       "model": "gpt-5.6-terra",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
-      "state": "active",
+      "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 12.0 }
     },
     {
       "id": "gpt-5.6-terra-high",
+      "model_id": "gpt-5.6-terra",
       "model": "gpt-5.6-terra",
       "reasoning_effort": "high",
       "task_classes": ["base_review", "deep_review"],
-      "state": "active",
+      "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 12.0 }
     },
     {
       "id": "gpt-5.6-terra-xhigh",
+      "model_id": "gpt-5.6-terra",
       "model": "gpt-5.6-terra",
       "reasoning_effort": "xhigh",
       "task_classes": ["base_review", "deep_review"],
-      "state": "active",
+      "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 12.0 }
     },
     {
       "id": "gpt-5.6-terra-max",
+      "model_id": "gpt-5.6-terra",
       "model": "gpt-5.6-terra",
       "reasoning_effort": "max",
       "task_classes": ["deep_review"],
-      "state": "active",
+      "state": "retired",
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 2.0, "cached_input_per_million_usd": 0.2, "cache_write_input_per_million_usd": 2.5, "output_per_million_usd": 12.0 }
     },
     {
       "id": "gpt-5.6-luna-low",
+      "model_id": "gpt-5.6-luna",
       "model": "gpt-5.6-luna",
       "reasoning_effort": "low",
       "task_classes": ["base_review", "deep_review"],
@@ -464,6 +524,7 @@
     },
     {
       "id": "gpt-5.6-luna-medium",
+      "model_id": "gpt-5.6-luna",
       "model": "gpt-5.6-luna",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -473,6 +534,7 @@
     },
     {
       "id": "gpt-5.6-luna-high",
+      "model_id": "gpt-5.6-luna",
       "model": "gpt-5.6-luna",
       "reasoning_effort": "high",
       "task_classes": ["base_review", "deep_review"],
@@ -482,6 +544,7 @@
     },
     {
       "id": "gpt-5.6-luna-xhigh",
+      "model_id": "gpt-5.6-luna",
       "model": "gpt-5.6-luna",
       "reasoning_effort": "xhigh",
       "task_classes": ["base_review", "deep_review"],
@@ -491,6 +554,7 @@
     },
     {
       "id": "gpt-5.6-luna-max",
+      "model_id": "gpt-5.6-luna",
       "model": "gpt-5.6-luna",
       "reasoning_effort": "max",
       "task_classes": ["base_review", "deep_review"],
@@ -500,46 +564,51 @@
     },
     {
       "id": "gpt-5.5-low",
+      "model_id": "gpt-5.5",
       "model": "gpt-5.5",
       "reasoning_effort": "low",
       "task_classes": ["base_review", "deep_review"],
-      "state": "active",
+      "state": "retired",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "output_per_million_usd": 30.0 }
     },
     {
       "id": "gpt-5.5-medium",
+      "model_id": "gpt-5.5",
       "model": "gpt-5.5",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
-      "state": "active",
+      "state": "retired",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "output_per_million_usd": 30.0 }
     },
     {
       "id": "gpt-5.5-high",
+      "model_id": "gpt-5.5",
       "model": "gpt-5.5",
       "reasoning_effort": "high",
       "task_classes": ["deep_review"],
-      "state": "active",
+      "state": "retired",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "output_per_million_usd": 30.0 }
     },
     {
       "id": "gpt-5.5-xhigh",
+      "model_id": "gpt-5.5",
       "model": "gpt-5.5",
       "reasoning_effort": "xhigh",
       "task_classes": ["deep_review"],
-      "state": "active",
+      "state": "retired",
       "supported_service_tiers": ["fast"],
       "bootstrap_target_samples": 10,
       "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "output_per_million_usd": 30.0 }
     },
     {
       "id": "gpt-6-sol-low",
+      "model_id": "gpt-6-sol",
       "model": "gpt-6-sol",
       "reasoning_effort": "low",
       "task_classes": ["base_review"],
@@ -549,6 +618,7 @@
     },
     {
       "id": "gpt-6-sol-medium",
+      "model_id": "gpt-6-sol",
       "model": "gpt-6-sol",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -558,6 +628,7 @@
     },
     {
       "id": "gpt-6-sol-high",
+      "model_id": "gpt-6-sol",
       "model": "gpt-6-sol",
       "reasoning_effort": "high",
       "task_classes": ["deep_review"],
@@ -567,6 +638,7 @@
     },
     {
       "id": "gpt-6-sol-xhigh",
+      "model_id": "gpt-6-sol",
       "model": "gpt-6-sol",
       "reasoning_effort": "xhigh",
       "task_classes": ["deep_review"],
@@ -576,6 +648,7 @@
     },
     {
       "id": "gpt-6-sol-max",
+      "model_id": "gpt-6-sol",
       "model": "gpt-6-sol",
       "reasoning_effort": "max",
       "task_classes": ["deep_review"],
@@ -585,6 +658,7 @@
     },
     {
       "id": "gpt-6-luna-low",
+      "model_id": "gpt-6-luna",
       "model": "gpt-6-luna",
       "reasoning_effort": "low",
       "task_classes": ["base_review"],
@@ -594,6 +668,7 @@
     },
     {
       "id": "gpt-6-luna-medium",
+      "model_id": "gpt-6-luna",
       "model": "gpt-6-luna",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -603,6 +678,7 @@
     },
     {
       "id": "gpt-6-luna-high",
+      "model_id": "gpt-6-luna",
       "model": "gpt-6-luna",
       "reasoning_effort": "high",
       "task_classes": ["base_review", "deep_review"],
@@ -612,6 +688,7 @@
     },
     {
       "id": "gpt-6-luna-xhigh",
+      "model_id": "gpt-6-luna",
       "model": "gpt-6-luna",
       "reasoning_effort": "xhigh",
       "task_classes": ["base_review", "deep_review"],
@@ -621,6 +698,7 @@
     },
     {
       "id": "gpt-6-luna-max",
+      "model_id": "gpt-6-luna",
       "model": "gpt-6-luna",
       "reasoning_effort": "max",
       "task_classes": ["base_review", "deep_review"],
@@ -630,6 +708,7 @@
     },
     {
       "id": "gpt-6-astra-minor-low",
+      "model_id": "gpt-6-astra-minor",
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "low",
       "task_classes": ["base_review", "deep_review"],
@@ -638,6 +717,7 @@
     },
     {
       "id": "gpt-6-astra-minor-medium",
+      "model_id": "gpt-6-astra-minor",
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -646,6 +726,7 @@
     },
     {
       "id": "gpt-6-astra-minor-high",
+      "model_id": "gpt-6-astra-minor",
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "high",
       "task_classes": ["deep_review"],
@@ -654,6 +735,7 @@
     },
     {
       "id": "gpt-6-astra-minor-xhigh",
+      "model_id": "gpt-6-astra-minor",
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "xhigh",
       "task_classes": ["deep_review"],
@@ -662,6 +744,7 @@
     },
     {
       "id": "gpt-6-astra-minor-max",
+      "model_id": "gpt-6-astra-minor",
       "model": "gpt-6-astra-minor",
       "reasoning_effort": "max",
       "task_classes": ["deep_review"],
@@ -670,6 +753,7 @@
     },
     {
       "id": "claude-opus-5.5-low",
+      "model_id": "claude-opus-5.5",
       "model": "claude::claude-opus-5-5",
       "reasoning_effort": "low",
       "task_classes": ["base_review", "deep_review"],
@@ -679,6 +763,7 @@
     },
     {
       "id": "claude-opus-5.5-medium",
+      "model_id": "claude-opus-5.5",
       "model": "claude::claude-opus-5-5",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -688,6 +773,7 @@
     },
     {
       "id": "claude-opus-5.5-high",
+      "model_id": "claude-opus-5.5",
       "model": "claude::claude-opus-5-5",
       "reasoning_effort": "high",
       "task_classes": ["deep_review"],
@@ -697,6 +783,7 @@
     },
     {
       "id": "claude-opus-5.5-xhigh",
+      "model_id": "claude-opus-5.5",
       "model": "claude::claude-opus-5-5",
       "reasoning_effort": "xhigh",
       "task_classes": ["deep_review"],
@@ -706,6 +793,7 @@
     },
     {
       "id": "claude-opus-5.5-max",
+      "model_id": "claude-opus-5.5",
       "model": "claude::claude-opus-5-5",
       "reasoning_effort": "max",
       "task_classes": ["deep_review"],
@@ -715,6 +803,7 @@
     },
     {
       "id": "claude-sonnet-5.5-low",
+      "model_id": "claude-sonnet-5.5",
       "model": "claude::claude-sonnet-5-5",
       "reasoning_effort": "low",
       "task_classes": ["base_review", "deep_review"],
@@ -724,6 +813,7 @@
     },
     {
       "id": "claude-sonnet-5.5-medium",
+      "model_id": "claude-sonnet-5.5",
       "model": "claude::claude-sonnet-5-5",
       "reasoning_effort": "medium",
       "task_classes": ["base_review", "deep_review"],
@@ -733,6 +823,7 @@
     },
     {
       "id": "claude-sonnet-5.5-high",
+      "model_id": "claude-sonnet-5.5",
       "model": "claude::claude-sonnet-5-5",
       "reasoning_effort": "high",
       "task_classes": ["deep_review"],
@@ -742,6 +833,7 @@
     },
     {
       "id": "claude-sonnet-5.5-xhigh",
+      "model_id": "claude-sonnet-5.5",
       "model": "claude::claude-sonnet-5-5",
       "reasoning_effort": "xhigh",
       "task_classes": ["deep_review"],
@@ -751,6 +843,7 @@
     },
     {
       "id": "claude-sonnet-5.5-max",
+      "model_id": "claude-sonnet-5.5",
       "model": "claude::claude-sonnet-5-5",
       "reasoning_effort": "max",
       "task_classes": ["deep_review"],

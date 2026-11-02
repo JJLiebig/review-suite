@@ -976,7 +976,7 @@ def test_orchestrator_arena_helper_uses_deep_prompt_for_deep_review(
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
-        review_suite_arena, "load_roster", lambda path: {"settings": {}, "variants": []}
+        review_suite_arena, "load_roster", lambda path, **kwargs: {"settings": {}, "variants": []}
     )
     monkeypatch.setattr(review_suite_arena, "load_operational_state", lambda path: {})
     monkeypatch.setattr(review_suite_arena, "select_pair", fake_select_pair)
