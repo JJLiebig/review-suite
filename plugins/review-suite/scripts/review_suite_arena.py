@@ -222,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--low-quality",
         action="append",
-        help="reviewer slot or variant that gave garbage; repeat for each",
+        help="reviewer=reason; repeat for each reason (false_positive, hallucination, fringe, scope_bloat, other)",
     )
     run.add_argument("--note")
 
@@ -298,7 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
     grade.add_argument(
         "--low-quality",
         action="append",
-        help="reviewer slot or variant that gave garbage; repeat for each",
+        help="reviewer=reason; repeat for each reason (false_positive, hallucination, fringe, scope_bloat, other)",
     )
     grade.add_argument("--note")
     grade.add_argument("--roster", default=str(default_roster_path()))

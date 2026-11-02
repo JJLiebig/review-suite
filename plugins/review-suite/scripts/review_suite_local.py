@@ -84,6 +84,13 @@ GRADE_BASIS_VALUES = (
     "tie_clean",
     "tie_both_useful",
 )
+LOW_QUALITY_REASONS = (
+    "false_positive",
+    "hallucination",
+    "fringe",
+    "scope_bloat",
+    "other",
+)
 TERMINAL_REVIEW_COMMANDS = {"clean", "findings"}
 TERMINAL_REVIEW_RESULT_PREFIX = "Review result:"
 MISSED_BUG_LOSS_BASES = {
@@ -4314,6 +4321,7 @@ def record_identity_key(record: dict[str, Any]) -> str:
                 "reviewer_output_ref": run.get("reviewer_output_ref"),
                 "grader_notes": run.get("grader_notes"),
                 "low_quality": run.get("low_quality"),
+                "low_quality_reasons": run.get("low_quality_reasons"),
                 "elapsed_seconds": run.get("elapsed_seconds"),
             }
         )
@@ -4350,6 +4358,8 @@ def compact_benchmark_run(run: dict[str, Any]) -> dict[str, Any]:
         compacted["actual_models"] = list(run["actual_models"])
     if isinstance(run.get("low_quality"), bool):
         compacted["low_quality"] = run["low_quality"]
+    if run.get("low_quality_reasons"):
+        compacted["low_quality_reasons"] = list(run["low_quality_reasons"])
     reviewer_output = run.get("reviewer_output")
     if reviewer_output:
         compacted["reviewer_output"] = reviewer_output
@@ -4507,16 +4517,21 @@ def build_record_from_grade(
         for run in runs
         for alias in (run["slot"], run["variant_id"])
     }
-    low_quality_ids = set()
-    for reviewer in low_quality or []:
+    low_quality_reasons: dict[str, set[str]] = {}
+    for entry in low_quality or []:
+        reviewer, _, reason = entry.partition("=")
         if reviewer not in aliases:
             raise ValueError(f"unknown low-quality reviewer: {reviewer}")
-        low_quality_ids.add(aliases[reviewer])
+        if reason not in LOW_QUALITY_REASONS:
+            raise ValueError(
+                f"low-quality reason must be one of: {', '.join(LOW_QUALITY_REASONS)}"
+            )
+        low_quality_reasons.setdefault(aliases[reviewer], set()).add(reason)
     # A useful finding cannot cancel out a garbage review.
     ordered_groups = []
     for flagged in (False, True):
         for group in groups:
-            subgroup = [v for v in group if (v in low_quality_ids) == flagged]
+            subgroup = [v for v in group if (v in low_quality_reasons) == flagged]
             if subgroup:
                 ordered_groups.append(subgroup)
     groups = ordered_groups
@@ -4534,7 +4549,9 @@ def build_record_from_grade(
         if variant_id not in indexed:
             raise ValueError(f"unknown roster variant: {variant_id}")
         run["grader_notes"] = shared_note or str(run["slot"])
-        run["low_quality"] = variant_id in low_quality_ids
+        run["low_quality"] = variant_id in low_quality_reasons
+        if run["low_quality"]:
+            run["low_quality_reasons"] = sorted(low_quality_reasons[variant_id])
         if run.get("cost_usd") is None:
             run["cost_usd"] = compute_cost_usd(
                 indexed[variant_id], run.get("usage", {})

@@ -104,9 +104,13 @@ def test_grade_records_garbage_flags_and_penalizes_placements(tmp_path: Path) ->
             "--basis",
             "tie_both_useful",
             "--low-quality",
-            "alpha",
+            "alpha=fringe",
             "--low-quality",
-            "model-c",
+            "alpha=scope_bloat",
+            "--low-quality",
+            "alpha=fringe",
+            "--low-quality",
+            "model-c=false_positive",
             "--roster",
             str(roster_path),
             "--rubric",
@@ -121,6 +125,11 @@ def test_grade_records_garbage_flags_and_penalizes_placements(tmp_path: Path) ->
     record = json.loads((state_dir / "runs.jsonl").read_text(encoding="utf-8"))
     assert record["placement_v1"]["groups"] == [["model-b"], ["model-a", "model-c"]]
     assert [run["low_quality"] for run in record["runs"]] == [True, False, True]
+    assert [run.get("low_quality_reasons") for run in record["runs"]] == [
+        ["fringe", "scope_bloat"],
+        None,
+        ["false_positive"],
+    ]
     summary = json.loads((state_dir / "summary.json").read_text(encoding="utf-8"))
     rows = {
         row["variant_id"]: row
