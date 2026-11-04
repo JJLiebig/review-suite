@@ -308,3 +308,37 @@ def test_explicit_cli_state_does_not_migrate_default(home):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert legacy.is_dir() and not target.exists()
+
+
+@pytest.mark.parametrize("edited_copy", [False, True])
+def test_interrupted_cross_volume_copy_retries_original_or_preserves_edited_copy(
+    home, monkeypatch, edited_copy
+):
+    legacy, target = seed(home)
+    rename = Path.rename
+
+    def interrupted(path, destination):
+        if path == legacy and destination == target:
+            raise OSError(errno.EXDEV, "different volumes")
+        if path == legacy and destination == legacy.with_name(".review-suite-moved"):
+            raise SystemExit("power loss after copy promotion")
+        return rename(path, destination)
+
+    monkeypatch.setattr(Path, "rename", interrupted)
+    with pytest.raises(SystemExit):
+        state_paths.default_state_dir()
+    (legacy / "later.json").write_text("old install wrote after interruption")
+    if edited_copy:
+        (target / "new.json").write_text("new copy edited independently")
+    monkeypatch.setattr(Path, "rename", rename)
+    assert state_paths.default_state_dir() == target
+    assert (legacy / "later.json").read_text() == "old install wrote after interruption"
+    if edited_copy:
+        assert (target / "new.json").read_text() == "new copy edited independently"
+        assert not legacy.samefile(target)
+    else:
+        assert legacy.samefile(target)
+        assert (
+            target / "later.json"
+        ).read_text() == "old install wrote after interruption"
+    assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'

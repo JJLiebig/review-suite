@@ -13,7 +13,12 @@ import shutil
 import subprocess
 import sys
 
-from .orchestrator_store import _try_lock_file, _unlock_file, orchestrator_store_lock
+from .orchestrator_store import (
+    _atomic_write_json,
+    _try_lock_file,
+    _unlock_file,
+    orchestrator_store_lock,
+)
 
 _leases: dict[str, object] = {}
 
@@ -207,11 +212,21 @@ def _tree(root: Path) -> dict[str, tuple]:
     return result
 
 
+def _identity(path: Path) -> list[int]:
+    info = path.stat()
+    return [info.st_dev, info.st_ino]
+
+
+def _fingerprint(tree: dict) -> str:
+    return hashlib.sha256(json.dumps(tree, sort_keys=True).encode()).hexdigest()
+
+
 def _move(legacy: Path, target: Path, control: Path) -> None:
     journal = control / "pending.json"
     staging = target.with_name(".review-suite-copy")
     retired = legacy.with_name(".review-suite-moved")
-    journal.write_text(json.dumps({"legacy": str(legacy)}), encoding="utf-8")
+    pending = {"legacy": str(legacy), "original_id": _identity(legacy)}
+    _atomic_write_json(journal, pending)
     try:
         legacy.rename(target)
     except OSError as error:
@@ -220,8 +235,13 @@ def _move(legacy: Path, target: Path, control: Path) -> None:
             raise
         shutil.rmtree(staging, ignore_errors=True)
         shutil.copytree(legacy, staging, symlinks=True)
-        if _tree(legacy) != _tree(staging):
+        copied = _tree(staging)
+        if _in_use(legacy, control) or _tree(legacy) != copied:
             raise OSError("Review Suite state copy verification failed")
+        # Identify our copy before publishing it. Recovery may discard only
+        # this unchanged copy, never an independently created destination.
+        pending.update(copy_id=_identity(staging), copy_digest=_fingerprint(copied))
+        _atomic_write_json(journal, pending)
         staging.rename(target)
         legacy.rename(retired)
     try:
@@ -244,14 +264,26 @@ def _recover(target: Path, control: Path) -> None:
     journal = control / "pending.json"
     if not journal.exists():
         return
-    legacy = Path(json.loads(journal.read_text(encoding="utf-8"))["legacy"])
+    pending = json.loads(journal.read_text(encoding="utf-8"))
+    legacy = Path(pending["legacy"])
     retired = legacy.with_name(".review-suite-moved")
     if target.exists():
         if legacy.exists() and not (legacy.is_symlink() or legacy.is_junction()):
-            # An old install may have recreated this path after the rename.
-            # Neither tree is disposable: apply the normal both-exist policy.
-            journal.unlink()
-            return
+            if (
+                _identity(legacy) == pending.get("original_id")
+                and _identity(target) == pending.get("copy_id")
+                and _fingerprint(_tree(target)) == pending.get("copy_digest")
+            ):
+                if _in_use(legacy, control):
+                    raise OSError("Review Suite state is still in use")
+                # Interrupted between copy promotion and source retirement.
+                # Retry from the original, including any intervening writes.
+                shutil.rmtree(target)
+            else:
+                # An old install may have recreated the source, or somebody
+                # changed the copy. Neither tree is disposable.
+                journal.unlink()
+                return
         elif not legacy.exists():
             _link(legacy, target)
     if retired.exists():
