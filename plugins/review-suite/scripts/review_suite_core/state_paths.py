@@ -274,6 +274,10 @@ def _recover(target: Path, control: Path) -> None:
     pending = json.loads(journal.read_text(encoding="utf-8"))
     legacy = Path(pending["legacy"])
     retired = legacy.with_name(".review-suite-moved")
+    # Before the forwarding link exists, the original is authoritative. Restore
+    # it even if the interrupted run never reached its post-retirement check.
+    if retired.exists() and not legacy.exists():
+        retired.rename(legacy)
     if target.exists():
         if legacy.exists() and not (legacy.is_symlink() or legacy.is_junction()):
             if (
@@ -294,6 +298,8 @@ def _recover(target: Path, control: Path) -> None:
         elif not legacy.exists():
             _link(legacy, target)
     if retired.exists():
+        if _fingerprint(_tree(retired)) != pending.get("copy_digest"):
+            raise OSError(f"Changed original state preserved at {retired}")
         shutil.rmtree(retired)
     shutil.rmtree(target.with_name(".review-suite-copy"), ignore_errors=True)
     journal.unlink()

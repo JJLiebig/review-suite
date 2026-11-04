@@ -164,6 +164,7 @@ def test_concurrent_first_runs_share_one_complete_state(home):
 
 @pytest.mark.parametrize("failure", [None, "corrupt", "link"])
 def test_cross_volume_copy_verifies_before_removing_source(home, monkeypatch, failure):
+    monkeypatch.setattr(state_paths, "_processes", lambda: [])
     legacy, target = seed(home)
     rename = Path.rename
     copytree = shutil.copytree
@@ -314,6 +315,7 @@ def test_explicit_cli_state_does_not_migrate_default(home):
 def test_interrupted_cross_volume_copy_retries_original_or_preserves_edited_copy(
     home, monkeypatch, edited_copy
 ):
+    monkeypatch.setattr(state_paths, "_processes", lambda: [])
     legacy, target = seed(home)
     rename = Path.rename
 
@@ -348,6 +350,7 @@ def test_interrupted_cross_volume_copy_retries_original_or_preserves_edited_copy
 def test_cross_volume_cutover_failure_keeps_original_authoritative(
     home, monkeypatch, failure
 ):
+    monkeypatch.setattr(state_paths, "_processes", lambda: [])
     legacy, target = seed(home)
     rename = Path.rename
 
@@ -366,3 +369,39 @@ def test_cross_volume_cutover_failure_keeps_original_authoritative(
     assert (legacy / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
     if failure == "late_write":
         assert (legacy / "late.json").read_text() == "writer raced copy verification"
+
+
+@pytest.mark.parametrize("interruption", [SystemExit, OSError])
+def test_interrupted_retirement_restores_original_before_recovery(
+    home, monkeypatch, interruption
+):
+    legacy, target = seed(home)
+    rename = Path.rename
+    monkeypatch.setattr(state_paths, "_processes", lambda: [])
+    original_in_use = state_paths._in_use
+
+    def cross_volume(path, destination):
+        if path == legacy and destination == target:
+            raise OSError(errno.EXDEV, "different volumes")
+        return rename(path, destination)
+
+    def interrupted_check(path, control):
+        retired = legacy.with_name(".review-suite-moved")
+        if retired.exists():
+            (retired / "late.json").write_text("write not in promoted copy")
+            raise interruption("interrupted before verification")
+        return original_in_use(path, control)
+
+    monkeypatch.setattr(Path, "rename", cross_volume)
+    monkeypatch.setattr(state_paths, "_in_use", interrupted_check)
+    if interruption is SystemExit:
+        with pytest.raises(SystemExit):
+            state_paths.default_state_dir()
+    else:
+        assert state_paths.default_state_dir() == legacy
+        assert (legacy / "late.json").read_text() == "write not in promoted copy"
+        return
+    monkeypatch.setattr(state_paths, "_in_use", original_in_use)
+    assert state_paths.default_state_dir() == target
+    assert legacy.samefile(target)
+    assert (target / "late.json").read_text() == "write not in promoted copy"
