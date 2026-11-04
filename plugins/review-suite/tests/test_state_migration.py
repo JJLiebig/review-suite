@@ -38,13 +38,16 @@ def seed(home):
     return legacy, home / ".agents/state/review-suite"
 
 
-def resolve_process():
+def resolve_process(writer_pid=None):
     return subprocess.Popen(
         [
             sys.executable,
             "-c",
             f"import sys; sys.path.insert(0, {str(SCRIPTS)!r}); "
-            "from review_suite_core.state_paths import default_state_dir; print(default_state_dir())",
+            "from review_suite_core import state_paths as state; "
+            "snapshot = state._processes; "
+            f"state._processes = lambda: [row for row in snapshot() if row[0] == {writer_pid!r}] if {writer_pid!r} is not None else []; "
+            "print(state.default_state_dir())",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -139,13 +142,13 @@ def test_active_old_settings_writer_defers_migration(home):
         text=True,
     ) as writer:
         assert writer.stdout.readline().strip() == "ready"
-        child = resolve_process()
+        child = resolve_process(writer.pid)
         stdout, stderr = child.communicate(timeout=30)
         assert child.returncode == 0, stderr
         assert Path(stdout.strip()) == legacy
         assert not target.exists()
         writer.communicate("", timeout=10)
-    child = resolve_process()
+    child = resolve_process(writer.pid)
     stdout, stderr = child.communicate(timeout=30)
     assert child.returncode == 0, stderr
     assert Path(stdout.strip()) == target
@@ -542,4 +545,43 @@ def test_cutover_checks_locks_in_the_retired_tree(home, monkeypatch):
         monkeypatch.setattr(Path, "rename", cross_volume)
         assert state_paths.default_state_dir() == legacy
         assert not target.exists()
+    assert (legacy / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+
+
+def test_rollback_preserves_independently_changed_promoted_copy(
+    home, monkeypatch, capsys
+):
+    legacy, target = seed(home)
+    rename = Path.rename
+    monkeypatch.setattr(state_paths, "_processes", lambda: [])
+
+    def cross_volume(path, destination):
+        if path == legacy and destination == target:
+            raise OSError(errno.EXDEV, "different volumes")
+        if path == legacy and destination == legacy.with_name(".review-suite-moved"):
+            (target / "new-run.json").write_text("explicit writer used new state")
+            (legacy / "late.json").write_text("old writer changed original")
+        return rename(path, destination)
+
+    monkeypatch.setattr(Path, "rename", cross_volume)
+    assert state_paths.default_state_dir() == target
+    assert (target / "new-run.json").read_text() == "explicit writer used new state"
+    assert (legacy / "late.json").read_text() == "old writer changed original"
+    assert str(legacy) in capsys.readouterr().err
+
+
+def test_linked_codex_home_reports_independent_home_default_immediately(
+    home, monkeypatch, capsys
+):
+    legacy, target = seed(home)
+    codex = home / "custom-codex"
+    linked = codex / "state/review-suite"
+    linked.parent.mkdir(parents=True)
+    store = home / "external"
+    store.mkdir()
+    state_paths._link(linked, store)
+    monkeypatch.setenv("CODEX_HOME", str(codex))
+    assert state_paths.default_state_dir() == target
+    assert target.samefile(store)
+    assert str(legacy) in capsys.readouterr().err
     assert (legacy / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'

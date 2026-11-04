@@ -273,6 +273,17 @@ def _fingerprint(tree: dict) -> str:
     return hashlib.sha256(json.dumps(tree, sort_keys=True).encode()).hexdigest()
 
 
+def _discard_copy(target: Path, pending: dict, control: Path) -> bool:
+    if (
+        _identity(target) != pending.get("copy_id")
+        or _in_use(target, control)
+        or _fingerprint(_tree(target)) != pending.get("copy_digest")
+    ):
+        return False
+    shutil.rmtree(target)
+    return True
+
+
 def _move(legacy: Path, target: Path, control: Path) -> None:
     journal = control / "pending.json"
     staging = target.with_name(".review-suite-copy")
@@ -308,7 +319,8 @@ def _move(legacy: Path, target: Path, control: Path) -> None:
         # now, so a writer that raced the earlier scan cannot lose its writes.
         if _in_use(retired, control, process_path=legacy) or _tree(retired) != copied:
             retired.rename(legacy)
-            shutil.rmtree(target)
+            if not _discard_copy(target, pending, control):
+                _report_leftover(legacy, target, control)
             journal.unlink()
             raise OSError("Review Suite state changed during migration")
     try:
@@ -317,7 +329,8 @@ def _move(legacy: Path, target: Path, control: Path) -> None:
         # Do not leave older installs able to create a separate empty state.
         if retired.exists():
             retired.rename(legacy)
-            shutil.rmtree(target)
+            if not _discard_copy(target, pending, control):
+                _report_leftover(legacy, target, control)
         else:
             target.rename(legacy)
         journal.unlink()
@@ -352,7 +365,8 @@ def _recover(target: Path, control: Path) -> None:
                     raise OSError("Review Suite state is still in use")
                 # Interrupted between copy promotion and source retirement.
                 # Retry from the original, including any intervening writes.
-                shutil.rmtree(target)
+                if not _discard_copy(target, pending, control):
+                    _report_leftover(legacy, target, control)
             else:
                 # An old install may have recreated the source, or somebody
                 # changed the copy. Neither tree is disposable.
@@ -413,7 +427,7 @@ def default_state_dir() -> Path:
                 continue
             if legacy.is_symlink() or legacy.is_junction():
                 _link(target, legacy.resolve())
-                return target
+                continue
             try:
                 if _in_use(legacy, control):
                     _lease(control, legacy)
