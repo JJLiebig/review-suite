@@ -110,7 +110,7 @@ def orchestrator_store_lock(
     *,
     state_dir: Path,
     name: str,
-    timeout_seconds: int = 30,
+    timeout_seconds: float = 30,
     poll_seconds: float = 0.1,
 ):
     locks_dir = state_dir / ".locks"

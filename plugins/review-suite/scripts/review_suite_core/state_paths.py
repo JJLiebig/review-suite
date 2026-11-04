@@ -188,7 +188,7 @@ def _in_use(legacy: Path, control: Path, *, process_path: Path | None = None) ->
         script = next((token for token in tokens if token.endswith(".py")), "")
         normalized = script.replace("\\", "/").casefold()
         install_home = re.split(r"/\.(?:codex|agents)/", normalized)[0]
-        if install_home != normalized and install_home not in {
+        if sys.platform != "linux" and "--state-dir" not in tokens and install_home != normalized and install_home not in {
             str(Path.home()).replace("\\", "/").casefold(),
             str(source.parents[1].parent).replace("\\", "/").casefold(),
         }:
@@ -212,10 +212,22 @@ def _in_use(legacy: Path, control: Path, *, process_path: Path | None = None) ->
                         if env.get(b"CODEX_HOME")
                         else process_home / ".codex"
                     )
-                    if source not in {
-                        process_codex / "state/review-suite",
-                        process_home / ".codex/state/review-suite",
-                    }:
+                    override = os.fsdecode(env.get(b"REVIEW_SUITE_STATE_DIR", b"")).strip()
+                    if override:
+                        process_state = (
+                            process_home / override[2:]
+                            if override.startswith("~/")
+                            else process_home if override == "~" else Path(override)
+                        )
+                        if not process_state.is_absolute():
+                            process_state = Path(f"/proc/{pid}/cwd").resolve() / process_state
+                        possible_states = {process_state}
+                    else:
+                        possible_states = {
+                            process_codex / "state/review-suite",
+                            process_home / ".codex/state/review-suite",
+                        }
+                    if source not in possible_states:
                         continue
                 except OSError:
                     pass  # Unreadable process state is conservatively in use.
@@ -371,7 +383,13 @@ def _recover(target: Path, control: Path) -> None:
                 journal.unlink()
                 return
         elif not legacy.exists():
-            _link(legacy, target)
+            try:
+                _link(legacy, target)
+            except OSError:
+                if _identity(target) == pending.get("original_id"):
+                    target.rename(legacy)
+                    journal.unlink()
+                raise
     shutil.rmtree(target.with_name(".review-suite-copy"), ignore_errors=True)
     _cleanup_retired(retired, journal, pending)
 
@@ -403,7 +421,9 @@ def default_state_dir() -> Path:
         path.exists() and not _same_state(path, target) for path in sources
     ):
         return target
-    with orchestrator_store_lock(state_dir=control, name="migration"):
+    with orchestrator_store_lock(
+        state_dir=control, name="migration", timeout_seconds=float("inf")
+    ):
         try:
             _recover(target, control)
         except OSError, ValueError, subprocess.SubprocessError:

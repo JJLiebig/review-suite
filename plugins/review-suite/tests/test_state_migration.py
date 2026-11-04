@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -209,12 +210,22 @@ def test_explicit_override_keeps_independent_state(home, monkeypatch):
     assert legacy.is_dir() and not target.exists()
 
 
-def test_interrupted_rename_recovers_old_link(home):
+@pytest.mark.parametrize("deny_link", [False, True])
+def test_interrupted_rename_recovers_old_link(home, monkeypatch, deny_link):
     legacy, target = seed(home)
     control = target.parent / ".review-suite-migration"
     control.mkdir(parents=True)
-    (control / "pending.json").write_text(json.dumps({"legacy": str(legacy)}))
+    (control / "pending.json").write_text(json.dumps({
+        "legacy": str(legacy), "original_id": state_paths._identity(legacy),
+    }))
     legacy.rename(target)
+    if deny_link:
+        monkeypatch.setattr(state_paths, "_link", lambda *_: (_ for _ in ()).throw(PermissionError("junction denied")))
+        assert state_paths.default_state_dir() == legacy
+        assert not target.exists()
+        assert (legacy / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+        assert not (control / "pending.json").exists()
+        return
     assert state_paths.default_state_dir() == target
     assert legacy.samefile(target)
     assert not (control / "pending.json").exists()
@@ -434,6 +445,43 @@ def test_independent_linked_legacy_state_is_reported_once(home, capsys):
     assert str(legacy) in capsys.readouterr().err
     assert state_paths.default_state_dir() == target
     assert capsys.readouterr().err == ""
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process environment inspection")
+@pytest.mark.parametrize("override", ["absolute", "relative", "tilde"])
+def test_environment_selected_writer_keeps_promoted_copy_alive(home, monkeypatch, override):
+    legacy, target = seed(home)
+    rename = Path.rename
+    monkeypatch.setattr(state_paths, "_processes", lambda: [])
+
+    def interrupted(path, destination):
+        if path == legacy and destination == target:
+            raise OSError(errno.EXDEV, "different volumes")
+        if path == legacy and destination == legacy.with_name(".review-suite-moved"):
+            raise SystemExit("power loss after copy promotion")
+        return rename(path, destination)
+
+    monkeypatch.setattr(Path, "rename", interrupted)
+    with pytest.raises(SystemExit):
+        state_paths.default_state_dir()
+    monkeypatch.setattr(Path, "rename", rename)
+    script = home / "review.py"
+    script.write_text("import time; print('ready', flush=True); time.sleep(30)")
+    selected = {"absolute": str(target), "relative": ".agents/state/review-suite", "tilde": "~/.agents/state/review-suite"}[override]
+    writer = subprocess.Popen(
+        [sys.executable, str(script)], cwd=home,
+        env={**os.environ, "REVIEW_SUITE_STATE_DIR": selected},
+        stdout=subprocess.PIPE, text=True,
+    )
+    monkeypatch.setattr(state_paths, "_processes", lambda: [(writer.pid, 0, f'{sys.executable} {script}')])
+    try:
+        assert writer.stdout.readline().strip() == "ready"
+        assert state_paths.default_state_dir() == legacy
+        assert not legacy.samefile(target)
+        assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+    finally:
+        writer.terminate()
+        writer.wait(timeout=10)
     assert (external / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
 
 
@@ -558,8 +606,14 @@ def test_cutover_checks_locks_in_the_retired_tree(home, monkeypatch):
 
         monkeypatch.setattr(Path, "rename", cross_volume)
         assert state_paths.default_state_dir() == legacy
-        assert not target.exists()
+        assert not legacy.samefile(target)
     assert (legacy / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+    for handle in state_paths._leases.values():
+        handle.close()
+    state_paths._leases.clear()
+    monkeypatch.setattr(Path, "rename", rename)
+    assert state_paths.default_state_dir() == target
+    assert legacy.samefile(target)
 
 
 def test_rollback_preserves_independently_changed_promoted_copy(
