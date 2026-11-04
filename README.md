@@ -104,6 +104,8 @@ working. Same-volume moves use rename; cross-volume moves verify every copied
 file before retiring the source. Backups inside the directory move with it.
 If both locations already contain state, the new location wins; the old one is
 left intact and reported once. No directories are merged.
+If migration rolls back, the original remains in use until the move can safely
+finish; any independently changed migration copy is preserved and reported.
 
 Explicit scratch homes such as `review-suite-fresh-wp-*` and the empty
 `review-suite-safe-runtime` directory are not default state roots and are left

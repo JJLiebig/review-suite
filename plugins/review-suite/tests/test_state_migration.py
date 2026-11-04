@@ -336,7 +336,7 @@ def test_interrupted_cross_volume_copy_retries_original_or_preserves_edited_copy
     if edited_copy:
         (target / "new.json").write_text("new copy edited independently")
     monkeypatch.setattr(Path, "rename", rename)
-    assert state_paths.default_state_dir() == target
+    assert state_paths.default_state_dir() == (legacy if edited_copy else target)
     assert (legacy / "later.json").read_text() == "old install wrote after interruption"
     if edited_copy:
         assert (target / "new.json").read_text() == "new copy edited independently"
@@ -349,11 +349,12 @@ def test_interrupted_cross_volume_copy_retries_original_or_preserves_edited_copy
     assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
 
 
-@pytest.mark.parametrize("failure", ["late_write", "retirement_locked"])
+@pytest.mark.parametrize("failure", ["late_write", "late_writer", "retirement_locked"])
 def test_cross_volume_cutover_failure_keeps_original_authoritative(
     home, monkeypatch, failure
 ):
-    monkeypatch.setattr(state_paths, "_processes", lambda: [])
+    writers = []
+    monkeypatch.setattr(state_paths, "_processes", lambda: writers)
     legacy, target = seed(home)
     rename = Path.rename
 
@@ -364,14 +365,27 @@ def test_cross_volume_cutover_failure_keeps_original_authoritative(
             if failure == "retirement_locked":
                 raise PermissionError("open Windows handle prevents retirement")
             (legacy / "late.json").write_text("writer raced copy verification")
+            if failure == "late_writer":
+                writers.append((999999999, 0, "python C:/repo/scripts/review.py --mode fast"))
         return rename(path, destination)
 
     monkeypatch.setattr(Path, "rename", race)
     assert state_paths.default_state_dir() == legacy
-    assert not target.exists()
     assert (legacy / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
-    if failure == "late_write":
+    if failure != "retirement_locked":
         assert (legacy / "late.json").read_text() == "writer raced copy verification"
+    if failure == "late_writer":
+        assert state_paths.default_state_dir() == legacy
+        writers.clear()
+        for handle in state_paths._leases.values():
+            handle.close()
+        state_paths._leases.clear()
+        monkeypatch.setattr(Path, "rename", rename)
+        assert state_paths.default_state_dir() == target
+        assert legacy.samefile(target)
+        assert (target / "late.json").read_text() == "writer raced copy verification"
+    else:
+        assert not target.exists()
 
 
 @pytest.mark.parametrize("interruption", [SystemExit, OSError])
@@ -564,10 +578,18 @@ def test_rollback_preserves_independently_changed_promoted_copy(
         return rename(path, destination)
 
     monkeypatch.setattr(Path, "rename", cross_volume)
-    assert state_paths.default_state_dir() == target
+    assert state_paths.default_state_dir() == legacy
     assert (target / "new-run.json").read_text() == "explicit writer used new state"
     assert (legacy / "late.json").read_text() == "old writer changed original"
-    assert str(legacy) in capsys.readouterr().err
+    assert str(target) in capsys.readouterr().err
+    # A subsequent launch must still use the authoritative original even after
+    # the writers and the first deferred caller have exited.
+    for handle in state_paths._leases.values():
+        handle.close()
+    state_paths._leases.clear()
+    assert state_paths.default_state_dir() == legacy
+    assert not legacy.samefile(target)
+    assert capsys.readouterr().err == ""
 
 
 def test_linked_codex_home_reports_independent_home_default_immediately(

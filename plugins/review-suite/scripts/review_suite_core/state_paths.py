@@ -319,9 +319,8 @@ def _move(legacy: Path, target: Path, control: Path) -> None:
         # now, so a writer that raced the earlier scan cannot lose its writes.
         if _in_use(retired, control, process_path=legacy) or _tree(retired) != copied:
             retired.rename(legacy)
-            if not _discard_copy(target, pending, control):
-                _report_leftover(legacy, target, control)
-            journal.unlink()
+            # Keep the journal until recovery can discard the promoted copy.
+            # Otherwise both-exist routing would select an unforwarded copy.
             raise OSError("Review Suite state changed during migration")
     try:
         _link(legacy, target)
@@ -329,11 +328,8 @@ def _move(legacy: Path, target: Path, control: Path) -> None:
         # Do not leave older installs able to create a separate empty state.
         if retired.exists():
             retired.rename(legacy)
-            if not _discard_copy(target, pending, control):
-                _report_leftover(legacy, target, control)
         else:
             target.rename(legacy)
-        journal.unlink()
         raise
     _cleanup_retired(retired, journal, pending)
 
@@ -359,14 +355,14 @@ def _recover(target: Path, control: Path) -> None:
             if (
                 _identity(legacy) == pending.get("original_id")
                 and _identity(target) == pending.get("copy_id")
-                and _fingerprint(_tree(target)) == pending.get("copy_digest")
             ):
                 if _in_use(legacy, control):
                     raise OSError("Review Suite state is still in use")
                 # Interrupted between copy promotion and source retirement.
                 # Retry from the original, including any intervening writes.
                 if not _discard_copy(target, pending, control):
-                    _report_leftover(legacy, target, control)
+                    _report_leftover(target, legacy, control)
+                    raise OSError("Review Suite migration copy is still in use or changed")
             else:
                 # An old install may have recreated the source, or somebody
                 # changed the copy. Neither tree is disposable.
