@@ -2718,8 +2718,6 @@ def _reserve_review_brief_restart(
     if not review_brief.strip():
         raise ValueError("--restart-brief cannot be blank")
     current_brief = state.get("review_brief")
-    if not isinstance(current_brief, str) or not current_brief.strip():
-        raise ValueError("review cycle has no frozen review brief to replace")
     if review_brief == current_brief:
         raise ValueError("--restart-brief must differ from the frozen review brief")
 
