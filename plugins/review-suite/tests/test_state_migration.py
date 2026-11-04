@@ -445,6 +445,7 @@ def test_independent_linked_legacy_state_is_reported_once(home, capsys):
     assert str(legacy) in capsys.readouterr().err
     assert state_paths.default_state_dir() == target
     assert capsys.readouterr().err == ""
+    assert (external / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux process environment inspection")
@@ -482,7 +483,6 @@ def test_environment_selected_writer_keeps_promoted_copy_alive(home, monkeypatch
     finally:
         writer.terminate()
         writer.wait(timeout=10)
-    assert (external / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
 
 
 @pytest.mark.parametrize("failure", [OSError, SystemExit])
