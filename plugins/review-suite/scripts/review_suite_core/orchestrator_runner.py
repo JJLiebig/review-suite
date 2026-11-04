@@ -1415,7 +1415,9 @@ def run_one_expensive_step(
     state_dir: Path | None = None,
     persist_state: StatePersister | None = None,
 ) -> OrchestratorRunnerResult:
-    resolved_state_dir = state_dir or Path.home() / ".codex" / "state" / "review-suite"
+    from .state_paths import default_state_dir
+
+    resolved_state_dir = state_dir or default_state_dir()
     if deslop_should_run(state):
         return _run_deslop_once(state)
     if state.get("stage") == STAGE_RUNNING:

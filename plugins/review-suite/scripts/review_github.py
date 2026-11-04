@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 import re
 import shutil
@@ -1039,7 +1040,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 output_refs.append(request_comment_url)
             base_ref = str(context.get("base_ref") or "").strip() or None
             record_review_anchor(
-                state_dir=Path(args.state_dir),
+                state_dir=Path(args.state_dir or default_state_dir()),
                 review_cwd=review_root,
                 lane="review-github",
                 base=base_ref,
@@ -1079,17 +1080,24 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--pr-number", type=int)
     run.add_argument("--bot-login", default=DEFAULT_BOT_LOGIN, help=argparse.SUPPRESS)
     run.add_argument(
-        "--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS
+        "--state-dir", default=None, help=argparse.SUPPRESS
     )
     run.add_argument("--force", action="store_true")
 
     return parser
 
 
+from review_suite_core.state_paths import state_directory
+
+
 def main() -> int:
     parser = build_parser()
+    scope = ExitStack()
     try:
         args = parser.parse_args()
+        scope.enter_context(state_directory(args.state_dir))
+        if args.state_dir is None:
+            args.state_dir = str(default_state_dir())
         if args.command == "run":
             return cmd_run(args)
     except (RuntimeError, ValueError) as exc:
@@ -1098,6 +1106,8 @@ def main() -> int:
             status="error",
             help_items=[_help_command()],
         )
+    finally:
+        scope.close()
     raise SystemExit(f"unknown command: {args.command}")
 
 

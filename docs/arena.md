@@ -63,7 +63,7 @@ Other disabled states, task limits, reasoning settings, and ordinary signoff
 jobs are unchanged.
 
 Retirement is permanent for a model generation. Review Suite stores model and
-variant tombstones in `~/.codex/state/review-suite/arena_retirements.json` (or the
+variant tombstones in `~/.agents/state/review-suite/arena_retirements.json` (or the
 selected state directory). Normal Arena commands record new automatic
 retirements before dispatch; `--dry-run` applies the policy without writing
 state. Retiring the predecessor early does not bring back an older generation.
@@ -109,7 +109,7 @@ The shipped maintainer settings are in
 comparison pools, scheduling groups, rating pool IDs, enablement, and Arena loop counts.
 
 To opt in, add only the overrides you need to
-`~/.codex/state/review-suite/settings.toml`:
+`~/.agents/state/review-suite/settings.toml`:
 
 ```toml
 [arena]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import copy
 import json
 import shutil
@@ -203,7 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--seed", type=int)
     run.add_argument("--roster", default=str(default_roster_path()))
     run.add_argument("--rubric", default=str(default_rubric_path()))
-    run.add_argument("--state-dir", default=str(default_state_dir()))
+    run.add_argument("--state-dir", default=None)
     run.add_argument(
         "--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite")
     )
@@ -234,7 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--task-class", required=True, choices=task_class_choices)
     sample.add_argument("--seed", type=int)
     sample.add_argument("--roster", default=str(default_roster_path()))
-    sample.add_argument("--state-dir", default=str(default_state_dir()))
+    sample.add_argument("--state-dir", default=None)
     sample.add_argument("--caller-id")
     sample.add_argument("--ignore-pending-grades", action="store_true")
     sample.add_argument(
@@ -248,7 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--round-id", required=True)
     run.add_argument("--cd")
     run.add_argument("--roster", default=str(default_roster_path()))
-    run.add_argument("--state-dir", default=str(default_state_dir()))
+    run.add_argument("--state-dir", default=None)
     run.add_argument(
         "--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite")
     )
@@ -259,20 +260,20 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--round-id", required=True)
     resume.add_argument("--cd")
     resume.add_argument("--roster", default=str(default_roster_path()))
-    resume.add_argument("--state-dir", default=str(default_state_dir()))
+    resume.add_argument("--state-dir", default=None)
     resume.add_argument(
         "--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite")
     )
 
     show = sub.add_parser("show-round")
     show.add_argument("--round-id", required=True)
-    show.add_argument("--state-dir", default=str(default_state_dir()))
+    show.add_argument("--state-dir", default=None)
     show.add_argument("--json", action="store_true")
 
     show_last = sub.add_parser("show-last", aliases=["show_last"])
     show_last.add_argument("--cd")
     show_last.add_argument("--task", choices=["review_base", "review_deep"])
-    show_last.add_argument("--state-dir", default=str(default_state_dir()))
+    show_last.add_argument("--state-dir", default=None)
     show_last.add_argument("--json", action="store_true")
 
     costs = sub.add_parser("costs")
@@ -282,7 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="rebuild all cached rows from canonical history, including implementation estimates",
     )
-    costs.add_argument("--state-dir", default=str(default_state_dir()))
+    costs.add_argument("--state-dir", default=None)
     costs.add_argument("--codex-home")
     costs.add_argument("--output")
     costs.add_argument("--json", action="store_true")
@@ -307,46 +308,46 @@ def build_parser() -> argparse.ArgumentParser:
     grade.add_argument("--note")
     grade.add_argument("--roster", default=str(default_roster_path()))
     grade.add_argument("--rubric", default=str(default_rubric_path()))
-    grade.add_argument("--state-dir", default=str(default_state_dir()))
+    grade.add_argument("--state-dir", default=None)
     grade.add_argument("--caller-id")
     dismiss = sub.add_parser("dismiss-round")
     dismiss.add_argument("--round-id", required=True)
-    dismiss.add_argument("--state-dir", default=str(default_state_dir()))
+    dismiss.add_argument("--state-dir", default=None)
     dismiss.add_argument("--reason", default="manual_dismiss")
     dismiss.add_argument("--caller-id")
 
     report = sub.add_parser("report")
     report.add_argument("--roster", default=str(default_roster_path()))
-    report.add_argument("--state-dir", default=str(default_state_dir()))
+    report.add_argument("--state-dir", default=None)
     report.add_argument("--round-id", help=argparse.SUPPRESS)
 
     refresh = sub.add_parser("refresh")
     refresh.add_argument("--roster", default=str(default_roster_path()))
-    refresh.add_argument("--state-dir", default=str(default_state_dir()))
+    refresh.add_argument("--state-dir", default=None)
 
     retire = sub.add_parser("retire-model", help="Permanently stop an Arena model generation, retaining its history")
     retire.add_argument("--model-id", required=True, help="Explicit roster model_id; retires every reasoning effort")
     retire.add_argument("--reason", default="Manually retired from Arena")
     retire.add_argument("--roster", default=str(default_roster_path()))
-    retire.add_argument("--state-dir", default=str(default_state_dir()))
+    retire.add_argument("--state-dir", default=None)
 
     promote_parser = sub.add_parser("promote")
     promote_parser.add_argument("--roster", default=str(default_roster_path()))
-    promote_parser.add_argument("--state-dir", default=str(default_state_dir()))
+    promote_parser.add_argument("--state-dir", default=None)
     promote_parser.add_argument("--apply", action="store_true")
 
     compact = sub.add_parser("compact-runs")
     compact.add_argument("--roster", default=str(default_roster_path()))
-    compact.add_argument("--state-dir", default=str(default_state_dir()))
+    compact.add_argument("--state-dir", default=None)
     compact.add_argument("--backup-suffix", default=".bak")
     compact.add_argument("--apply", action="store_true")
 
     compact_rounds = sub.add_parser("compact-rounds")
-    compact_rounds.add_argument("--state-dir", default=str(default_state_dir()))
+    compact_rounds.add_argument("--state-dir", default=None)
     compact_rounds.add_argument("--apply", action="store_true")
 
     prune_state = sub.add_parser("prune-state")
-    prune_state.add_argument("--state-dir", default=str(default_state_dir()))
+    prune_state.add_argument("--state-dir", default=None)
     prune_state.add_argument("--older-than-days", type=int, default=14)
     prune_state.add_argument("--apply", action="store_true")
 
@@ -358,7 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
     reroll.add_argument("--seed", type=int)
     reroll.add_argument("--roster", default=str(default_roster_path()))
     reroll.add_argument("--rubric", default=str(default_rubric_path()))
-    reroll.add_argument("--state-dir", default=str(default_state_dir()))
+    reroll.add_argument("--state-dir", default=None)
     reroll.add_argument(
         "--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite")
     )
@@ -2688,10 +2689,17 @@ def cmd_prune_state(args: argparse.Namespace) -> int:
     return 0
 
 
+from review_suite_core.state_paths import state_directory
+
+
 def main() -> int:
     parser = build_parser()
+    scope = ExitStack()
     try:
         args = parser.parse_args()
+        scope.enter_context(state_directory(args.state_dir))
+        if args.state_dir is None:
+            args.state_dir = str(default_state_dir())
         if args.command == "run":
             return cmd_run(args)
         if args.command == "sample":
@@ -2745,6 +2753,8 @@ def main() -> int:
             status="error",
             help_items=[f"{_script_command()} --help"],
         )
+    finally:
+        scope.close()
     raise SystemExit(f"unknown command: {args.command}")
 
 

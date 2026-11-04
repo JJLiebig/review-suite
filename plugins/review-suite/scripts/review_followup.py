@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import sys
 from pathlib import Path
 
@@ -56,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--note")
     parser.add_argument("--note-file")
     parser.add_argument(
-        "--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS
+        "--state-dir", default=None, help=argparse.SUPPRESS
     )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--wsl", action="store_true")
@@ -198,10 +199,17 @@ def _record_anchor_warning(exc: Exception) -> None:
     )
 
 
+from review_suite_core.state_paths import state_directory
+
+
 def main() -> int:
     parser = build_parser()
+    scope = ExitStack()
     try:
         args = parser.parse_args()
+        scope.enter_context(state_directory(args.state_dir))
+        if args.state_dir is None:
+            args.state_dir = str(default_state_dir())
         review_root = resolve_repo_root(args.cd)
         state_dir = Path(args.state_dir)
         note_text = load_followup_note(
@@ -296,6 +304,8 @@ def main() -> int:
             status="usage_error",
             help_items=[_help_command()],
         )
+    finally:
+        scope.close()
 
 
 if __name__ == "__main__":

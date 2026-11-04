@@ -465,7 +465,9 @@ def default_state_dir() -> Path:
 
 
 def ensure_state_dir() -> Path:
-    canonical = Path.home() / ".codex" / "state" / "review-suite"
+    from review_suite_core.state_paths import default_state_dir as resolve_state_dir
+
+    canonical = resolve_state_dir()
     canonical.mkdir(parents=True, exist_ok=True)
     return canonical
 
