@@ -169,6 +169,11 @@ def _in_use(legacy: Path, control: Path, *, process_path: Path | None = None) ->
             for token in tokens
             for part in (token.split() if ".py " in token else [token])
         ]
+        tokens = [
+            part
+            for token in tokens
+            for part in (token.split("=", 1) if token.startswith("--state-dir=") else [token])
+        ]
         if "--help" in tokens or "-h" in tokens:
             continue
         if "--state-dir" in tokens:

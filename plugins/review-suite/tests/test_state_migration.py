@@ -449,7 +449,7 @@ def test_independent_linked_legacy_state_is_reported_once(home, capsys):
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux process environment inspection")
-@pytest.mark.parametrize("override", ["absolute", "relative", "tilde"])
+@pytest.mark.parametrize("override", ["absolute", "relative", "tilde", "cli_equals"])
 def test_environment_selected_writer_keeps_promoted_copy_alive(home, monkeypatch, override):
     legacy, target = seed(home)
     rename = Path.rename
@@ -468,13 +468,14 @@ def test_environment_selected_writer_keeps_promoted_copy_alive(home, monkeypatch
     monkeypatch.setattr(Path, "rename", rename)
     script = home / "review.py"
     script.write_text("import time; print('ready', flush=True); time.sleep(30)")
-    selected = {"absolute": str(target), "relative": ".agents/state/review-suite", "tilde": "~/.agents/state/review-suite"}[override]
+    selected = {"absolute": str(target), "relative": ".agents/state/review-suite", "tilde": "~/.agents/state/review-suite", "cli_equals": ""}[override]
+    arguments = [f"--state-dir={target}"] if override == "cli_equals" else []
     writer = subprocess.Popen(
-        [sys.executable, str(script)], cwd=home,
+        [sys.executable, str(script), *arguments], cwd=home,
         env={**os.environ, "REVIEW_SUITE_STATE_DIR": selected},
         stdout=subprocess.PIPE, text=True,
     )
-    monkeypatch.setattr(state_paths, "_processes", lambda: [(writer.pid, 0, f'{sys.executable} {script}')])
+    monkeypatch.setattr(state_paths, "_processes", lambda: [(writer.pid, 0, " ".join([sys.executable, str(script), *arguments]))])
     try:
         assert writer.stdout.readline().strip() == "ready"
         assert state_paths.default_state_dir() == legacy
