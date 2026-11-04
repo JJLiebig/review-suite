@@ -449,8 +449,13 @@ def test_independent_linked_legacy_state_is_reported_once(home, capsys):
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux process environment inspection")
-@pytest.mark.parametrize("override", ["absolute", "relative", "tilde", "cli_equals"])
+@pytest.mark.parametrize("override", ["absolute", "relative", "tilde", "cli_equals", "cli_spaced", "aliased"])
 def test_environment_selected_writer_keeps_promoted_copy_alive(home, monkeypatch, override):
+    if override == "cli_spaced":
+        home = home / "home with spaces"
+        for key in ("HOME", "USERPROFILE"):
+            monkeypatch.setenv(key, str(home))
+        monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
     legacy, target = seed(home)
     rename = Path.rename
     monkeypatch.setattr(state_paths, "_processes", lambda: [])
@@ -468,8 +473,10 @@ def test_environment_selected_writer_keeps_promoted_copy_alive(home, monkeypatch
     monkeypatch.setattr(Path, "rename", rename)
     script = home / "review.py"
     script.write_text("import time; print('ready', flush=True); time.sleep(30)")
-    selected = {"absolute": str(target), "relative": ".agents/state/review-suite", "tilde": "~/.agents/state/review-suite", "cli_equals": ""}[override]
-    arguments = [f"--state-dir={target}"] if override == "cli_equals" else []
+    alias = home / "alias"
+    alias.symlink_to(target, target_is_directory=True)
+    selected = {"absolute": str(target), "relative": ".agents/state/../state/review-suite", "tilde": "~/.agents/state/review-suite", "cli_equals": "", "cli_spaced": "", "aliased": str(alias)}[override]
+    arguments = [f"--state-dir={alias}"] if override == "cli_equals" else ["--state-dir", str(target)] if override == "cli_spaced" else []
     writer = subprocess.Popen(
         [sys.executable, str(script), *arguments], cwd=home,
         env={**os.environ, "REVIEW_SUITE_STATE_DIR": selected},

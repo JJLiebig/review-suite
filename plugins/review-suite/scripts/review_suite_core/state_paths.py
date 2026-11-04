@@ -169,6 +169,17 @@ def _in_use(legacy: Path, control: Path, *, process_path: Path | None = None) ->
             for token in tokens
             for part in (token.split() if ".py " in token else [token])
         ]
+        exact_arguments = True
+        if sys.platform == "linux":
+            try:
+                tokens = [
+                    os.fsdecode(argument)
+                    for argument in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+                    if argument
+                ]
+            except OSError:
+                tokens = []
+                exact_arguments = False  # Do not exclude an unreadable writer.
         tokens = [
             part
             for token in tokens
@@ -181,12 +192,12 @@ def _in_use(legacy: Path, control: Path, *, process_path: Path | None = None) ->
             if (
                 index < len(tokens)
                 and Path(tokens[index]).is_absolute()
-                and Path(tokens[index]) != source
+                and Path(tokens[index]).resolve() != source.resolve()
             ):
                 continue
         if "review-suite-settings.py" in command:
             paths = [Path(token) for token in tokens if token.endswith("settings.toml")]
-            if paths and paths[0].is_absolute() and paths[0].parent != source:
+            if paths and paths[0].is_absolute() and paths[0].parent.resolve() != source.resolve():
                 continue
         # A separately installed copy under an isolated home cannot write this
         # home's defaults. Keep repository launches conservative (cwd unknown).
@@ -202,7 +213,7 @@ def _in_use(legacy: Path, control: Path, *, process_path: Path | None = None) ->
             r"(?:[/\\\s\"])(?:review(?:_[\w]+)?|review-suite-settings|migrate_review_names)\.py(?:[\s\"]|$)",
             command,
         ):
-            if sys.platform == "linux" and "--state-dir" not in tokens:
+            if sys.platform == "linux" and exact_arguments and "--state-dir" not in tokens:
                 try:
                     env = dict(
                         item.split(b"=", 1)
@@ -212,27 +223,26 @@ def _in_use(legacy: Path, control: Path, *, process_path: Path | None = None) ->
                         if b"=" in item
                     )
                     process_home = Path(os.fsdecode(env.get(b"HOME", b"")))
-                    process_codex = (
-                        Path(os.fsdecode(env.get(b"CODEX_HOME", b"")))
-                        if env.get(b"CODEX_HOME")
-                        else process_home / ".codex"
-                    )
+                    def process_path(value: str) -> Path:
+                        path = (
+                            process_home / value[2:]
+                            if value.startswith("~/")
+                            else process_home if value == "~" else Path(value)
+                        )
+                        if not path.is_absolute():
+                            path = Path(f"/proc/{pid}/cwd").resolve() / path
+                        return path.resolve()
+
+                    process_codex = process_path(os.fsdecode(env[b"CODEX_HOME"])) if env.get(b"CODEX_HOME") else process_home / ".codex"
                     override = os.fsdecode(env.get(b"REVIEW_SUITE_STATE_DIR", b"")).strip()
                     if override:
-                        process_state = (
-                            process_home / override[2:]
-                            if override.startswith("~/")
-                            else process_home if override == "~" else Path(override)
-                        )
-                        if not process_state.is_absolute():
-                            process_state = Path(f"/proc/{pid}/cwd").resolve() / process_state
-                        possible_states = {process_state}
+                        possible_states = {process_path(override)}
                     else:
                         possible_states = {
                             process_codex / "state/review-suite",
                             process_home / ".codex/state/review-suite",
                         }
-                    if source not in possible_states:
+                    if source.resolve() not in {path.resolve() for path in possible_states}:
                         continue
                 except OSError:
                     pass  # Unreadable process state is conservatively in use.
