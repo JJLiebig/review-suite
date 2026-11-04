@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -130,6 +131,27 @@ def test_held_state_defers_until_writer_and_deferred_reader_exit(home):
     assert child.returncode == 0, stderr
     assert Path(stdout.strip()) == target
     assert legacy.samefile(target)
+
+
+def test_stale_mkdir_lock_does_not_block_migration(home):
+    legacy, target = seed(home)
+    lock = legacy / ".locks/cost-reports.lock"
+    lock.mkdir(parents=True)
+    child = resolve_process()
+    stdout, stderr = child.communicate(timeout=30)
+    assert child.returncode == 0, stderr
+    assert Path(stdout.strip()) == legacy
+    assert not target.exists()
+
+    stale = time.time() - 7 * 24 * 60 * 60
+    os.utime(lock, (stale, stale))
+    child = resolve_process()
+    stdout, stderr = child.communicate(timeout=30)
+    assert child.returncode == 0, stderr
+    assert Path(stdout.strip()) == target
+    assert legacy.samefile(target)
+    assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+    assert (target / ".locks/cost-reports.lock").is_dir()
 
 
 def test_active_old_settings_writer_defers_migration(home):

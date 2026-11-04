@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 from .orchestrator_store import (
     _atomic_write_json,
@@ -98,7 +99,9 @@ def _lease(control: Path, legacy: Path) -> None:
 
 def _held(path: Path) -> bool:
     if path.is_dir():  # Older Arena writers use mkdir locks.
-        return True
+        # Ownerless directories can outlive a crashed writer. Live processes
+        # are checked separately; only recent directories block on their own.
+        return time.time() - path.stat().st_mtime < 24 * 60 * 60
     with path.open("a+b") as handle:
         if not _try_lock_file(handle):
             return True
