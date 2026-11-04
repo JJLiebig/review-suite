@@ -3704,13 +3704,20 @@ def test_contract_conflict_and_one_use_continue_are_durable(
     assert len(review_calls) == 3
 
 
-@pytest.mark.parametrize("fix_before_classification", [False, True])
-@pytest.mark.parametrize("fourth_decision", ["clean", "findings"])
+@pytest.mark.parametrize(
+    ("fix_before_classification", "fourth_decision", "original_brief"),
+    [
+        (fix_before_classification, fourth_decision, "Original implementation plan")
+        for fix_before_classification in (False, True)
+        for fourth_decision in ("clean", "findings")
+    ] + [(False, "findings", None)],
+)
 def test_continue_consumes_material_fix_head_at_budget_stop(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     fix_before_classification: bool,
     fourth_decision: str,
+    original_brief: str | None,
 ) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
     review_calls = _stub_review(
@@ -3726,8 +3733,7 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
     _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
-            "--review-brief",
-            "Original implementation plan",
+            *(["--review-brief", original_brief] if original_brief else []),
             "--mode",
             "fast",
             "--cd",
