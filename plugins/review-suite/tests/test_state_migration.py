@@ -118,6 +118,29 @@ def test_both_exist_never_merge_and_report_once(home, capsys):
     assert (legacy / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
 
 
+@pytest.mark.parametrize("review_process", [False, True])
+@pytest.mark.parametrize("folder", ["", "names-backup-123"])
+def test_recorded_run_only_defers_for_live_review_suite_pid(
+    home, monkeypatch, review_process, folder
+):
+    legacy, target = seed(home)
+    rounds = legacy / folder / "rounds"
+    rounds.mkdir()
+    (rounds / "old.json").write_text(json.dumps({"runs": [{"pid": os.getpid()}]}))
+    script = "review.py" if review_process else "unrelated.py"
+    # The current process is excluded from direct writer detection, so the
+    # recorded run must decide whether migration is safe.
+    monkeypatch.setattr(
+        state_paths, "_processes", lambda: [(os.getpid(), 0, f"python {script}")]
+    )
+
+    assert state_paths.default_state_dir() == (legacy if review_process else target)
+    assert target.exists() is not review_process
+    if not review_process:
+        assert legacy.samefile(target)
+        assert (target / folder / "rounds/old.json").is_file()
+
+
 def test_held_state_defers_until_writer_and_deferred_reader_exit(home):
     legacy, target = seed(home)
     with orchestrator_store_lock(state_dir=legacy, name="settings"):
