@@ -405,3 +405,78 @@ def test_interrupted_retirement_restores_original_before_recovery(
     assert state_paths.default_state_dir() == target
     assert legacy.samefile(target)
     assert (target / "late.json").read_text() == "write not in promoted copy"
+
+
+def test_independent_linked_legacy_state_is_reported_once(home, capsys):
+    legacy, target = seed(home)
+    external = home / "external-state"
+    legacy.rename(external)
+    state_paths._link(legacy, external)
+    target.mkdir(parents=True)
+    assert state_paths.default_state_dir() == target
+    assert str(legacy) in capsys.readouterr().err
+    assert state_paths.default_state_dir() == target
+    assert capsys.readouterr().err == ""
+    assert (external / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+
+
+@pytest.mark.parametrize("failure", [OSError, SystemExit])
+def test_partial_retired_cleanup_does_not_block_next_run(home, monkeypatch, failure):
+    legacy, target = seed(home)
+    rename = Path.rename
+    remove = shutil.rmtree
+    retired = legacy.with_name(".review-suite-moved")
+    monkeypatch.setattr(state_paths, "_processes", lambda: [])
+
+    def cross_volume(path, destination):
+        if path == legacy and destination == target:
+            raise OSError(errno.EXDEV, "different volumes")
+        return rename(path, destination)
+
+    def partial_cleanup(path, *args, **kwargs):
+        if path == retired:
+            (path / "runs.jsonl").unlink()
+            raise failure("cleanup interrupted")
+        return remove(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "rename", cross_volume)
+    monkeypatch.setattr(shutil, "rmtree", partial_cleanup)
+    if failure is SystemExit:
+        with pytest.raises(SystemExit):
+            state_paths.default_state_dir()
+    else:
+        assert state_paths.default_state_dir() == target
+    monkeypatch.setattr(shutil, "rmtree", remove)
+    assert state_paths.default_state_dir() == target
+    assert legacy.samefile(target)
+    assert not retired.exists()
+    assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+
+
+def test_cross_volume_source_recreation_reports_preserved_original(
+    home, monkeypatch, capsys
+):
+    legacy, target = seed(home)
+    rename = Path.rename
+    link = state_paths._link
+    retired = legacy.with_name(".review-suite-moved")
+    monkeypatch.setattr(state_paths, "_processes", lambda: [])
+
+    def cross_volume(path, destination):
+        if path == legacy and destination == target:
+            raise OSError(errno.EXDEV, "different volumes")
+        return rename(path, destination)
+
+    def recreation(old, new):
+        old.mkdir()
+        (old / "new.json").write_text("independent new state")
+        (retired / "late.json").write_text("original writer finished late")
+        return link(old, new)
+
+    monkeypatch.setattr(Path, "rename", cross_volume)
+    monkeypatch.setattr(state_paths, "_link", recreation)
+    assert state_paths.default_state_dir() == target
+    assert (retired / "late.json").read_text() == "original writer finished late"
+    assert str(retired) in capsys.readouterr().err
+    assert (legacy / "new.json").read_text() == "independent new state"
+    assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'

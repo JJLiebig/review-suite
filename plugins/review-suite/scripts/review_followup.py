@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import sys
 from pathlib import Path
 
@@ -198,10 +199,15 @@ def _record_anchor_warning(exc: Exception) -> None:
     )
 
 
+from review_suite_core.state_paths import state_directory
+
+
 def main() -> int:
     parser = build_parser()
+    scope = ExitStack()
     try:
         args = parser.parse_args()
+        scope.enter_context(state_directory(args.state_dir))
         if args.state_dir is None:
             args.state_dir = str(default_state_dir())
         review_root = resolve_repo_root(args.cd)
@@ -298,6 +304,8 @@ def main() -> int:
             status="usage_error",
             help_items=[_help_command()],
         )
+    finally:
+        scope.close()
 
 
 if __name__ == "__main__":

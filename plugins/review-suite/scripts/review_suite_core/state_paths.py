@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import atexit
+from contextlib import contextmanager
+from contextvars import ContextVar
 import errno
 import hashlib
 import json
@@ -21,6 +23,45 @@ from .orchestrator_store import (
 )
 
 _leases: dict[str, object] = {}
+_selected_state: ContextVar[Path | None] = ContextVar(
+    "review_suite_state", default=None
+)
+
+
+@contextmanager
+def state_directory(path: str | None):
+    token = _selected_state.set(Path(path).expanduser().absolute() if path else None)
+    try:
+        yield
+    finally:
+        _selected_state.reset(token)
+
+
+def _same_state(left: Path, right: Path) -> bool:
+    return left.exists() and right.exists() and left.samefile(right)
+
+
+def _report_leftover(legacy: Path, target: Path, control: Path) -> None:
+    marker = control / (
+        "reported-" + hashlib.sha256(str(legacy).encode()).hexdigest()[:16]
+    )
+    if not marker.exists():
+        print(
+            f"Review Suite uses {target}; existing state at {legacy} was left unchanged.",
+            file=sys.stderr,
+        )
+        marker.touch()
+
+
+def _cleanup_retired(retired: Path, journal: Path, pending: dict) -> None:
+    pending["cleanup_started"] = True
+    _atomic_write_json(journal, pending)
+    try:
+        if retired.exists():
+            shutil.rmtree(retired)
+    except OSError:
+        return  # Retry a locked or interrupted cleanup on the next launch.
+    journal.unlink()
 
 
 def _lease(control: Path, legacy: Path) -> None:
@@ -262,9 +303,7 @@ def _move(legacy: Path, target: Path, control: Path) -> None:
             target.rename(legacy)
         journal.unlink()
         raise
-    if retired.exists():
-        shutil.rmtree(retired)
-    journal.unlink()
+    _cleanup_retired(retired, journal, pending)
 
 
 def _recover(target: Path, control: Path) -> None:
@@ -274,6 +313,11 @@ def _recover(target: Path, control: Path) -> None:
     pending = json.loads(journal.read_text(encoding="utf-8"))
     legacy = Path(pending["legacy"])
     retired = legacy.with_name(".review-suite-moved")
+    if pending.get("cleanup_started"):
+        if not legacy.exists() and target.exists():
+            _link(legacy, target)
+        _cleanup_retired(retired, journal, pending)
+        return
     # Before the forwarding link exists, the original is authoritative. Restore
     # it even if the interrupted run never reached its post-retirement check.
     if retired.exists() and not legacy.exists():
@@ -293,19 +337,24 @@ def _recover(target: Path, control: Path) -> None:
             else:
                 # An old install may have recreated the source, or somebody
                 # changed the copy. Neither tree is disposable.
+                if retired.exists():
+                    _report_leftover(retired, target, control)
                 journal.unlink()
                 return
         elif not legacy.exists():
             _link(legacy, target)
     if retired.exists():
         if _fingerprint(_tree(retired)) != pending.get("copy_digest"):
-            raise OSError(f"Changed original state preserved at {retired}")
-        shutil.rmtree(retired)
+            _report_leftover(retired, target, control)
+            journal.unlink()
+            return
     shutil.rmtree(target.with_name(".review-suite-copy"), ignore_errors=True)
-    journal.unlink()
+    _cleanup_retired(retired, journal, pending)
 
 
 def default_state_dir() -> Path:
+    if selected := _selected_state.get():
+        return selected
     override = os.environ.get("REVIEW_SUITE_STATE_DIR", "").strip()
     if override:
         # An explicit independent state must not import the user's history.
@@ -325,21 +374,9 @@ def default_state_dir() -> Path:
         )
     )
     control = target.parent / ".review-suite-migration"
-    # Preserve an existing user-managed forwarding link as a shared location.
-    for legacy in sources:
-        if (
-            (legacy.is_symlink() or legacy.is_junction())
-            and legacy.exists()
-            and not target.exists()
-        ):
-            with orchestrator_store_lock(state_dir=control, name="migration"):
-                if not target.exists():
-                    _link(target, legacy.resolve())
-            return target
     # No directory creation, process scan or lock on the normal migrated path.
     if not (control / "pending.json").exists() and not any(
-        path.exists() and not (path.is_symlink() or path.is_junction())
-        for path in sources
+        path.exists() and not _same_state(path, target) for path in sources
     ):
         return target
     with orchestrator_store_lock(state_dir=control, name="migration"):
@@ -355,19 +392,14 @@ def default_state_dir() -> Path:
                     return legacy
             raise
         for legacy in sources:
-            if not legacy.exists() or legacy.is_symlink() or legacy.is_junction():
+            if not legacy.exists() or _same_state(legacy, target):
                 continue
             if target.exists():
-                marker = control / (
-                    "reported-" + hashlib.sha256(str(legacy).encode()).hexdigest()[:16]
-                )
-                if not marker.exists():
-                    print(
-                        f"Review Suite uses {target}; existing state at {legacy} was left unchanged.",
-                        file=sys.stderr,
-                    )
-                    marker.touch()
+                _report_leftover(legacy, target, control)
                 continue
+            if legacy.is_symlink() or legacy.is_junction():
+                _link(target, legacy.resolve())
+                return target
             try:
                 if _in_use(legacy, control):
                     _lease(control, legacy)

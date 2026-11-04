@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 import re
 import shutil
@@ -1086,10 +1087,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+from review_suite_core.state_paths import state_directory
+
+
 def main() -> int:
     parser = build_parser()
+    scope = ExitStack()
     try:
         args = parser.parse_args()
+        scope.enter_context(state_directory(args.state_dir))
         if args.state_dir is None:
             args.state_dir = str(default_state_dir())
         if args.command == "run":
@@ -1100,6 +1106,8 @@ def main() -> int:
             status="error",
             help_items=[_help_command()],
         )
+    finally:
+        scope.close()
     raise SystemExit(f"unknown command: {args.command}")
 
 

@@ -52,6 +52,13 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(
     monkeypatch, tmp_path: Path
 ) -> None:
     captured: dict[str, object] = {}
+    fake_home = tmp_path / "isolated-home"
+    for key in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(key, str(fake_home))
+    monkeypatch.setenv("CODEX_HOME", str(fake_home / ".codex"))
+    legacy = fake_home / ".codex/state/review-suite"
+    legacy.mkdir(parents=True)
+    (legacy / "runs.jsonl").write_text("default history")
 
     monkeypatch.setattr(review_followup, "resolve_repo_root", lambda cd: tmp_path)
     monkeypatch.setattr(
@@ -91,6 +98,10 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(
     )
 
     def fake_run_codex_review(**kwargs):
+        from review_suite_core.lens_runtime import _review_output_path
+        output = _review_output_path("followup-")
+        assert output.parent == tmp_path / "state/tmp"
+        assert legacy.is_dir() and not (fake_home / ".agents/state/review-suite").exists()
         captured["prompt"] = kwargs["prompt"]
         captured["review_base"] = kwargs["base"]
         return {
@@ -120,6 +131,8 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(
         "argv",
         [
             "review_followup.py",
+            "--state-dir",
+            str(tmp_path / "state"),
             "--base",
             "main",
             "--note",
