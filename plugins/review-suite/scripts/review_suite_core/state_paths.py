@@ -244,6 +244,13 @@ def _move(legacy: Path, target: Path, control: Path) -> None:
         _atomic_write_json(journal, pending)
         staging.rename(target)
         legacy.rename(retired)
+        # The old pathname can no longer open the original tree. Check again
+        # now, so a writer that raced the earlier scan cannot lose its writes.
+        if _in_use(legacy, control) or _tree(retired) != copied:
+            retired.rename(legacy)
+            shutil.rmtree(target)
+            journal.unlink()
+            raise OSError("Review Suite state changed during migration")
     try:
         _link(legacy, target)
     except OSError:
@@ -363,8 +370,12 @@ def default_state_dir() -> Path:
                 _move(legacy, target, control)
             except OSError, ValueError, subprocess.SubprocessError:
                 if target.exists():
-                    _recover(target, control)
-                    return target
+                    try:
+                        _recover(target, control)
+                    except OSError, ValueError, subprocess.SubprocessError:
+                        pass
+                    if target.exists() and not (control / "pending.json").exists():
+                        return target
                 if legacy.exists() and not (
                     legacy.is_symlink() or legacy.is_junction()
                 ):

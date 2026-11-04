@@ -342,3 +342,27 @@ def test_interrupted_cross_volume_copy_retries_original_or_preserves_edited_copy
             target / "later.json"
         ).read_text() == "old install wrote after interruption"
     assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+
+
+@pytest.mark.parametrize("failure", ["late_write", "retirement_locked"])
+def test_cross_volume_cutover_failure_keeps_original_authoritative(
+    home, monkeypatch, failure
+):
+    legacy, target = seed(home)
+    rename = Path.rename
+
+    def race(path, destination):
+        if path == legacy and destination == target:
+            raise OSError(errno.EXDEV, "different volumes")
+        if path == legacy and destination == legacy.with_name(".review-suite-moved"):
+            if failure == "retirement_locked":
+                raise PermissionError("open Windows handle prevents retirement")
+            (legacy / "late.json").write_text("writer raced copy verification")
+        return rename(path, destination)
+
+    monkeypatch.setattr(Path, "rename", race)
+    assert state_paths.default_state_dir() == legacy
+    assert not target.exists()
+    assert (legacy / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+    if failure == "late_write":
+        assert (legacy / "late.json").read_text() == "writer raced copy verification"
