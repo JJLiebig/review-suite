@@ -162,6 +162,9 @@ def _in_use(legacy: Path, control: Path, *, process_path: Path | None = None) ->
         ancestors.add(current)
     # Old releases have no lifetime state lease. Their Python entry points
     # (including the tray's settings helper) must finish before moving state.
+    review_script = re.compile(
+        r"(?:[/\\\s\"])(?:review(?:_[\w]+)?|review-suite-settings|migrate_review_names)\.py(?:[\s\"]|$)"
+    )
     for pid, _, command in rows:
         tokens = [
             quoted or plain for quoted, plain in re.findall(r'"([^"]*)"|(\S+)', command)
@@ -212,10 +215,7 @@ def _in_use(legacy: Path, control: Path, *, process_path: Path | None = None) ->
             str(source.parents[1].parent).replace("\\", "/").casefold(),
         }:
             continue
-        if pid not in ancestors and re.search(
-            r"(?:[/\\\s\"])(?:review(?:_[\w]+)?|review-suite-settings|migrate_review_names)\.py(?:[\s\"]|$)",
-            command,
-        ):
+        if pid not in ancestors and review_script.search(command):
             if sys.platform == "linux" and exact_arguments and "--state-dir" not in tokens:
                 try:
                     env = dict(
@@ -251,7 +251,7 @@ def _in_use(legacy: Path, control: Path, *, process_path: Path | None = None) ->
                     pass  # Unreadable process state is conservatively in use.
             return True
     # Detached reviewers can outlive the wrapper that recorded their PID.
-    live = {pid for pid, _, _ in rows}
+    live = {pid for pid, _, command in rows if review_script.search(command)}
     for path in legacy.rglob("rounds/*.json"):
         payload = json.loads(path.read_text(encoding="utf-8"))
         if any(
