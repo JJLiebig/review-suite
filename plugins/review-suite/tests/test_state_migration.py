@@ -78,6 +78,8 @@ def test_install_first_run_moves_history_links_old_path_and_migrates_settings(
         sys.executable,
         str(destination / "scripts/review.py"),
         "--status",
+        "--base",
+        "HEAD",
         "--cd",
         str(SCRIPTS.parents[2]),
     ]
