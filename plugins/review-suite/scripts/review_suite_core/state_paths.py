@@ -54,14 +54,24 @@ def _report_leftover(legacy: Path, target: Path, control: Path) -> None:
 
 
 def _cleanup_retired(retired: Path, journal: Path, pending: dict) -> None:
-    pending["cleanup_started"] = True
-    _atomic_write_json(journal, pending)
     try:
         if retired.exists():
+            expected = pending.get("copy_tree", {})
+            remaining = _tree(retired)
+            if _identity(retired) != pending.get("original_id") or any(
+                key not in expected or value != tuple(expected[key])
+                for key, value in remaining.items()
+            ):
+                _report_leftover(retired, Path(pending["target"]), journal.parent)
+                journal.unlink()
+                return
+        pending["cleanup_started"] = True
+        _atomic_write_json(journal, pending)
+        if retired.exists():
             shutil.rmtree(retired)
+        journal.unlink()
     except OSError:
         return  # Retry a locked or interrupted cleanup on the next launch.
-    journal.unlink()
 
 
 def _lease(control: Path, legacy: Path) -> None:
@@ -131,7 +141,8 @@ def _processes() -> list[tuple[int, int, str]]:
     ]
 
 
-def _in_use(legacy: Path, control: Path) -> bool:
+def _in_use(legacy: Path, control: Path, *, process_path: Path | None = None) -> bool:
+    source = process_path or legacy
     # A process that deferred migration must keep that choice until it exits.
     for path in control.glob("use-*"):
         if _held(path):
@@ -165,12 +176,12 @@ def _in_use(legacy: Path, control: Path) -> bool:
             if (
                 index < len(tokens)
                 and Path(tokens[index]).is_absolute()
-                and Path(tokens[index]) != legacy
+                and Path(tokens[index]) != source
             ):
                 continue
         if "review-suite-settings.py" in command:
             paths = [Path(token) for token in tokens if token.endswith("settings.toml")]
-            if paths and paths[0].is_absolute() and paths[0].parent != legacy:
+            if paths and paths[0].is_absolute() and paths[0].parent != source:
                 continue
         # A separately installed copy under an isolated home cannot write this
         # home's defaults. Keep repository launches conservative (cwd unknown).
@@ -179,7 +190,7 @@ def _in_use(legacy: Path, control: Path) -> bool:
         install_home = re.split(r"/\.(?:codex|agents)/", normalized)[0]
         if install_home != normalized and install_home not in {
             str(Path.home()).replace("\\", "/").casefold(),
-            str(legacy.parents[1].parent).replace("\\", "/").casefold(),
+            str(source.parents[1].parent).replace("\\", "/").casefold(),
         }:
             continue
         if pid not in ancestors and re.search(
@@ -201,7 +212,7 @@ def _in_use(legacy: Path, control: Path) -> bool:
                         if env.get(b"CODEX_HOME")
                         else process_home / ".codex"
                     )
-                    if legacy not in {
+                    if source not in {
                         process_codex / "state/review-suite",
                         process_home / ".codex/state/review-suite",
                     }:
@@ -266,7 +277,11 @@ def _move(legacy: Path, target: Path, control: Path) -> None:
     journal = control / "pending.json"
     staging = target.with_name(".review-suite-copy")
     retired = legacy.with_name(".review-suite-moved")
-    pending = {"legacy": str(legacy), "original_id": _identity(legacy)}
+    pending = {
+        "legacy": str(legacy),
+        "target": str(target),
+        "original_id": _identity(legacy),
+    }
     _atomic_write_json(journal, pending)
     try:
         legacy.rename(target)
@@ -281,13 +296,17 @@ def _move(legacy: Path, target: Path, control: Path) -> None:
             raise OSError("Review Suite state copy verification failed")
         # Identify our copy before publishing it. Recovery may discard only
         # this unchanged copy, never an independently created destination.
-        pending.update(copy_id=_identity(staging), copy_digest=_fingerprint(copied))
+        pending.update(
+            copy_id=_identity(staging),
+            copy_digest=_fingerprint(copied),
+            copy_tree=copied,
+        )
         _atomic_write_json(journal, pending)
         staging.rename(target)
         legacy.rename(retired)
         # The old pathname can no longer open the original tree. Check again
         # now, so a writer that raced the earlier scan cannot lose its writes.
-        if _in_use(legacy, control) or _tree(retired) != copied:
+        if _in_use(retired, control, process_path=legacy) or _tree(retired) != copied:
             retired.rename(legacy)
             shutil.rmtree(target)
             journal.unlink()
@@ -343,11 +362,6 @@ def _recover(target: Path, control: Path) -> None:
                 return
         elif not legacy.exists():
             _link(legacy, target)
-    if retired.exists():
-        if _fingerprint(_tree(retired)) != pending.get("copy_digest"):
-            _report_leftover(retired, target, control)
-            journal.unlink()
-            return
     shutil.rmtree(target.with_name(".review-suite-copy"), ignore_errors=True)
     _cleanup_retired(retired, journal, pending)
 

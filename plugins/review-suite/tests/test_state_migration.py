@@ -385,12 +385,12 @@ def test_interrupted_retirement_restores_original_before_recovery(
             raise OSError(errno.EXDEV, "different volumes")
         return rename(path, destination)
 
-    def interrupted_check(path, control):
+    def interrupted_check(path, control, **kwargs):
         retired = legacy.with_name(".review-suite-moved")
         if retired.exists():
             (retired / "late.json").write_text("write not in promoted copy")
             raise interruption("interrupted before verification")
-        return original_in_use(path, control)
+        return original_in_use(path, control, **kwargs)
 
     monkeypatch.setattr(Path, "rename", cross_volume)
     monkeypatch.setattr(state_paths, "_in_use", interrupted_check)
@@ -480,3 +480,66 @@ def test_cross_volume_source_recreation_reports_preserved_original(
     assert str(retired) in capsys.readouterr().err
     assert (legacy / "new.json").read_text() == "independent new state"
     assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+
+
+def test_recovery_preserves_retired_files_changed_after_partial_cleanup(
+    home, monkeypatch, capsys
+):
+    legacy, target = seed(home)
+    rename = Path.rename
+    remove = shutil.rmtree
+    retired = legacy.with_name(".review-suite-moved")
+    monkeypatch.setattr(state_paths, "_processes", lambda: [])
+
+    def cross_volume(path, destination):
+        if path == legacy and destination == target:
+            raise OSError(errno.EXDEV, "different volumes")
+        return rename(path, destination)
+
+    def partial_cleanup(path, *args, **kwargs):
+        if path == retired:
+            (path / "names-backup-123/original.json").unlink()
+            raise OSError("locked remainder")
+        return remove(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "rename", cross_volume)
+    monkeypatch.setattr(shutil, "rmtree", partial_cleanup)
+    assert state_paths.default_state_dir() == target
+    (retired / "runs.jsonl").write_text("changed remainder")
+    monkeypatch.setattr(shutil, "rmtree", remove)
+    assert state_paths.default_state_dir() == target
+    assert (retired / "runs.jsonl").read_text() == "changed remainder"
+    assert str(retired) in capsys.readouterr().err
+    assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows held files prevent the directory rename itself",
+)
+def test_cutover_checks_locks_in_the_retired_tree(home, monkeypatch):
+    from contextlib import ExitStack
+
+    legacy, target = seed(home)
+    rename = Path.rename
+    monkeypatch.setattr(state_paths, "_processes", lambda: [])
+    # Existing lock file means acquiring the lock changes no tree contents.
+    with orchestrator_store_lock(state_dir=legacy, name="settings"):
+        pass
+    with ExitStack() as scope:
+
+        def cross_volume(path, destination):
+            if path == legacy and destination == target:
+                raise OSError(errno.EXDEV, "different volumes")
+            if path == legacy and destination == legacy.with_name(
+                ".review-suite-moved"
+            ):
+                scope.enter_context(
+                    orchestrator_store_lock(state_dir=legacy, name="settings")
+                )
+            return rename(path, destination)
+
+        monkeypatch.setattr(Path, "rename", cross_volume)
+        assert state_paths.default_state_dir() == legacy
+        assert not target.exists()
+    assert (legacy / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
