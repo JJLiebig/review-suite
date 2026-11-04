@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--note")
     parser.add_argument("--note-file")
     parser.add_argument(
-        "--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS
+        "--state-dir", default=None, help=argparse.SUPPRESS
     )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--wsl", action="store_true")
@@ -202,6 +202,8 @@ def main() -> int:
     parser = build_parser()
     try:
         args = parser.parse_args()
+        if args.state_dir is None:
+            args.state_dir = str(default_state_dir())
         review_root = resolve_repo_root(args.cd)
         state_dir = Path(args.state_dir)
         note_text = load_followup_note(

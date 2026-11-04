@@ -261,3 +261,50 @@ def test_deferred_process_keeps_using_old_state_for_its_lifetime(home):
     stdout, stderr = child.communicate(timeout=30)
     assert child.returncode == 0, stderr
     assert Path(stdout.strip()) == target
+
+
+def test_old_install_recreating_source_never_discards_moved_history(home, monkeypatch):
+    legacy, target = seed(home)
+    original_link = state_paths._link
+
+    def competing_writer(old, new):
+        old.mkdir()
+        (old / "new-run.json").write_text("new review")
+        raise FileExistsError("old install recreated its state")
+
+    monkeypatch.setattr(state_paths, "_link", competing_writer)
+    assert state_paths.default_state_dir() == target
+    monkeypatch.setattr(state_paths, "_link", original_link)
+    assert state_paths.default_state_dir() == target
+    assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+    assert (legacy / "new-run.json").read_text() == "new review"
+
+
+def test_existing_legacy_link_keeps_same_history(home):
+    legacy, target = seed(home)
+    external = home / "external-state"
+    legacy.rename(external)
+    state_paths._link(legacy, external)
+    assert state_paths.default_state_dir() == target
+    assert target.samefile(external)
+    assert legacy.samefile(target)
+
+
+def test_explicit_cli_state_does_not_migrate_default(home):
+    legacy, target = seed(home)
+    custom = home / "independent"
+    custom.mkdir()
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "review_suite_arena.py"),
+            "compact-rounds",
+            "--state-dir",
+            str(custom),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert legacy.is_dir() and not target.exists()

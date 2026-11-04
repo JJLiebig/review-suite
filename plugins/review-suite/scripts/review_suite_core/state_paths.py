@@ -140,6 +140,28 @@ def _in_use(legacy: Path, control: Path) -> bool:
             r"(?:[/\\\s\"])(?:review(?:_[\w]+)?|review-suite-settings|migrate_review_names)\.py(?:[\s\"]|$)",
             command,
         ):
+            if sys.platform == "linux" and "--state-dir" not in tokens:
+                try:
+                    env = dict(
+                        item.split(b"=", 1)
+                        for item in Path(f"/proc/{pid}/environ")
+                        .read_bytes()
+                        .split(b"\0")
+                        if b"=" in item
+                    )
+                    process_home = Path(os.fsdecode(env.get(b"HOME", b"")))
+                    process_codex = (
+                        Path(os.fsdecode(env.get(b"CODEX_HOME", b"")))
+                        if env.get(b"CODEX_HOME")
+                        else process_home / ".codex"
+                    )
+                    if legacy not in {
+                        process_codex / "state/review-suite",
+                        process_home / ".codex/state/review-suite",
+                    }:
+                        continue
+                except OSError:
+                    pass  # Unreadable process state is conservatively in use.
             return True
     # Detached reviewers can outlive the wrapper that recorded their PID.
     live = {pid for pid, _, _ in rows}
@@ -226,11 +248,10 @@ def _recover(target: Path, control: Path) -> None:
     retired = legacy.with_name(".review-suite-moved")
     if target.exists():
         if legacy.exists() and not (legacy.is_symlink() or legacy.is_junction()):
-            # Interrupted copy promotion: leave the original authoritative and
-            # retry the verified copy, rather than guessing which copy changed.
-            if _in_use(legacy, control):
-                raise OSError("Review Suite state is still in use")
-            shutil.rmtree(target)
+            # An old install may have recreated this path after the rename.
+            # Neither tree is disposable: apply the normal both-exist policy.
+            journal.unlink()
+            return
         elif not legacy.exists():
             _link(legacy, target)
     if retired.exists():
@@ -259,6 +280,17 @@ def default_state_dir() -> Path:
         )
     )
     control = target.parent / ".review-suite-migration"
+    # Preserve an existing user-managed forwarding link as a shared location.
+    for legacy in sources:
+        if (
+            (legacy.is_symlink() or legacy.is_junction())
+            and legacy.exists()
+            and not target.exists()
+        ):
+            with orchestrator_store_lock(state_dir=control, name="migration"):
+                if not target.exists():
+                    _link(target, legacy.resolve())
+            return target
     # No directory creation, process scan or lock on the normal migrated path.
     if not (control / "pending.json").exists() and not any(
         path.exists() and not (path.is_symlink() or path.is_junction())
@@ -298,6 +330,9 @@ def default_state_dir() -> Path:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 _move(legacy, target, control)
             except OSError, ValueError, subprocess.SubprocessError:
+                if target.exists():
+                    _recover(target, control)
+                    return target
                 if legacy.exists() and not (
                     legacy.is_symlink() or legacy.is_junction()
                 ):
