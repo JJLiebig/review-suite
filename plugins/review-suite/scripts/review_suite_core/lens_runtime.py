@@ -461,7 +461,9 @@ def extract_session_id(stderr_text: str) -> str | None:
 
 
 def default_review_suite_state_dir() -> Path:
-    return Path.home() / ".codex" / "state" / "review-suite"
+    from .state_paths import default_state_dir
+
+    return default_state_dir()
 
 
 def _caller_thread_id() -> str:

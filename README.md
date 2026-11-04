@@ -90,9 +90,26 @@ usage; original review records remain unchanged.
 ## Settings
 
 [Shipped defaults](plugins/review-suite/default_settings.toml) apply unless
-overridden in `~/.codex/state/review-suite/settings.toml`. This state path is
-used for both installation routes. The first run creates a comment-only
-settings file, so future updates can change defaults you have not pinned.
+overridden in `~/.agents/state/review-suite/settings.toml`. This state path is
+used for both installation routes. `REVIEW_SUITE_STATE_DIR` selects an independent
+state directory (like `--state-dir`) without importing history. The first run
+creates a comment-only settings file, so future updates can change defaults you
+have not pinned.
+
+Existing state moves automatically from `$CODEX_HOME/state/review-suite` (default
+`~/.codex/state/review-suite`); the original default is also checked when
+`CODEX_HOME` is set. Active writers defer the move until a later run. The old path
+becomes a link (a Windows junction), so older installs and recorded paths keep
+working. Same-volume moves use rename; cross-volume moves verify every copied
+file before retiring the source. Backups inside the directory move with it.
+If both locations already contain state, the new location wins; the old one is
+left intact and reported once. No directories are merged.
+
+Explicit scratch homes such as `review-suite-fresh-wp-*` and the empty
+`review-suite-safe-runtime` directory are not default state roots and are left
+alone. A scratch home's nested state migrates only when running with that home.
+Marketplace runtime builds remain under `$CODEX_HOME/plugin-runtimes/review-suite`;
+they have a separate lease and cleanup lifecycle.
 
 For example, to override just the plan review's reasoning:
 
@@ -115,8 +132,8 @@ Existing review history and saved snapshots use the offline migration below.
 Stop review, daemon, tray, and API writers first:
 
 ```powershell
-python plugins/review-suite/scripts/migrate_review_names.py --state-dir "$HOME/.codex/state/review-suite"
-python plugins/review-suite/scripts/migrate_review_names.py --state-dir "$HOME/.codex/state/review-suite" --apply
+python plugins/review-suite/scripts/migrate_review_names.py --state-dir "$HOME/.agents/state/review-suite"
+python plugins/review-suite/scripts/migrate_review_names.py --state-dir "$HOME/.agents/state/review-suite" --apply
 ```
 
 The first command previews changes. The second backs up changed files under

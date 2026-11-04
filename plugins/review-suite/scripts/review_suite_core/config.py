@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .name_migration import rename_payload
+from .state_paths import default_state_dir
 from .orchestrator_store import orchestrator_store_lock
 from .model_labels import (
     SUPPORTED_REASONING_EFFORTS,
@@ -65,10 +66,6 @@ def plugin_root() -> Path:
 
 def default_config_path() -> Path:
     return plugin_root() / DEFAULT_CONFIG_FILENAME
-
-
-def default_state_dir() -> Path:
-    return Path.home() / ".codex" / "state" / "review-suite"
 
 
 def user_config_path(state_dir: Path | None = None) -> Path:
