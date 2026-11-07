@@ -1,182 +1,58 @@
 # Review Suite
 
-Review Suite runs stateful local code review, tracks fixes and validation, and
-can request a GitHub pull-request review. The calling agent can be Codex,
-Claude Code, or another agent supported by the skills CLI. Review jobs use a
-separate backend: Codex CLI by default.
+Review Suite gets a branch merge-ready: It runs local code review,
+tracks fixes and validation and also reviews for slop
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/review-workflow-dark.svg">
+  <img alt="Review Suite modes: the Fast, Base and Deep review steps and the models that run them" src="docs/review-workflow-light.svg">
+</picture>
 
 ## Install
 
-Installation options:
-
-| Route | Install | Update |
-| --- | --- | --- |
-| Codex marketplace | `codex plugin marketplace add JJLiebig/review-suite` then `codex plugin add review-suite@review-suite` | `codex plugin marketplace upgrade review-suite` |
-| Skills CLI | `npx skills add JJLiebig/review-suite` | `npx skills update review-suite` |
-
-The skills CLI installs into the current project by default. Add `--global`
-to install for your user; update a global install with
-`npx skills update -g review-suite`. It exposes one `review-suite` skill
-containing the same four workflows and Python engine as the marketplace plugin.
-The marketplace exposes those workflows as separate skills: `review`,
-`review-plan`, `review-deslop`, and `review-github`.
-
-`npx` runs the public skills CLI package; Review Suite itself is installed from
-GitHub and needs no npm login or publish step.
-
-Both routes need Python 3.14.7+ and Git. The skills CLI route also needs
-Node.js/npm to run `npx`. Review Suite's default reviewer, plan review,
-simplification review, and follow-up review require an authenticated Codex CLI.
-Selected local review models can instead use an authenticated OpenCode CLI; see
-[OpenCode configuration](docs/opencode.md). GitHub review also needs an
-authenticated `gh` CLI and access to the GitHub `@codex review` bot.
-
-## Review modes
-
-| Mode | Use it for | Workflow |
-| --- | --- | --- |
-| `fast` | Small, well-tested changes with limited risk | Dual signoff; no cleanup or GitHub review; at most two local rounds |
-| `base` | Ordinary changes (default) | Optional Arena, one cleanup pass, dual signoff, then GitHub review |
-| `deep` | Security, billing, migrations, concurrency, and other critical changes | Base signoff followed by deeper signoff, with cleanup and GitHub review |
-
-Choose by the change's actual risk, including trust and data-integrity
-boundaries. [Review strategy](docs/review-strategy.md) describes the full
-workflow.
-
-## Run a review
-
-Ask the installed skill for a local review, or run the launcher directly:
-
 ```powershell
-<python> <plugin-root>/scripts/review.py --cd <repo-root>
+npx skills add JJLiebig/review-suite
 ```
 
-`<plugin-root>` is the installed marketplace plugin root, or
-`plugins/review-suite/` inside the installed skills CLI skill. Omit `--mode`
-for `base`; pass `--mode fast` or `--mode deep` when appropriate. Review Suite
-detects the remote default branch; `--base <ref>` overrides it.
-
-The launcher expects committed changes and a clean worktree. It prints an
-`Action`: run its `cmd`, or inspect the review output and run exactly one
-matching `choices` command. Continue an existing review with `--id <id>`.
-
-Read-only status and recovery commands:
+Or install from the Codex marketplace:
 
 ```powershell
-<python> <plugin-root>/scripts/review.py --status --cd <repo-root>
-<python> <plugin-root>/scripts/review.py --id <id> --show-status
-<python> <plugin-root>/scripts/review.py --id <id> --show-findings
+codex plugin marketplace add JJLiebig/review-suite
+codex plugin add review-suite@review-suite
 ```
 
-Run relevant validation before dispatch and record required full-suite and CI
-results on the review id. A green review alone does not make a change
-merge-ready. For interrupted reviews, changed heads, or escalation, use the
-[recovery guide](plugins/review-suite/skills/review/references/recovery.md) and
-the launcher's emitted action.
+Requires Python 3.14.7+, Git, Node.js (for `npx`) and an authenticated Codex CLI. GitHub review also
+needs an authenticated `gh` CLI.
 
-To skip Arena for one new cycle, pass `--no-arena`. To set or clear the
-preference for future cycles in one repository, use `--set-no-arena` or
-`--clear-no-arena` with `--cd <repo-root>`; existing cycles keep their frozen
-plan.
+## Use
 
-Claude review costs use the CLI's API-equivalent estimate, including cache reads
-and writes; they are not subscription charges. If the CLI omits pricing, supported
-Claude 5.5 models use [published list rates](https://claude.com/pricing) with the
-[subscription default of one-hour cache writes](https://code.claude.com/docs/en/prompt-caching).
-This fallback is an estimate: usage credits, cache TTL overrides, and fast mode
-can change the rate. Historical summaries can reprice missing costs from saved
-usage; original review records remain unchanged.
+Tell your agent:
+
+> Use review suite to get the PR merge ready
+
+The agent picks the lane from the change's risk.
+
+Note, if reviews take too long, there is a circuit breaker.
 
 ## Settings
 
-[Shipped defaults](plugins/review-suite/default_settings.toml) apply unless
-overridden in `~/.agents/state/review-suite/settings.toml`. This state path is
-used for both installation routes. `REVIEW_SUITE_STATE_DIR` selects an independent
-state directory (like `--state-dir`) without importing history. The first run
-creates a comment-only settings file, so future updates can change defaults you
-have not pinned.
-
-Existing state moves automatically from `$CODEX_HOME/state/review-suite` (default
-`~/.codex/state/review-suite`); the original default is also checked when
-`CODEX_HOME` is set. Active writers defer the move until a later run. The old path
-becomes a link (a Windows junction), so older installs and recorded paths keep
-working. Same-volume moves use rename; cross-volume moves verify every copied
-file before retiring the source. Backups inside the directory move with it.
-If both locations already contain state, the new location wins; the old one is
-left intact and reported once. No directories are merged.
-If migration rolls back, the original remains in use until the move can safely
-finish; any independently changed migration copy is preserved and reported.
-
-Explicit scratch homes such as `review-suite-fresh-wp-*` and the empty
-`review-suite-safe-runtime` directory are not default state roots and are left
-alone. A scratch home's nested state migrates only when running with that home.
-Marketplace runtime builds remain under `$CODEX_HOME/plugin-runtimes/review-suite`;
-they have a separate lease and cleanup lifecycle.
-
-For example, to override just the plan review's reasoning:
+Override the [shipped defaults](plugins/review-suite/default_settings.toml) in
+`~/.agents/state/review-suite/settings.toml`:
 
 ```toml
 [jobs.plan]
 reasoning = "high"
 ```
 
-The jobs are `plan`, `deslop`, `followup`, `base_signoff`, and `deep_signoff`.
-Each can override `model`, `reasoning`, and `service_tier`; omitted values
-inherit the base or deep defaults. Review history and ratings live beside the
-settings file. If only legacy `config.json` exists, the first run migrates its
-non-model settings and keeps the original as a backup.
+Jobs are `plan`, `deslop`, `followup`, `base_signoff` and `deep_signoff`; each
+can set `model`, `reasoning` and `service_tier`.
 
-On first load, existing `settings.toml` overrides are renamed automatically.
-The original is saved beside it as `settings-before-base-deep-<id>.toml`; later
-loads leave the migrated settings alone.
+## Arena
 
-Existing review history and saved snapshots use the offline migration below.
-Stop review, daemon, tray, and API writers first:
-
-```powershell
-python plugins/review-suite/scripts/migrate_review_names.py --state-dir "$HOME/.agents/state/review-suite"
-python plugins/review-suite/scripts/migrate_review_names.py --state-dir "$HOME/.agents/state/review-suite" --apply
-```
-
-The first command previews changes. The second backs up changed files under
-`base-deep-backup-<timestamp>` in the state directory, writes a `manifest.json`
-with original paths, then applies changes. Add `--snapshot <path>` for each saved
-API snapshot or tray last-round file that should migrate too. Run the migration
-separately for every state directory you use, including custom `--state-dir` paths.
-The active CLI accepts `fast`, `base`, and `deep`; `normal` is no longer accepted.
+The arena pits whichever models you want against each other.
+This way you can benchmark the models that fit you best.
+A provider is missing? Fork it yourself, they are very easy to add! Default-off.
 
 ## Development
 
-Development requires `uv` 0.12.17+ and [just](https://just.systems/man/en/installation.html) 1.56+.
-Run setup once per clone to install the locked development dependencies and enable
-the workflow hook:
-
-```powershell
-just setup
-```
-
-Setup is safe to repeat. Run `just` to list the available commands:
-
-| Command | Purpose |
-| --- | --- |
-| `just test` | Run the full test suite |
-| `just lint` | Check Python lint and syntax |
-| `just workflow` | Regenerate the workflow diagram |
-| `just workflow-check` | Check for a stale workflow diagram |
-| `just check` | Run lint, workflow verification, and the full test suite |
-
-CI runs the same lint, workflow, and test recipes on Linux, Windows, and macOS.
-
-The pre-commit hook runs `uv run --locked python scripts/generate-workflow.py`
-when staged changes affect the shipped model/settings files or workflow generation
-code, then stages `docs/review-workflow.md`. Other commits skip it. If workflow
-inputs or the diagram have unstaged edits, stage or stash those edits first so
-the generated diagram matches the commit. CI still checks for stale output.
-
-For focused validation, run `uv run --locked pytest` with the tests relevant to
-your change. After changing
-plugin files, `scripts/sync-installed-cache.ps1` refreshes the local marketplace
-cache and source mirror. Marketplace launchers copy the installed plugin to
-`~/.codex/plugin-runtimes/review-suite/` before running, so Windows file locks
-do not block marketplace updates. Skills CLI installs run from their own skill
-directory.
+Run `just setup` once per clone, then `just check`.

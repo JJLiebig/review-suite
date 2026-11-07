@@ -36,3 +36,25 @@ GitHub fixes do not restart cleanup.
 Earlier review passes, plan review, follow-up, and cleanup use `base`. The
 final correctness signoff in deep mode uses `deep`, unless overridden per job.
 See [model settings](../README.md#settings) and the [Arena maintainer guide](arena.md).
+
+## Mode diagram
+
+The README's mode diagram is drawn by hand from
+[its source](review-workflow.workflow.json), unlike the generated text workflow.
+Update the source and redraw it whenever shipped models or steps change.
+Use a temporary checkout of
+[Archify v3.2.0](https://github.com/tt-a1i/archify/releases/tag/v3.2.0)
+(commit `208acba8d412335185b2056fedf54b3405df43fb`), set
+`meta.repository.revision` in the source to the commit it describes, and run
+from the repository root with `<tmp>` outside the repository:
+
+```powershell
+$env:ARCHIFY_UPDATE_CHECK_DISABLED = '1'
+node <archify>/archify/bin/archify.mjs finalize workflow docs/review-workflow.workflow.json <tmp>/review-workflow.html --repo-root . --quality showcase --json
+node scripts/export-workflow-svg.mjs <tmp>/review-workflow.html docs/review-workflow-dark.svg docs/review-workflow-light.svg --loop f_sign,b_sign,d_base,d_sign
+```
+
+All four Archify gates must pass. The export needs Google Chrome; set `CHROME`
+to its path if it is not in the default Windows location. Check both SVGs in a
+browser before committing. `--loop` draws the repeat arrow under each signoff,
+which Archify cannot route itself.
