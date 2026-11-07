@@ -35,9 +35,11 @@ tokens. Estimates use these standard short-context rates; long-context and
 speed-tier pricing can differ.
 
 GPT-6.2 Astra is staged as `gpt-6.2-astra`, with low/medium in base reviews
-and low/medium/high/xhigh/max in deep reviews. The model ID and reasoning
-levels still need release confirmation. Pricing is deliberately omitted until
-published; estimates remain unknown rather than reusing GPT-6 Astra rates.
+and low/medium/high/xhigh/max in deep reviews. GPT-6.2 Sol is staged as
+`gpt-6.2-sol`, with low/medium in base reviews and medium/high/xhigh/max in
+deep reviews. Both model IDs and their reasoning levels still need release
+confirmation. Pricing is deliberately omitted until published; estimates remain
+unknown rather than reusing earlier rates.
 
 DeepSeek V4.1 Flash 1017 uses separate `deepseek-v4.1-flash-1017-*` variants
 at low/high/max effort (low is base-only). The earlier variants are disabled;
@@ -61,7 +63,7 @@ added to a released lineage list. A snapshot that reuses an API route still gets
 its own `model_id`, as the two DeepSeek Flash revisions do. Models without a
 declared lineage can be retired explicitly.
 
-The shipped policy retires GPT-5.6 Sol because GPT-6 Sol and GPT-6.1 Sol follow it.
+The shipped policy retires GPT-5.6 Sol and GPT-6 Sol because GPT-6.1 Sol and GPT-6.2 Sol follow them.
 GPT-5.6 Terra and legacy GPT-5.5 and GPT-5.4 models are explicitly retired.
 GPT-5.6 Luna remains an eligible predecessor.
 Other disabled states, task limits, reasoning settings, and ordinary signoff
