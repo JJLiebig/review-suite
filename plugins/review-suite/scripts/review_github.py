@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from contextlib import ExitStack
+from dataclasses import dataclass
 import json
 import re
 import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -42,13 +46,17 @@ DEFAULT_BOT_LOGIN = "chatgpt-codex-connector[bot]"
 DEFAULT_REQUEST_BODY = "@codex review"
 REVIEW_SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
 EXISTING_RESPONSE_SETTLE_SECONDS = 20
-DEFAULT_POLL_SECONDS = 3
+DEFAULT_POLL_SECONDS = 15
 DEFAULT_TIMEOUT_MINUTES = 30
 DEFAULT_STATUS_INTERVAL_SECONDS = 60
 DEFAULT_RE_REQUEST_AFTER_SECONDS = 120
 DEFAULT_MAX_REQUEST_ATTEMPTS = 2
 DEFAULT_SETTLE_SECONDS = 20
 GH_CWD: str | None = None
+GITHUB_API_URL = "https://api.github.com"
+GITHUB_HTTP_TIMEOUT_SECONDS = 30
+RATE_LIMIT_BACKOFF_START_SECONDS = 30
+RATE_LIMIT_BACKOFF_CAP_SECONDS = 15 * 60
 REVIEWED_COMMIT_RE = re.compile(
     r"\bReviewed commit:\s*`?([0-9a-f]{7,40})`?", re.IGNORECASE
 )
@@ -103,11 +111,292 @@ def emit_state_change(message: str) -> None:
     emit_progress(message)
 
 
+class GitHubRateLimited(RuntimeError):
+    """GitHub asked for a pause that ends after the review deadline."""
+
+
+@dataclass
+class GitHubSession:
+    token: str | None = None
+    paused_until: float = 0.0
+    backoff_seconds: float = RATE_LIMIT_BACKOFF_START_SECONDS
+    deadline: float | None = None
+
+
+GITHUB = GitHubSession()
+
+
+def read_gh_token() -> str:
+    token = run_gh(["auth", "token"]).strip()
+    if not token:
+        raise RuntimeError("gh auth token returned no token; run gh auth login")
+    return token
+
+
+def http_send(
+    method: str, url: str, headers: dict[str, str], data: bytes | None
+) -> tuple[int, dict[str, str], bytes]:
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(
+            request, timeout=GITHUB_HTTP_TIMEOUT_SECONDS
+        ) as response:
+            status, raw_headers, raw = response.status, response.headers, response.read()
+    except urllib.error.HTTPError as exc:
+        status, raw_headers, raw = exc.code, exc.headers, exc.read()
+    except (urllib.error.URLError, TimeoutError) as exc:
+        reason = getattr(exc, "reason", None) or exc
+        raise RuntimeError(f"GitHub {method} {url} failed: {reason}") from None
+    return status, {key.lower(): value for key, value in raw_headers.items()}, raw
+
+
+def format_wait(seconds: float) -> str:
+    minutes, remainder = divmod(max(int(seconds + 0.999), 1), 60)
+    if not minutes:
+        return f"{remainder}s"
+    return f"{minutes}m {remainder}s" if remainder else f"{minutes}m"
+
+
+def pause_github(seconds: float) -> None:
+    GITHUB.paused_until = max(GITHUB.paused_until, time.time() + max(seconds, 0))
+
+
+def wait_for_github() -> None:
+    wait = GITHUB.paused_until - time.time()
+    if wait <= 0:
+        return
+    if GITHUB.deadline is not None and GITHUB.paused_until > GITHUB.deadline:
+        resume_at = datetime.fromtimestamp(GITHUB.paused_until, timezone.utc)
+        raise GitHubRateLimited(
+            "GitHub rate limit lasts past the review timeout; GitHub accepts requests again at "
+            + resume_at.isoformat(timespec="seconds").replace("+00:00", "Z")
+        )
+    emit_progress(
+        f"GitHub rate limit reached; waiting {format_wait(wait)} before the next request"
+    )
+    time.sleep(wait)
+
+
+def error_messages(payload: Any) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    messages = [str(payload.get("message") or "")]
+    messages.extend(
+        str(error.get("message") or "")
+        for error in payload.get("errors") or []
+        if isinstance(error, dict)
+    )
+    return [message for message in messages if message]
+
+
+def rate_limit_wait(
+    status: int, headers: Mapping[str, str], payload: Any
+) -> float | None:
+    remaining = headers.get("x-ratelimit-remaining")
+    retry_after = headers.get("retry-after")
+    graphql_limited = isinstance(payload, dict) and any(
+        isinstance(error, dict) and error.get("type") == "RATE_LIMITED"
+        for error in payload.get("errors") or []
+    )
+    limited = (
+        status == 429
+        or graphql_limited
+        or (
+            status == 403
+            and (
+                remaining == "0"
+                or bool(retry_after)
+                or any("rate limit" in m.lower() for m in error_messages(payload))
+            )
+        )
+    )
+    if not limited:
+        return None
+    try:
+        if retry_after:
+            return max(float(retry_after), 1.0)
+    except ValueError:
+        pass
+    reset = headers.get("x-ratelimit-reset") or ""
+    if remaining == "0" and reset.isdigit():
+        return max(int(reset) - time.time(), 0) + 1
+    wait = GITHUB.backoff_seconds
+    GITHUB.backoff_seconds = min(wait * 2, RATE_LIMIT_BACKOFF_CAP_SECONDS)
+    return wait
+
+
+def github_request(method: str, path: str, *, body: Any = None) -> Any:
+    url = f"{GITHUB_API_URL}/{path}"
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    token_refreshed = False
+    while True:
+        wait_for_github()
+        if GITHUB.token is None:
+            GITHUB.token = read_gh_token()
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {GITHUB.token}",
+            "User-Agent": "review-suite",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        status, response_headers, raw = http_send(method, url, headers, data)
+        try:
+            payload = json.loads(raw) if raw.strip() else None
+        except ValueError:
+            payload = None
+        if status == 401 and not token_refreshed:
+            GITHUB.token = None
+            token_refreshed = True
+            continue
+        wait = rate_limit_wait(status, response_headers, payload)
+        if wait is not None:
+            pause_github(wait)
+            continue
+        if status >= 400:
+            detail = "; ".join(error_messages(payload)) or raw.decode(
+                "utf-8", errors="replace"
+            ).strip()[:200]
+            raise RuntimeError(
+                f"GitHub {method} {path} failed with HTTP {status}: {detail}"
+            )
+        GITHUB.backoff_seconds = RATE_LIMIT_BACKOFF_START_SECONDS
+        reset = response_headers.get("x-ratelimit-reset") or ""
+        if response_headers.get("x-ratelimit-remaining") == "0" and reset.isdigit():
+            pause_github(int(reset) - time.time() + 1)
+        return payload
+
+
+def github_graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    payload = github_request(
+        "POST", "graphql", body={"query": query, "variables": variables}
+    )
+    messages = error_messages({"errors": (payload or {}).get("errors")})
+    if messages:
+        raise RuntimeError(f"GitHub GraphQL query failed: {'; '.join(messages)}")
+    return dict((payload or {}).get("data") or {})
+
+
+# Everything one poll needs, in one request: the PR head, the issue comments
+# (review requests and bot replies), the bot's reviews with their inline
+# comments, and the bot reactions on the current review request. The newest
+# items are read because responses always arrive after the request they answer.
+PR_SNAPSHOT_QUERY = """
+query($owner: String!, $repo: String!, $number: Int!, $bot: String!, $anchor: ID!, $hasAnchor: Boolean!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      headRefOid
+      comments(last: 100) {
+        nodes { id databaseId body createdAt updatedAt url author { __typename login } }
+      }
+      reviews(author: $bot, last: 50) {
+        nodes {
+          databaseId body state submittedAt url commit { oid } author { __typename login }
+          comments(first: 100) {
+            nodes { databaseId body createdAt updatedAt path line url commit { oid } author { __typename login } }
+          }
+        }
+      }
+    }
+  }
+  anchor: node(id: $anchor) @include(if: $hasAnchor) {
+    ... on Reactable {
+      eyes: reactions(content: EYES, first: 100) { nodes { user { login } } }
+      plusOne: reactions(content: THUMBS_UP, first: 100) { nodes { user { login } } }
+    }
+  }
+}
+"""
+
+
+def graphql_nodes(connection: Any) -> list[dict[str, Any]]:
+    return [node for node in (connection or {}).get("nodes") or [] if node]
+
+
+def graphql_login(actor: Any) -> str:
+    # GraphQL drops the "[bot]" suffix that REST logins and --bot-login carry.
+    login = str((actor or {}).get("login") or "")
+    return f"{login}[bot]" if login and actor.get("__typename") == "Bot" else login
+
+
+def snapshot_comment(node: dict[str, Any]) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "id": node.get("databaseId"),
+        "node_id": node.get("id"),
+        "body": node.get("body") or "",
+        "user": {"login": graphql_login(node.get("author"))},
+        "created_at": node.get("createdAt"),
+        "updated_at": node.get("updatedAt"),
+        "html_url": node.get("url"),
+    }
+    if "path" in node:
+        item["path"] = node.get("path")
+        item["line"] = node.get("line")
+        item["commit_id"] = (node.get("commit") or {}).get("oid")
+    return item
+
+
+def snapshot_review(node: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": node.get("databaseId"),
+        "body": node.get("body") or "",
+        "user": {"login": graphql_login(node.get("author"))},
+        "state": node.get("state"),
+        "submitted_at": node.get("submittedAt"),
+        "html_url": node.get("url"),
+        "commit_id": (node.get("commit") or {}).get("oid"),
+    }
+
+
+def fetch_pr_snapshot(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    *,
+    bot_login: str,
+    anchor_node_id: str | None = None,
+) -> dict[str, Any]:
+    data = github_graphql(
+        PR_SNAPSHOT_QUERY,
+        {
+            "owner": owner,
+            "repo": repo,
+            "number": pr_number,
+            "bot": bot_login,
+            "anchor": anchor_node_id or "",
+            "hasAnchor": bool(anchor_node_id),
+        },
+    )
+    pr = (data.get("repository") or {}).get("pullRequest")
+    if not pr:
+        raise RuntimeError(f"pull request {owner}/{repo}#{pr_number} was not found")
+    reviews = graphql_nodes(pr.get("reviews"))
+    anchor = data.get("anchor") or {}
+    return {
+        "head_sha": str(pr.get("headRefOid") or ""),
+        "issue_comments": [
+            snapshot_comment(node) for node in graphql_nodes(pr.get("comments"))
+        ],
+        "reviews": [snapshot_review(node) for node in reviews],
+        "review_comments": [
+            snapshot_comment(comment)
+            for review in reviews
+            for comment in graphql_nodes(review.get("comments"))
+        ],
+        "anchor_reactions": [
+            {"content": content, "user": {"login": (node.get("user") or {}).get("login")}}
+            for key, content in (("eyes", "eyes"), ("plusOne", "+1"))
+            for node in graphql_nodes(anchor.get(key))
+        ],
+    }
+
+
 def get_pr_context(
     owner: str | None, repo: str | None, pr_number: int | None
 ) -> dict[str, Any]:
     if owner and repo and pr_number:
-        pr = run_gh_json(["api", f"repos/{owner}/{repo}/pulls/{pr_number}"])
+        pr = github_request("GET", f"repos/{owner}/{repo}/pulls/{pr_number}")
         return {
             "owner": owner,
             "repo": repo,
@@ -134,62 +423,14 @@ def get_pr_context(
     }
 
 
-def get_pr_head_sha(owner: str, repo: str, pr_number: int) -> str:
-    pr = run_gh_json(["api", f"repos/{owner}/{repo}/pulls/{pr_number}"])
-    return str(pr["head"]["sha"])
-
-
 def get_commit_timestamp(owner: str, repo: str, commit_sha: str) -> datetime | None:
     if not commit_sha:
         return None
-    payload = run_gh_json(["api", f"repos/{owner}/{repo}/commits/{commit_sha}"])
+    payload = github_request("GET", f"repos/{owner}/{repo}/commits/{commit_sha}")
     raw = (((payload or {}).get("commit") or {}).get("committer") or {}).get(
         "date"
     ) or (((payload or {}).get("commit") or {}).get("author") or {}).get("date")
     return parse_iso(str(raw)) if raw else None
-
-
-def get_issue_comments(owner: str, repo: str, pr_number: int) -> list[dict[str, Any]]:
-    return list(
-        run_gh_json(
-            ["api", f"repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100"]
-        )
-        or []
-    )
-
-
-def get_review_comments(owner: str, repo: str, pr_number: int) -> list[dict[str, Any]]:
-    return list(
-        run_gh_json(
-            ["api", f"repos/{owner}/{repo}/pulls/{pr_number}/comments?per_page=100"]
-        )
-        or []
-    )
-
-
-def get_reviews(owner: str, repo: str, pr_number: int) -> list[dict[str, Any]]:
-    return list(
-        run_gh_json(
-            ["api", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews?per_page=100"]
-        )
-        or []
-    )
-
-
-def get_comment_reactions(
-    owner: str, repo: str, comment_id: str
-) -> list[dict[str, Any]]:
-    return list(
-        run_gh_json(
-            [
-                "api",
-                "-H",
-                "Accept: application/vnd.github+json",
-                f"repos/{owner}/{repo}/issues/comments/{comment_id}/reactions?per_page=100",
-            ]
-        )
-        or []
-    )
 
 
 def item_timestamp(item: dict[str, Any]) -> datetime | None:
@@ -225,36 +466,6 @@ def request_body_matches(
     normalized_expected = normalize_request_body(expected_prefix)
     normalized_request = normalize_request_body(request_body)
     return normalized_request == normalized_expected
-
-
-def latest_review_request(
-    issue_comments: list[dict[str, Any]],
-    *,
-    bot_login: str,
-    since: datetime,
-    body_prefix: str,
-    head_sha: str,
-) -> dict[str, Any] | None:
-    matching = []
-    for item in issue_comments:
-        body = str(item.get("body") or "")
-        author = str((item.get("user") or {}).get("login") or "")
-        created_at = item_timestamp(item)
-        if not created_at:
-            continue
-        if author == bot_login:
-            continue
-        if not request_body_matches(
-            request_body=body, expected_prefix=body_prefix, head_sha=head_sha
-        ):
-            continue
-        if created_at < since:
-            continue
-        matching.append(item)
-    if not matching:
-        return None
-    matching.sort(key=lambda item: item_timestamp(item) or since)
-    return matching[-1]
 
 
 def commit_ids_match(left: str, right: str) -> bool:
@@ -321,71 +532,34 @@ def post_request(
     pr_number: int,
     body: str,
     head_sha: str,
-    bot_login: str,
-    anchor_window_seconds: int = 5,
 ) -> dict[str, Any]:
-    started_at = utc_now()
-    request_body = build_request_body(body, head_sha)
-    run_gh(
-        [
-            "pr",
-            "comment",
-            str(pr_number),
-            "--repo",
-            f"{owner}/{repo}",
-            "--body",
-            request_body,
-        ]
+    comment = github_request(
+        "POST",
+        f"repos/{owner}/{repo}/issues/{pr_number}/comments",
+        body={"body": build_request_body(body, head_sha)},
     )
-    issue_comments = get_issue_comments(owner, repo, pr_number)
-    anchor = latest_review_request(
-        issue_comments,
-        bot_login=bot_login,
-        since=started_at - timedelta(seconds=anchor_window_seconds),
-        body_prefix=body,
-        head_sha=head_sha,
-    )
-    if not anchor:
-        raise RuntimeError(
-            "posted @codex review but could not resolve the matching request comment"
-        )
-    requested_at = item_timestamp(anchor) or utc_now()
+    requested_at = item_timestamp(comment) or utc_now()
     return {
-        "request_comment_id": str(anchor["id"]),
-        "request_comment_url": item_url(anchor),
+        "request_comment_id": str(comment["id"]),
+        "request_comment_node_id": str(comment["node_id"]),
+        "request_comment_url": item_url(comment),
         "requested_at": requested_at.isoformat().replace("+00:00", "Z"),
     }
 
 
-def has_eyes_reaction(
-    *, owner: str, repo: str, comment_id: str, bot_login: str
+def anchor_has_reaction(
+    snapshot: dict[str, Any], *, content: str, bot_login: str
 ) -> bool:
-    for reaction in get_comment_reactions(owner, repo, comment_id):
-        if str(reaction.get("content") or "") != "eyes":
-            continue
-        if str((reaction.get("user") or {}).get("login") or "") != bot_login:
-            continue
-        return True
-    return False
-
-
-def has_plus_one_reaction(
-    *, owner: str, repo: str, comment_id: str, bot_login: str
-) -> bool:
-    for reaction in get_comment_reactions(owner, repo, comment_id):
-        if str(reaction.get("content") or "") != "+1":
-            continue
-        if str((reaction.get("user") or {}).get("login") or "") != bot_login:
-            continue
-        return True
-    return False
+    return any(
+        str(reaction.get("content") or "") == content
+        and str((reaction.get("user") or {}).get("login") or "") == bot_login
+        for reaction in snapshot["anchor_reactions"]
+    )
 
 
 def collect_cycle_items(
     *,
-    owner: str,
-    repo: str,
-    pr_number: int,
+    snapshot: dict[str, Any],
     bot_login: str,
     head_sha: str,
     anchor_since: datetime,
@@ -393,21 +567,20 @@ def collect_cycle_items(
 ) -> list[dict[str, Any]]:
     if seen is None:
         seen = set()
-    issue_comments = get_issue_comments(owner, repo, pr_number)
     bot_issue_comments = [
         item
-        for item in issue_comments
+        for item in snapshot["issue_comments"]
         if str((item.get("user") or {}).get("login") or "") == bot_login
         and not str(item.get("body") or "").startswith(REVIEW_SUMMARY_MARKER)
     ]
     review_comments = [
         item
-        for item in get_review_comments(owner, repo, pr_number)
+        for item in snapshot["review_comments"]
         if str((item.get("user") or {}).get("login") or "") == bot_login
     ]
     reviews = [
         item
-        for item in get_reviews(owner, repo, pr_number)
+        for item in snapshot["reviews"]
         if str((item.get("user") or {}).get("login") or "") == bot_login
     ]
     items: list[dict[str, Any]] = []
@@ -599,9 +772,9 @@ def inspect_existing_cycle(
     bot_login: str,
     head_sha: str,
 ) -> dict[str, Any] | None:
-    issue_comments = get_issue_comments(owner, repo, pr_number)
+    snapshot = fetch_pr_snapshot(owner, repo, pr_number, bot_login=bot_login)
     requests = []
-    for item in issue_comments:
+    for item in snapshot["issue_comments"]:
         author = str((item.get("user") or {}).get("login") or "")
         created_at = item_timestamp(item)
         if author == bot_login or not created_at:
@@ -619,24 +792,31 @@ def inspect_existing_cycle(
     request = requests[0]
     anchor_since = item_timestamp(request) or utc_now()
     anchor_id = str(request["id"])
+    anchor_node_id = str(request["node_id"])
+    snapshot = fetch_pr_snapshot(
+        owner, repo, pr_number, bot_login=bot_login, anchor_node_id=anchor_node_id
+    )
     head_commit_at = get_commit_timestamp(owner, repo, head_sha)
     items = collect_cycle_items(
-        owner=owner,
-        repo=repo,
-        pr_number=pr_number,
+        snapshot=snapshot,
         bot_login=bot_login,
         head_sha=head_sha,
         anchor_since=anchor_since,
     )
+    found = {
+        "request_comment_id": anchor_id,
+        "request_comment_node_id": anchor_node_id,
+        "request_comment_url": item_url(request),
+        "requested_at": anchor_since.isoformat().replace("+00:00", "Z"),
+    }
+    has_eyes = anchor_has_reaction(snapshot, content="eyes", bot_login=bot_login)
     if items:
         response_coverage_at = (
             cycle_coverage_timestamp(items, head_sha=head_sha) or anchor_since
         )
         if head_commit_at and head_commit_at > response_coverage_at:
             return None
-        if has_eyes_reaction(
-            owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login
-        ):
+        if has_eyes:
             has_child_comments = any(
                 str(item.get("kind") or "") == "review_comment" for item in items
             )
@@ -651,53 +831,23 @@ def inspect_existing_cycle(
                 not has_child_comments
                 and response_age_seconds < EXISTING_RESPONSE_SETTLE_SECONDS
             ):
-                return {
-                    "reason": "existing_request_has_eyes",
-                    "request_comment_id": anchor_id,
-                    "request_comment_url": item_url(request),
-                    "requested_at": anchor_since.isoformat().replace("+00:00", "Z"),
-                    "items": [],
-                }
-        return {
-            "reason": "existing_request_has_response",
-            "request_comment_id": anchor_id,
-            "request_comment_url": item_url(request),
-            "requested_at": anchor_since.isoformat().replace("+00:00", "Z"),
-            "items": items,
-        }
-    if has_eyes_reaction(
-        owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login
-    ):
+                return {"reason": "existing_request_has_eyes", **found, "items": []}
+        return {"reason": "existing_request_has_response", **found, "items": items}
+    if has_eyes:
         if head_commit_at and head_commit_at > anchor_since:
             return None
-        return {
-            "reason": "existing_request_has_eyes",
-            "request_comment_id": anchor_id,
-            "request_comment_url": item_url(request),
-            "requested_at": anchor_since.isoformat().replace("+00:00", "Z"),
-            "items": [],
-        }
-    if has_plus_one_reaction(
-        owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login
-    ):
+        return {"reason": "existing_request_has_eyes", **found, "items": []}
+    if anchor_has_reaction(snapshot, content="+1", bot_login=bot_login):
         if head_commit_at and head_commit_at > anchor_since:
             return None
         return {
             "reason": "existing_request_acknowledged_without_body",
-            "request_comment_id": anchor_id,
-            "request_comment_url": item_url(request),
-            "requested_at": anchor_since.isoformat().replace("+00:00", "Z"),
+            **found,
             "items": [],
         }
     if head_commit_at and head_commit_at > anchor_since:
         return None
-    return {
-        "reason": "existing_request_still_active",
-        "request_comment_id": anchor_id,
-        "request_comment_url": item_url(request),
-        "requested_at": anchor_since.isoformat().replace("+00:00", "Z"),
-        "items": [],
-    }
+    return {"reason": "existing_request_still_active", **found, "items": []}
 
 
 def run_review_cycle(
@@ -720,6 +870,7 @@ def run_review_cycle(
         "GitHub review can take up to 30m. Wait for wrapper output before acting."
     )
     deadline = utc_now() + timedelta(minutes=timeout_minutes)
+    GITHUB.deadline = deadline.timestamp()
     seen: set[str] = set()
     request_attempts = 0
     eyes_confirmed = False
@@ -738,6 +889,7 @@ def run_review_cycle(
     )
     if existing_cycle:
         anchor_id = existing_cycle["request_comment_id"]
+        anchor_node_id = existing_cycle["request_comment_node_id"]
         request_comment_url = str(existing_cycle.get("request_comment_url") or "")
         anchor_since = parse_iso(existing_cycle["requested_at"])
         if existing_cycle["reason"] == "existing_request_has_eyes":
@@ -796,27 +948,37 @@ def run_review_cycle(
             pr_number=pr_number,
             body=body,
             head_sha=context["head_sha"],
-            bot_login=bot_login,
         )
         request_attempts += 1
         anchor_id = request["request_comment_id"]
+        anchor_node_id = request["request_comment_node_id"]
         request_comment_url = request["request_comment_url"]
         anchor_since = parse_iso(request["requested_at"])
         emit_state_change(f"review request posted (attempt {request_attempts})")
 
+    head_sha = context["head_sha"]
     while utc_now() < deadline:
         now = utc_now()
-        head_sha = get_pr_head_sha(owner, repo, pr_number)
-        if not eyes_confirmed and has_eyes_reaction(
-            owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login
+        try:
+            snapshot = fetch_pr_snapshot(
+                owner,
+                repo,
+                pr_number,
+                bot_login=bot_login,
+                anchor_node_id=anchor_node_id,
+            )
+        except GitHubRateLimited as exc:
+            emit_state_change(str(exc))
+            break
+        head_sha = snapshot["head_sha"]
+        if not eyes_confirmed and anchor_has_reaction(
+            snapshot, content="eyes", bot_login=bot_login
         ):
             eyes_confirmed = True
             emit_state_change("review in progress")
 
         items = collect_cycle_items(
-            owner=owner,
-            repo=repo,
-            pr_number=pr_number,
+            snapshot=snapshot,
             bot_login=bot_login,
             head_sha=head_sha,
             anchor_since=anchor_since,
@@ -845,8 +1007,8 @@ def run_review_cycle(
                     "items": collected_items,
                 }
 
-        if not collected_items and has_plus_one_reaction(
-            owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login
+        if not collected_items and anchor_has_reaction(
+            snapshot, content="+1", bot_login=bot_login
         ):
             emit_state_change("review completed without response body")
             return {
@@ -896,6 +1058,7 @@ def run_review_cycle(
             )
             if existing_cycle:
                 anchor_id = existing_cycle["request_comment_id"]
+                anchor_node_id = existing_cycle["request_comment_node_id"]
                 request_comment_url = str(
                     existing_cycle.get("request_comment_url") or ""
                 )
@@ -960,10 +1123,10 @@ def run_review_cycle(
                 pr_number=pr_number,
                 body=body,
                 head_sha=head_sha,
-                bot_login=bot_login,
             )
             request_attempts += 1
             anchor_id = request["request_comment_id"]
+            anchor_node_id = request["request_comment_node_id"]
             request_comment_url = request["request_comment_url"]
             anchor_since = parse_iso(request["requested_at"])
             emit_state_change(f"review request reposted (attempt {request_attempts})")
@@ -978,7 +1141,7 @@ def run_review_cycle(
         "repo": repo,
         "pr_number": pr_number,
         "url": context["url"],
-        "head_sha": get_pr_head_sha(owner, repo, pr_number),
+        "head_sha": head_sha,
         "request_attempts": request_attempts,
         "eyes_confirmed": eyes_confirmed,
         "request_comment_id": anchor_id,
