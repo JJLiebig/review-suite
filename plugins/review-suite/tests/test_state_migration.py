@@ -19,7 +19,7 @@ from review_suite_core.orchestrator_store import orchestrator_store_lock
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
+def home(tmp_path, monkeypatch, review_process_lock):
     for key in ("HOME", "USERPROFILE"):
         monkeypatch.setenv(key, str(tmp_path))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))

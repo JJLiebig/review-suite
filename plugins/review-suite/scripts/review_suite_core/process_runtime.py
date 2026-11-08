@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from review_suite_runtime_bootstrap import lease_child_process, release_child_process
+
 IS_WINDOWS = os.name == "nt"
 POSIX_SIGTERM = 15
 POSIX_SIGKILL = 9
@@ -61,6 +63,8 @@ def launch_captured_child_process(
             encoding="utf-8",
             errors="replace",
         )
+        # Detached reviewer runs can outlive this process.
+        lease_child_process(proc.pid)
         if stdin_text and proc.stdin is not None:
             proc.stdin.write(stdin_text)
             proc.stdin.close()
@@ -177,6 +181,7 @@ def wait_for_captured_child_process(
             last_progress = now
         time.sleep(max(0.0, poll_interval_seconds))
     returncode = process.wait()
+    release_child_process(process.pid)
     return CapturedChildWaitResult(
         returncode=returncode,
         timed_out=timed_out,
