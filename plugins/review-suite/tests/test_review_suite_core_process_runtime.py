@@ -31,6 +31,7 @@ def test_launch_captured_child_process_starts_clock_before_stdin_write(
             events.append("close")
 
     class FakeProcess:
+        pid = 42
         stdin = FakeStdin()
 
     def fake_monotonic() -> float:
