@@ -152,7 +152,7 @@ def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
     return public or payload
 
 
-def _json_status_payload(payload: dict[str, object]) -> dict[str, object]:
+def json_status_payload(payload: dict[str, object]) -> dict[str, object]:
     public = _public_status_payload(payload)
     public.pop("Action", None)
     for key in ("base", "branch", "head", "mode"):
@@ -163,6 +163,18 @@ def _json_status_payload(payload: dict[str, object]) -> dict[str, object]:
         if key in payload:
             public[key] = payload[key]
     return public
+
+
+def route_convergence(
+    payload: dict[str, object], convergence: dict[str, object]
+) -> None:
+    """Report a non-active convergence checkpoint as the cycle's status."""
+    if convergence.get("status") == "DECISION_REQUIRED":
+        payload["status"] = "decision_required"
+        payload["next_action"] = "caller_decision"
+    else:
+        payload["status"] = str(convergence.get("decision") or "decided").lower()
+        payload["next_action"] = "none"
 
 
 def _review_command(public_id: str, *, extra: tuple[str, ...] = ()) -> str:
@@ -814,12 +826,7 @@ def _orchestrator_status_override(
     )
     payload.update(summary)
     if convergence.get("status") != "ACTIVE":
-        if convergence.get("status") == "DECISION_REQUIRED":
-            payload["status"] = "decision_required"
-            payload["next_action"] = "caller_decision"
-        else:
-            payload["status"] = str(convergence.get("decision") or "decided").lower()
-            payload["next_action"] = "none"
+        route_convergence(payload, convergence)
     elif summary.get("review_ladder") == "invalidated":
         payload["status"] = "stale"
         payload["next_action"] = "rerun_review"
@@ -951,7 +958,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     if action is not None:
         payload["Action"] = action
     if bool(args.json):
-        print(json.dumps(_json_status_payload(payload), sort_keys=True))
+        print(json.dumps(json_status_payload(payload), sort_keys=True))
     else:
         emit_toon(payload if bool(args.verbose) else _public_status_payload(payload))
     return 0

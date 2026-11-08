@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -59,7 +60,9 @@ from review_suite_core.orchestrator_profiles import (
 from review_suite_core.review_backend import split_review_backend_model
 from review_suite_core.review_branch_status import (
     cmd_status as cmd_branch_status,
+    json_status_payload,
     review_status_details,
+    route_convergence,
 )
 from review_suite_core.orchestrator_runner import run_one_expensive_step
 from review_suite_core.orchestrator_state import (
@@ -114,12 +117,15 @@ from review_suite_core.orchestrator_state import (
     record_convergence_decision,
 )
 from review_suite_core.orchestrator_store import (
+    CALLER_PUBLIC_ID_RE,
+    create_cycle_with_public_id,
     cycles_dir,
     load_cycle_by_key,
     load_cycle_by_public_id,
     orchestrator_store_lock,
     reserve_cycle_successor,
     save_cycle,
+    UnknownReviewIdError,
 )
 from review_suite_local import (
     PUBLIC_REVIEWER_LABELS,
@@ -238,7 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print sanitized JSON for --status.",
+        help="Print sanitized JSON for --status or --show-status.",
     )
     parser.add_argument(
         "--skip-deslop",
@@ -836,21 +842,78 @@ def _load_cycle_and_state_dir(
             return candidate, load_cycle_by_public_id(candidate, public_id)
         except ValueError:
             continue
-    raise ValueError(f"unknown review cycle id: {public_id}")
+    raise UnknownReviewIdError(f"unknown review cycle id: {public_id}")
+
+
+def _has_id_action(args: argparse.Namespace) -> bool:
+    return bool(
+        args.fixes_validated is not None
+        or args.restart_mode
+        or args.restart_brief is not None
+        or args.contract_conflict
+        or args.convergence_decision
+        or args.reason
+        or args.decision
+        or args.github_review
+        or args.github_force
+        or args.github_result
+        or args.github_note
+        or _has_validation_status(args)
+        or args.deslop_done
+        or args.show_findings
+        or args.show_status
+    )
+
+
+def _starts_review(args: argparse.Namespace) -> bool:
+    return bool(args.skip_deslop or args.no_arena) or any(
+        getattr(args, name) is not None
+        for name in ("mode", "cd", "base", "review_brief", "model", "reasoning")
+    )
 
 
 def _reject_id_creation_args(args: argparse.Namespace, state: dict[str, Any]) -> None:
-    sent = [
-        name
-        for name in ("mode", "cd", "base", "review_brief", "model", "reasoning")
-        if getattr(args, name) is not None
-    ]
-    if args.no_arena:
-        sent.append("no_arena")
-    if not sent:
-        return
+    """Allow a repeated start command for an existing id; reject changed context."""
     mode = dict(state.get("mode") or {})
     identity = dict(state.get("identity") or {})
+    if not _starts_review(args):
+        return
+    bound_cwd = str(identity.get("cwd") or "").strip()
+    requested_cwd = (
+        normalize_cwd(str(resolve_repo_root(args.cd))) if args.cd is not None else ""
+    )
+    if bound_cwd and requested_cwd and requested_cwd != bound_cwd:
+        raise ValueError(
+            f"review id {state.get('public_id')} belongs to {bound_cwd}, "
+            f"not {requested_cwd}; use a new id for this worktree"
+        )
+    _reject_review_brief_replacement(state, args.review_brief)
+    bases = {identity.get("base"), identity.get("requested_base")}
+    has_model_override = args.model is not None or args.reasoning is not None
+    sent = [
+        name
+        for name, changed in (
+            ("mode", args.mode not in (None, mode.get("requested"))),
+            ("base", args.base is not None and args.base not in bases),
+            (
+                "model/--reasoning",
+                has_model_override
+                and _requested_model_override(args)
+                != dict(state.get("model_override") or {}),
+            ),
+            (
+                "no-arena",
+                args.no_arena and state.get("arena_disabled") != "cli",
+            ),
+            (
+                "skip-deslop",
+                args.skip_deslop and not _cycle_cli_skips_deslop(state),
+            ),
+        )
+        if changed
+    ]
+    if not sent:
+        return
     context = []
     locked_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
     if locked_mode:
@@ -1301,7 +1364,9 @@ def _add_review_ladder_fields(
     return summary
 
 
-def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
+def _show_status(
+    state: dict[str, Any], *, state_dir: Path, as_json: bool = False
+) -> int:
     identity = dict(state.get("identity") or {})
     payload: dict[str, Any] = {
         "review": state.get("public_id"),
@@ -1351,6 +1416,15 @@ def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
     if action:
         if summary.get("review_ladder") != "invalidated":
             payload["Action"] = action
+    if as_json:
+        public = json_status_payload(payload)
+        if head := str(identity.get("head") or "").strip():
+            public["head"] = head
+        convergence = convergence_summary(state)
+        if convergence.get("status") != "ACTIVE":
+            route_convergence(public, convergence)
+        write_text(json.dumps(public, sort_keys=True))
+        return 0
     emit_toon(payload)
     return 0
 
@@ -2387,7 +2461,7 @@ def _reject_model_override_on_existing(
 
 
 def _create_or_resume_cycle(
-    *, args: argparse.Namespace, state_dir: Path
+    *, args: argparse.Namespace, state_dir: Path, public_id: str | None = None
 ) -> dict[str, Any]:
     mode = str(args.mode or "base")
     review_root = resolve_repo_root(args.cd)
@@ -2404,7 +2478,8 @@ def _create_or_resume_cycle(
         config, mode=mode, selection=_configured_selection(config)
     )
     skip_deslop = bool(args.skip_deslop)
-    continuation = _compatible_continuation_cycle(
+    # A caller-chosen id always names a new cycle, so it never adopts another.
+    continuation = None if public_id else _compatible_continuation_cycle(
         state_dir=state_dir,
         review_root=review_root,
         base=base,
@@ -2436,6 +2511,7 @@ def _create_or_resume_cycle(
             for token, enabled in (
                 ("skip-deslop", skip_deslop),
                 ("no-arena", arena_disabled),
+                (f"id-{public_id}", bool(public_id)),
             )
             if enabled
         )
@@ -2457,6 +2533,8 @@ def _create_or_resume_cycle(
     if arena_disabled:
         state["arena_disabled"] = "cli" if args.no_arena else "repository"
     _record_model_override(state, model_override)
+    if public_id:
+        return create_cycle_with_public_id(state_dir, state, public_id)
     return state
 
 
@@ -3373,6 +3451,7 @@ def _run_github_review(state: dict[str, Any], *, state_dir: Path, force: bool) -
 
 def main() -> int:
     parser = build_parser()
+    args: argparse.Namespace | None = None
     try:
         args = parser.parse_args()
         arena_configuration = _configure_repo_arena(args)
@@ -3410,8 +3489,8 @@ def main() -> int:
                 raise ValueError(
                     "--fixes-validated cannot be combined with another id action"
                 )
-        if args.json and not args.status:
-            raise ValueError("--json requires --status")
+        if args.json and not (args.status or args.show_status):
+            raise ValueError("--json requires --status or --show-status")
         if args.json and args.verbose:
             raise ValueError("--json cannot be combined with --verbose")
         if args.verbose and not args.status:
@@ -3499,10 +3578,6 @@ def main() -> int:
         ):
             raise ValueError(
                 "contract replan cannot be combined with another id action"
-            )
-        if args.skip_deslop and args.id:
-            raise ValueError(
-                "--skip-deslop/--no-deslop can only be used when creating a review cycle"
             )
         if args.reason and not (
             args.restart_mode
@@ -3611,9 +3686,21 @@ def main() -> int:
                 "--show-status cannot be combined with decisions, GitHub review, GitHub results, validation status flags, or restart"
             )
         if args.id:
-            state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
-            state = _apply_runtime_options(state, args)
-            _reject_id_creation_args(args, state)
+            try:
+                state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
+            except UnknownReviewIdError:
+                if _has_id_action(args) or not _starts_review(args):
+                    raise
+                if not CALLER_PUBLIC_ID_RE.fullmatch(str(args.id)):
+                    raise ValueError(
+                        f"review id {args.id!r} must match rvw_[a-z0-9]{{8,32}}"
+                    )
+                state = _create_or_resume_cycle(
+                    args=args, state_dir=state_dir, public_id=str(args.id)
+                )
+            else:
+                state = _apply_runtime_options(state, args)
+                _reject_id_creation_args(args, state)
             if args.fixes_validated is not None:
                 identity = _current_cycle_identity_if_compatible(state)
                 if not identity and state.get("stage") == STAGE_FIX_PENDING:
@@ -3652,7 +3739,9 @@ def main() -> int:
             if args.show_findings:
                 return _show_findings(state, state_dir=state_dir)
             if args.show_status:
-                return _show_status(state, state_dir=state_dir)
+                return _show_status(
+                    state, state_dir=state_dir, as_json=bool(args.json)
+                )
             if args.contract_conflict and not has_restart_brief:
                 state = record_contract_conflict(
                     state, conflict=str(args.contract_conflict)
@@ -3793,10 +3882,16 @@ def main() -> int:
             }
         )
         return 0
-    except ValueError as exc:
-        return emit_error(str(exc), status="usage_error", help_items=[_help_command()])
-    except OSError as exc:
-        return emit_error(str(exc), status="error")
+    except (ValueError, OSError) as exc:
+        status = "usage_error" if isinstance(exc, ValueError) else "error"
+        if args is not None and args.json and args.show_status:
+            write_text(json.dumps({"error": str(exc), "status": status}))
+            return 2 if status == "usage_error" else 1
+        return emit_error(
+            str(exc),
+            status=status,
+            help_items=[_help_command()] if status == "usage_error" else None,
+        )
 
 
 if __name__ == "__main__":

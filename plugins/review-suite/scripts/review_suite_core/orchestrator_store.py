@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from contextlib import contextmanager
 import uuid
@@ -19,6 +20,11 @@ else:
 
 ORCHESTRATOR_INDEX_SCHEMA_VERSION = 1
 ORCHESTRATOR_CYCLES_LOCK = "orchestrator-cycles"
+CALLER_PUBLIC_ID_RE = re.compile(r"rvw_[a-z0-9]{8,32}")
+
+
+class UnknownReviewIdError(ValueError):
+    pass
 
 
 def orchestrator_dir(state_dir: Path) -> Path:
@@ -171,12 +177,36 @@ def load_cycle_by_public_id(state_dir: Path, public_id: str) -> dict[str, Any]:
     index = load_index(state_dir)
     cycle_key = str(index["ids"].get(review_id) or "")
     if not cycle_key:
-        raise ValueError(f"unknown review cycle id: {review_id}")
+        raise UnknownReviewIdError(f"unknown review cycle id: {review_id}")
     state = load_cycle_by_key(state_dir, cycle_key)
     if state is None:
         raise ValueError(f"review cycle state is missing for id: {review_id}")
     state.setdefault("public_id", review_id)
     return state
+
+
+def create_cycle_with_public_id(
+    state_dir: Path, state: dict[str, Any], public_id: str
+) -> dict[str, Any]:
+    """Save a new cycle under a caller-chosen review id."""
+    cycle_key = str(state["cycle_key"])
+    with orchestrator_store_lock(state_dir=state_dir, name=ORCHESTRATOR_CYCLES_LOCK):
+        with orchestrator_store_lock(state_dir=state_dir, name="orchestrator-index"):
+            index = load_index(state_dir)
+            bound = index["ids"].get(public_id)
+            if bound and bound != cycle_key:
+                raise ValueError(
+                    f"review id {public_id} already belongs to another review; "
+                    "use a new id"
+                )
+            index["ids"][public_id] = cycle_key
+            index["cycle_keys"][cycle_key] = public_id
+            _write_index(state_dir, index)
+        current = load_cycle_by_key(state_dir, cycle_key)
+        if current is not None:
+            current["public_id"] = public_id
+            return current
+        return _save_cycle_unlocked(state_dir, state)
 
 
 def save_cycle(
