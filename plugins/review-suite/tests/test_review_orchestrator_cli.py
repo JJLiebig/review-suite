@@ -4703,6 +4703,19 @@ def test_show_status_json_by_id(
     assert "Action" not in payload
     assert _cycle_payload(state_dir, "rvw_caller0001") == before
 
+    checkpoint = deepcopy(before)
+    checkpoint["convergence"] = {"status": "DECISION_REQUIRED", "reason": "budget"}
+    orchestrator_store.cycle_path(state_dir, str(before["cycle_key"])).write_text(
+        json.dumps(checkpoint), encoding="utf-8"
+    )
+
+    assert review.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert (payload["status"], payload["next_action"]) == (
+        "decision_required",
+        "caller_decision",
+    )
+
 
 @pytest.mark.parametrize(
     ("args", "expected_out"),

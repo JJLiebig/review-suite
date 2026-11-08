@@ -62,6 +62,7 @@ from review_suite_core.review_branch_status import (
     cmd_status as cmd_branch_status,
     json_status_payload,
     review_status_details,
+    route_convergence,
 )
 from review_suite_core.orchestrator_runner import run_one_expensive_step
 from review_suite_core.orchestrator_state import (
@@ -1419,6 +1420,9 @@ def _show_status(
         public = json_status_payload(payload)
         if head := str(identity.get("head") or "").strip():
             public["head"] = head
+        convergence = convergence_summary(state)
+        if convergence.get("status") != "ACTIVE":
+            route_convergence(public, convergence)
         write_text(json.dumps(public, sort_keys=True))
         return 0
     emit_toon(payload)
