@@ -4575,9 +4575,165 @@ def test_id_rejects_creation_context_flags(
     assert len(errors) == 1
     message = errors[0][0]
     assert "--id already selects review context" in message
-    assert "remove --mode, --cd, --base" in message
+    assert "remove --mode;" in message
     assert "mode base" in message
     assert str(repo.resolve()) in message
+
+
+def _start_fast_review(
+    monkeypatch: pytest.MonkeyPatch, repo: Path, *extra: str
+) -> tuple[int, dict[str, object]]:
+    return _run_review(
+        monkeypatch,
+        [*extra, "--mode", "fast", "--skip-deslop", "--cd", str(repo), "--base", "main"],
+    )
+
+
+def _capture_errors(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    errors: list[str] = []
+    monkeypatch.setattr(
+        review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2
+    )
+    return errors
+
+
+def test_start_under_caller_id_creates_then_resumes_same_cycle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    review_calls = _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "default-state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    # An automatic cycle for the same head must not be adopted by the caller id.
+    _, automatic = _start_fast_review(monkeypatch, repo)
+    calls_before = len(review_calls)
+
+    exit_code, created = _start_fast_review(monkeypatch, repo, "--id", "rvw_caller0001")
+    _, retried = _start_fast_review(monkeypatch, repo, "--id", "rvw_caller0001")
+
+    assert exit_code == 0
+    assert created["review"] == retried["review"] == "rvw_caller0001"
+    assert automatic["review"] != "rvw_caller0001"
+    assert len(review_calls) == calls_before + 1
+    cycle = _cycle_payload(state_dir, "rvw_caller0001")
+    assert cycle["public_id"] == "rvw_caller0001"
+    assert dict(cycle["mode"])["requested"] == "fast"
+
+
+def test_caller_id_bound_to_another_worktree_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    other = tmp_path / "other"
+    for path in (repo, other):
+        _init_repo(path)
+        _commit_file(path, "app.txt", "base\n", "base")
+    _start_fast_review(monkeypatch, repo, "--id", "rvw_caller0001")
+    errors = _capture_errors(monkeypatch)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--id", "rvw_caller0001", "--mode", "fast", "--skip-deslop",
+         "--cd", str(other), "--base", "main"],
+    )
+
+    assert review.main() == 2
+    assert errors == [
+        f"review id rvw_caller0001 belongs to {repo.resolve()}, not "
+        f"{other.resolve()}; use a new id for this worktree"
+    ]
+
+
+@pytest.mark.parametrize(
+    "review_id", ["rvw_short", "rvw_UPPERCASE1", "review_abcdefgh", "rvw_" + "a" * 33]
+)
+def test_caller_id_shape_is_validated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, review_id: str
+) -> None:
+    review_calls = _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    errors = _capture_errors(monkeypatch)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--id", review_id, "--mode", "fast", "--cd", str(repo)],
+    )
+
+    assert review.main() == 2
+    assert errors == [f"review id {review_id!r} must match rvw_[a-z0-9]{{8,32}}"]
+    assert review_calls == []
+
+
+def test_show_status_json_by_id(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "default-state"
+    _init_repo(repo)
+    head = _commit_file(repo, "app.txt", "base\n", "base")
+    _start_fast_review(monkeypatch, repo, "--id", "rvw_caller0001")
+    before = _cycle_payload(state_dir, "rvw_caller0001")
+    capsys.readouterr()
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", "--id", "rvw_caller0001", "--show-status", "--json"]
+    )
+
+    assert review.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert {
+        key: payload[key]
+        for key in ("review", "status", "done", "next_action", "mode", "head", "base")
+    } == {
+        "review": "rvw_caller0001",
+        "status": "decision-pending",
+        "done": False,
+        "next_action": "continue",
+        "mode": "fast",
+        "head": head,
+        "base": "main",
+    }
+    assert {"steps", "rounds", "round_history", "review_ladder"} <= set(payload)
+    assert "Action" not in payload
+    assert _cycle_payload(state_dir, "rvw_caller0001") == before
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_out"),
+    [
+        (["--show-status", "--json"], "json"),
+        (["--show-status"], "toon"),
+        ([], "toon"),
+    ],
+)
+def test_unknown_id_is_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    args: list[str],
+    expected_out: str,
+) -> None:
+    review_calls = _stub_review(monkeypatch)
+    errors = _capture_errors(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", "rvw_missing01", *args])
+
+    assert review.main() == 2
+    message = "unknown review cycle id: rvw_missing01"
+    if expected_out == "json":
+        assert json.loads(capsys.readouterr().out) == {
+            "error": message,
+            "status": "usage_error",
+        }
+        assert errors == []
+    else:
+        assert errors == [message]
+    assert review_calls == []
 
 
 def test_id_rejects_model_override(

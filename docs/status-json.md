@@ -34,3 +34,11 @@ so `findings` is null even for clean rounds; it never counts reviewer prose.
 The added fields contain no prompts, finding bodies, file contents, or raw round
 payloads. They also appear in `review.py --id <id> --show-status`; the compact
 default branch status output remains unchanged.
+
+## Status by id
+
+`review.py --id <id> --show-status --json` prints the same fields for one review
+cycle, wherever it is run. `head` is the full commit the cycle reviews, and
+`status`, `done`, and `next_action` say whether it is still running, finished,
+or waiting on the caller. An unknown id exits with code 2 and prints
+`{"error": "unknown review cycle id: <id>", "status": "usage_error"}`.

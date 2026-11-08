@@ -152,7 +152,7 @@ def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
     return public or payload
 
 
-def _json_status_payload(payload: dict[str, object]) -> dict[str, object]:
+def json_status_payload(payload: dict[str, object]) -> dict[str, object]:
     public = _public_status_payload(payload)
     public.pop("Action", None)
     for key in ("base", "branch", "head", "mode"):
@@ -951,7 +951,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     if action is not None:
         payload["Action"] = action
     if bool(args.json):
-        print(json.dumps(_json_status_payload(payload), sort_keys=True))
+        print(json.dumps(json_status_payload(payload), sort_keys=True))
     else:
         emit_toon(payload if bool(args.verbose) else _public_status_payload(payload))
     return 0
