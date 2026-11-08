@@ -1504,6 +1504,22 @@ def test_rate_limit_past_the_review_deadline_ends_the_cycle_as_timeout(
     assert any("lasts past the review timeout" in event for event in events)
 
 
+def test_rate_limit_on_the_first_lookup_does_not_wait_past_the_timeout(
+    monkeypatch, clock
+) -> None:
+    _scripted_send(
+        monkeypatch, [(429, {"retry-after": "3600"}, {"message": "slow down"})]
+    )
+
+    with pytest.raises(review_github.GitHubRateLimited):
+        cmd_run(
+            review_github.build_parser().parse_args(
+                ["run", "--owner", "o", "--repo", "r", "--pr-number", "1"]
+            )
+        )
+    assert clock["sleeps"] == []
+
+
 def test_github_request_rereads_the_token_once_on_401_and_never_reports_it(
     monkeypatch, clock
 ) -> None:

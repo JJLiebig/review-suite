@@ -865,12 +865,12 @@ def run_review_cycle(
     settle_seconds: int,
     force: bool,
 ) -> dict[str, Any]:
+    deadline = utc_now() + timedelta(minutes=timeout_minutes)
+    GITHUB.deadline = deadline.timestamp()
     context = get_pr_context(owner, repo, pr_number)
     emit_state_change(
         "GitHub review can take up to 30m. Wait for wrapper output before acting."
     )
-    deadline = utc_now() + timedelta(minutes=timeout_minutes)
-    GITHUB.deadline = deadline.timestamp()
     seen: set[str] = set()
     request_attempts = 0
     eyes_confirmed = False
@@ -1161,6 +1161,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         review_root = resolve_repo_root(args.cd)
         GH_CWD = str(review_root)
+    GITHUB.deadline = time.time() + DEFAULT_TIMEOUT_MINUTES * 60
     context = get_pr_context(args.owner, args.repo, args.pr_number)
     payload = run_review_cycle(
         owner=context["owner"],
