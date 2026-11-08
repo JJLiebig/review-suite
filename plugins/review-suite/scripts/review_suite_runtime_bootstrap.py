@@ -47,6 +47,8 @@ EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 INSTALL_SETTLE_SECONDS = 10.0
 INSTALL_RETRY_INTERVAL_SECONDS = 0.2
 RETIRING_STALE_SECONDS = 30.0
+# Earlier launchers lease a build only once it runs, so leave their recent folders alone.
+LEGACY_IDLE_SECONDS = 10 * 60
 
 
 class InstallChanged(Exception):
@@ -248,7 +250,9 @@ def _lease_for_life(build: Path) -> None:
     pid = os.getpid()
     lease = _lease_path(build, pid)
     try:
-        _write_lease(lease, pid)
+        # On POSIX the launcher already leased the build under this PID before exec.
+        if _lease_pid(lease) != pid:
+            _write_lease(lease, pid)
     except OSError:
         return
     atexit.register(lease.unlink, missing_ok=True)
@@ -259,7 +263,20 @@ def _lease_path(build: Path, pid: int) -> Path:
 
 
 def _write_lease(path: Path, pid: int) -> None:
-    path.write_text(json.dumps({"pid": pid}) + "\n", encoding="utf-8")
+    # Published whole, so cleanup never reads a half-written lease and discards it.
+    temporary = path.with_name(f".lease-{pid}-{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps({"pid": pid}) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _lease_pid(path: Path) -> int | None:
+    try:
+        return int(json.loads(path.read_text(encoding="utf-8"))["pid"])
+    except OSError, ValueError, KeyError, TypeError:
+        return None
 
 
 def prune_runtimes(runtimes_root: Path, *, build: Path) -> None:
@@ -313,7 +330,11 @@ def _prune_legacy_builds() -> None:
     ).expanduser()
     legacy_root = codex_home / "plugin-runtimes" / PLUGIN_NAME
     for root in _directories(legacy_root):
-        if root.name.startswith(".trash-") or not _has_live_lease(root):
+        try:
+            idle = time.time() - root.stat().st_mtime >= LEGACY_IDLE_SECONDS
+        except OSError:
+            continue
+        if root.name.startswith(".trash-") or (idle and not _has_live_lease(root)):
             _retire(legacy_root, root)
     try:
         legacy_root.rmdir()
@@ -374,12 +395,15 @@ def _has_live_lease(root: Path) -> bool:
         return True
     for lease in leases:
         try:
-            if _process_alive(
-                int(json.loads(lease.read_text(encoding="utf-8"))["pid"])
-            ):
-                return True
-        except OSError, ValueError, KeyError, TypeError:
-            pass
+            pid = int(json.loads(lease.read_text(encoding="utf-8"))["pid"])
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return True  # unreadable for now, such as briefly locked on Windows
+        except ValueError, KeyError, TypeError:
+            pid = 0
+        if _process_alive(pid):
+            return True
         lease.unlink(missing_ok=True)
     return False
 

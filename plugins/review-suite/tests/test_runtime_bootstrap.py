@@ -53,10 +53,10 @@ def runtimes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
-def live_pid() -> Iterator[int]:
+def live_process() -> Iterator[subprocess.Popen[bytes]]:
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     try:
-        yield process.pid
+        yield process
     finally:
         process.kill()
         process.wait()
@@ -197,13 +197,13 @@ def test_source_checkout_runs_in_place(tmp_path: Path, runtimes: Path) -> None:
 
 
 def test_launch_removes_every_unleased_build_but_the_current_one(
-    tmp_path: Path, runtimes: Path, live_pid: int
+    tmp_path: Path, runtimes: Path, live_process: subprocess.Popen[bytes]
 ) -> None:
     plugin_root = _make_plugin(tmp_path / "install")
     script = plugin_root / "scripts" / "review.py"
     leased = ensure_runtime_build(plugin_root, runtimes)
     _release_own_lease(leased)
-    _lease(leased, live_pid)
+    _lease(leased, live_process.pid)
     script.write_text("print('second')\n", encoding="utf-8")
     unleased = ensure_runtime_build(plugin_root, runtimes)
     _release_own_lease(unleased)
@@ -222,7 +222,9 @@ def test_launch_removes_every_unleased_build_but_the_current_one(
     assert (leased / READY_MARKER).exists()
 
     _release_own_lease(current)
-    _kill(live_pid)
+    # Reaped, so it no longer counts as running.
+    live_process.kill()
+    live_process.wait()
     again = ensure_runtime_build(plugin_root, runtimes)
     prune_runtimes(runtimes, build=again)
 
@@ -231,20 +233,27 @@ def test_launch_removes_every_unleased_build_but_the_current_one(
 
 
 def test_legacy_codex_builds_are_removed_unless_a_process_runs_them(
-    tmp_path: Path, runtimes: Path, live_pid: int
+    tmp_path: Path, runtimes: Path, live_process: subprocess.Popen[bytes]
 ) -> None:
     legacy = tmp_path / "codex" / "plugin-runtimes" / "review-suite"
     _write(legacy / "0.1.0-idle" / "runtime_metadata.json", "{}")
     _write(
-        legacy / "0.1.0-running" / f".active.{live_pid}.json",
-        json.dumps({"pid": live_pid}),
+        legacy / "0.1.0-running" / f".active.{live_process.pid}.json",
+        json.dumps({"pid": live_process.pid}),
     )
+    for folder in legacy.iterdir():
+        os.utime(folder, (0, 0))
+    # An earlier launcher may still be copying or starting this one.
+    (legacy / ".staging.tmp.1.recent").mkdir()
     plugin_root = _make_plugin(tmp_path / "install")
 
     build = ensure_runtime_build(plugin_root, runtimes)
     prune_runtimes(runtimes, build=build)
 
-    assert [path.name for path in legacy.iterdir()] == ["0.1.0-running"]
+    assert sorted(path.name for path in legacy.iterdir()) == [
+        ".staging.tmp.1.recent",
+        "0.1.0-running",
+    ]
 
 
 def test_copy_taken_during_install_replacement_is_retried(
