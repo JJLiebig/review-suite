@@ -47,8 +47,10 @@ EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 INSTALL_SETTLE_SECONDS = 10.0
 INSTALL_RETRY_INTERVAL_SECONDS = 0.2
 RETIRING_STALE_SECONDS = 30.0
-# Earlier launchers lease a build only once it runs, so leave their recent folders alone.
-LEGACY_IDLE_SECONDS = 10 * 60
+# Earlier versions kept builds in the Codex home and removed one only after a day, once no
+# lease file had been refreshed for ten minutes; still-running older launchers rely on that.
+LEGACY_RETIRE_AFTER_SECONDS = 24 * 60 * 60
+LEGACY_LEASE_STALE_SECONDS = 10 * 60
 
 
 class InstallChanged(Exception):
@@ -324,18 +326,23 @@ def prune_builds(
 
 
 def _prune_legacy_builds() -> None:
-    """Removes the builds earlier versions kept in the Codex home."""
+    """Removes the builds earlier versions kept in the Codex home, by their own rule."""
     codex_home = Path(
         os.environ.get("CODEX_HOME", "").strip() or Path.home() / ".codex"
     ).expanduser()
     legacy_root = codex_home / "plugin-runtimes" / PLUGIN_NAME
+    now = time.time()
     for root in _directories(legacy_root):
-        try:
-            idle = time.time() - root.stat().st_mtime >= LEGACY_IDLE_SECONDS
-        except OSError:
-            continue
-        if root.name.startswith(".trash-") or (idle and not _has_live_lease(root)):
-            _retire(legacy_root, root)
+        if not root.name.startswith(".trash-"):
+            try:
+                if now - root.stat().st_mtime < LEGACY_RETIRE_AFTER_SECONDS or any(
+                    now - lease.stat().st_mtime < LEGACY_LEASE_STALE_SECONDS
+                    for lease in root.glob(f"{LEASE_PREFIX}*")
+                ):
+                    continue
+            except OSError:
+                continue
+        _retire(legacy_root, root)
     try:
         legacy_root.rmdir()
     except OSError:

@@ -232,26 +232,26 @@ def test_launch_removes_every_unleased_build_but_the_current_one(
     assert [path.name for path in parent.iterdir() if path.is_dir()] == [current.name]
 
 
-def test_legacy_codex_builds_are_removed_unless_a_process_runs_them(
-    tmp_path: Path, runtimes: Path, live_process: subprocess.Popen[bytes]
+def test_legacy_codex_builds_follow_the_earlier_retention_rule(
+    tmp_path: Path, runtimes: Path
 ) -> None:
     legacy = tmp_path / "codex" / "plugin-runtimes" / "review-suite"
     _write(legacy / "0.1.0-idle" / "runtime_metadata.json", "{}")
-    _write(
-        legacy / "0.1.0-running" / f".active.{live_process.pid}.json",
-        json.dumps({"pid": live_process.pid}),
-    )
+    _write(legacy / "0.1.0-stale-lease" / ".active.1.json", "{}")
+    os.utime(legacy / "0.1.0-stale-lease" / ".active.1.json", (0, 0))
+    # Earlier versions refresh a running build's lease every minute.
+    _write(legacy / "0.1.0-running" / ".active.2.json", "")
     for folder in legacy.iterdir():
         os.utime(folder, (0, 0))
     # An earlier launcher may still be copying or starting this one.
-    (legacy / ".staging.tmp.1.recent").mkdir()
+    (legacy / ".staging.tmp.3.recent").mkdir()
     plugin_root = _make_plugin(tmp_path / "install")
 
     build = ensure_runtime_build(plugin_root, runtimes)
     prune_runtimes(runtimes, build=build)
 
     assert sorted(path.name for path in legacy.iterdir()) == [
-        ".staging.tmp.1.recent",
+        ".staging.tmp.3.recent",
         "0.1.0-running",
     ]
 
