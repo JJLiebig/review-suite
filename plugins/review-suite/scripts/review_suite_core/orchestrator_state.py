@@ -1811,7 +1811,7 @@ def record_followup_clean(
     )
     active["followup_round_id"] = _required_text(round_id, field="round_id")
     active["followup_head"] = head
-    next_state.setdefault("review_heads", {})["last_followup_head"] = head
+    next_state.setdefault("review_heads", {}).update(last_followup_head=head, last_reviewed_head=head)
     _convergence(next_state).pop("continue_pending", None)
     next_state["active_findings"] = None
     profile_round_id = _profile_round_id_for_findings(next_state, active)
@@ -1877,7 +1877,7 @@ def record_followup_findings(
         command=DECISION_FINDINGS,
         source_round_id=str(active.get("round_id") or ""),
     )
-    next_state.setdefault("review_heads", {})["last_followup_head"] = head
+    next_state.setdefault("review_heads", {}).update(last_followup_head=head, last_reviewed_head=head)
     profile_round_id = active.get("profile_round_id") or _profile_round_id_for_findings(
         next_state, active
     )

@@ -819,7 +819,7 @@ def _run_profile_review_once(
         running_base_state = running_state
 
     delta = dict(state.get("patch_delta") or {})
-    if delta and delta.get("reviewed_head") != scope.get("reviewed_head"):
+    if delta:
         scope["patch_delta"] = delta
     review_result = run_review_step(
         lane=lane,

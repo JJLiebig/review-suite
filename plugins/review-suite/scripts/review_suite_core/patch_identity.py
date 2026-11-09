@@ -80,6 +80,13 @@ def patch_identity(repo: Path, base: str, head: str) -> dict[str, Any]:
                             for i in range(len(old_lines) - count + 1)
                         )
                         ambiguous |= matches != 1
+                        boundary = (
+                            old_lines[max(0, start - 2) : start - 1]
+                            + old_lines[start - 1 + count : start + count]
+                        )
+                        normalized.append(
+                            b"boundary:" + hashlib.sha256(b"".join(boundary)).digest()
+                        )
                     else:
                         boundary = old_lines[max(0, start - 1) : start + 1]
                         matches = sum(
@@ -118,14 +125,10 @@ def reviewed_receipt(state: dict[str, Any]) -> dict[str, Any] | None:
     identity = dict(state.get("identity") or {})
     heads = dict(state.get("review_heads") or {})
     head = (
-        heads.get("last_followup_head")
-        or heads.get("last_reviewed_head")
+        heads.get("last_reviewed_head")
+        or heads.get("last_followup_head")
         or identity.get("head")
     )
-    for decision in reversed(state.get("decisions") or []):
-        if decision.get("command") == "clean" and decision.get("reviewed_head"):
-            head = decision["reviewed_head"]
-            break
     base = identity.get("merge_base")
     if not identity.get("cwd") or not head or not base:
         return None

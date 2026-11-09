@@ -5400,7 +5400,7 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
         final_clean["Action"],
         public_id=public_id,
         state_dir=state_dir,
-        blocked_by=["full_suite:unknown", "ci:unknown"],
+        blocked_by=["full_suite:pending", "ci:pending"],
     )
 
 
@@ -6942,3 +6942,13 @@ def test_changed_pr_patch_reuses_id_and_reviews_only_delta(monkeypatch, tmp_path
     assert calls[-1]["review_scope"]["reviewed_head"] == changed
     state = _cycle_payload(state_dir, review_id)
     assert state["rounds"][0]["reviewed_head"] == original
+    for _ in range(3):
+        _, result = _run_review(monkeypatch, ["--id", review_id])
+        if result.get("done"):
+            break
+    before = len(calls)
+    _git(repo, "branch", "-f", "main", original)
+    _run_review(monkeypatch, ["--id", review_id])
+    assert _git(repo, "rev-parse", "HEAD") == changed
+    assert len(calls) == before + 1
+    assert calls[-1]["review_scope"]["patch_delta"]["reviewed_head"] == changed

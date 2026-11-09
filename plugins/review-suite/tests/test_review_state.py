@@ -2368,7 +2368,8 @@ def test_structural_base_changes_require_targeted_check(tmp_path, kind):
     assert result["reason"] == "structural_or_unknown"
 
 
-def test_clean_followup_receipt_covers_fixed_patch_and_rejects_returned_findings(tmp_path):
+@pytest.mark.parametrize("completion", ["followup", "validated_fix"])
+def test_clean_followup_receipt_covers_fixed_patch_and_rejects_returned_findings(tmp_path, completion):
     from review_suite_core.orchestrator_state import record_findings_decision, mark_fix_detected, mark_followup_review_pending, record_followup_clean
     from review_suite_core.patch_identity import reviewed_receipt, acceptance
     repo, state, original, _ = _equivalent_review_repo(tmp_path)
@@ -2377,6 +2378,11 @@ def test_clean_followup_receipt_covers_fixed_patch_and_rejects_returned_findings
     fixed = mark_fix_detected(findings, head=fixed_head)
     pending = mark_followup_review_pending(fixed, round_id="followup", reviewed_head=fixed_head, source_round_id="source")
     clean = record_followup_clean(pending, round_id="followup", reviewed_head=fixed_head)
+    if completion == "validated_fix":
+        from review_suite_core.orchestrator_state import record_fixes_validated
+        clean = record_findings_decision(clean, round_id="later", lane="review_base", reviewed_head=fixed_head)
+        fixed_head = _commit_file(repo, "app.txt", (repo / "app.txt").read_text().replace("fixed edit", "fixed edit again"), "later fix")
+        clean = record_fixes_validated(clean, head=fixed_head, note="Relevant validation passed")
     clean["identity"]["merge_base"] = _git(repo, "merge-base", "main", "HEAD")
     clean["review_patch"] = reviewed_receipt(clean)
     assert clean["review_patch"]["reviewed_head"] == fixed_head
@@ -2404,3 +2410,23 @@ def test_targeted_followup_handles_changed_patch_with_equal_head_trees(tmp_path,
     monkeypatch.setattr(sys, "argv", ["review_followup.py", "--cd", str(repo), "--base", "main", "--since", reviewed, "--reviewed-base", base, "--note", "Check upstream adoption", "--state-dir", str(tmp_path / "state")])
     assert review_followup.main() == 0
     assert results[0]["base"] is None
+    monkeypatch.setattr(sys, "argv", ["review_followup.py", "--cd", str(repo), "--base", "main", "--since", _git(repo, "rev-parse", "HEAD"), "--reviewed-base", base, "--note", "Check base-only change", "--state-dir", str(tmp_path / "state")])
+    assert review_followup.main() == 0
+
+
+def test_moved_replacement_requires_targeted_review(tmp_path):
+    from review_suite_core.patch_identity import acceptance, reviewed_receipt
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    before = "def first():\n    unique_call()\n    return 1\n\n\n\ndef second():\n    return 2\n"
+    base = _commit_file(repo, "app.py", before, "base")
+    _git(repo, "checkout", "-b", "feature")
+    old_head = _commit_file(repo, "app.py", before.replace("unique_call", "reviewed_call"), "reviewed replacement")
+    state = {"identity": {"cwd": str(repo), "base": "main", "head": old_head, "merge_base": base}, "review_heads": {"last_reviewed_head": old_head}}
+    state["review_patch"] = reviewed_receipt(state)
+    _git(repo, "checkout", "main")
+    moved = before.replace("    unique_call()\n", "").replace("def second():\n", "def second():\n    unique_call()\n")
+    _commit_file(repo, "app.py", moved, "move call between functions")
+    _git(repo, "checkout", "-b", "rebased-feature")
+    new_head = _commit_file(repo, "app.py", moved.replace("unique_call", "reviewed_call"), "same bytes at different semantic location")
+    assert acceptance(state, new_head) is None

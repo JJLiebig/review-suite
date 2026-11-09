@@ -3112,6 +3112,8 @@ def _github_pending_head_change_identity(
     from review_suite_core.patch_identity import acceptance
     if acceptance(state, head):
         return None
+    if str(dict(state.get("identity") or {}).get("merge_base") or "") != current_merge_base:
+        return identity
     terminal = _github_review_status(state) in {"clean", "waived"}
     if (
         str(deslop.get("status") or "").strip() != DESLOP_STATUS_SKIPPED or terminal
@@ -3323,7 +3325,7 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
             elif _github_pending_head_change_identity(state):
                 action = {
                     "cmd": _review_command(public_id, state_dir=state_dir),
-                    "note": "PR head changed before a terminal GitHub result; rerun local signoff on this review id before GitHub review.",
+                    "note": "The PR patch changed before a terminal GitHub result; review only the changed patch on this id before GitHub review.",
                 }
             else:
                 action = None

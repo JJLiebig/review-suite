@@ -227,7 +227,7 @@ def main() -> int:
             force=bool(args.force or args.reviewed_base),
         )
         head = current_head(review_root)
-        if since_head == head:
+        if since_head == head and not args.reviewed_base:
             raise ValueError(
                 "current HEAD already matches the requested follow-up anchor"
             )
