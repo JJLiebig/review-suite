@@ -6960,3 +6960,250 @@ def test_changed_pr_patch_reuses_id_and_reviews_only_delta(monkeypatch, tmp_path
     state = _cycle_payload(state_dir, review_id)
     assert state["review_patch"]["reviewed_base"] == original
     assert state["review_patch_history"]
+
+
+def _interaction_cycle(tmp_path: Path) -> tuple[Path, Path, str]:
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    _init_repo(repo)
+    base = _commit_file(
+        repo, "app.py", "def a():\n    return 1\n\ndef b():\n    return 2\n", "base"
+    )
+    _git(repo, "checkout", "-b", "feature/interaction")
+    head = _commit_file(
+        repo, "app.py", "def a():\n    return 10\n\ndef b():\n    return 2\n", "feature"
+    )
+    state = review.create_cycle(
+        cwd=repo,
+        base="main",
+        branch="feature/interaction",
+        head=head,
+        merge_base=base,
+        requested_mode="fast",
+        effective_mode="fast",
+        selection="auto",
+        effective_selection="stable",
+    )
+    state = review.record_clean_decision(
+        state, round_id="original", lane="review_base", reviewed_head=head
+    )
+    state["stage"] = "review-green"
+    state["validation"].update(full_suite="passed", ci="passed", head=head)
+    state = orchestrator_store.save_cycle(state_dir, state)
+    _git(repo, "checkout", "main")
+    _commit_file(
+        repo,
+        "app.py",
+        "def a():\n    return 1\n\ndef b():\n    return 20\n",
+        "base changes",
+    )
+    _git(repo, "checkout", "feature/interaction")
+    _git(repo, "rebase", "main")
+    return repo, state_dir, state["public_id"]
+
+
+def _stub_interaction(monkeypatch: pytest.MonkeyPatch, *, verdict: str = "clean", interrupt: bool = False) -> list:
+    calls = []
+    def run(**kwargs):
+        calls.append(kwargs)
+        if "on_round_started" in kwargs:
+            kwargs["on_round_started"]({"round_id": "interaction-round"})
+            if interrupt:
+                write_round(kwargs["state_dir"] / "orchestrator" / "review-rounds", {
+                    "round_id": "interaction-round", "status": "running", "runs": []})
+                raise RuntimeError("interrupted")
+        result = {"round_id": "interaction-round", "status": "completed", "blocked": False,
+                "reviewed_head": _git(kwargs["review_cwd"], "rev-parse", "HEAD"),
+                "runs": [{"status": "completed", "review_status": "completed", "terminal_command": verdict,
+                          "reviewer_output": f"Review result: {verdict}"}]}
+        result["review_scope"] = kwargs.get("review_scope") or {"reviewed_head": result["reviewed_head"]}
+        write_round(kwargs["state_dir"] / "orchestrator" / "review-rounds", result)
+        return result
+    monkeypatch.setattr(review_suite_arena, "run_orchestrator_followup_review_step", run)
+    monkeypatch.setattr(review_suite_arena, "resume_orchestrator_review_step", run)
+    return calls
+
+
+def test_base_interaction_clean_receipt_and_new_head_reflags(monkeypatch, tmp_path):
+    repo, state_dir, public_id = _interaction_cycle(tmp_path)
+    calls = _stub_interaction(monkeypatch)
+    args = ["--id", public_id, "--state-dir", str(state_dir)]
+    code, status = _run_review(
+        monkeypatch, [*args, "--check-base-interaction", "--cd", str(repo)]
+    )
+    assert code == 0
+    assert status["base_interaction"]["check"] is False
+    assert status["base_interaction"]["status"] == "checked"
+    assert status["base_interaction"]["receipt"]["round_id"] == "interaction-round"
+    assert _cycle_payload(state_dir, public_id)["review_patch"][
+        "reviewed_head"
+    ] != _git(repo, "rev-parse", "HEAD")
+    _run_review(monkeypatch, [*args, "--check-base-interaction"])
+    assert len(calls) == 1
+    _git(repo, "commit", "--allow-empty", "-m", "new head")
+    _, status = _run_review(monkeypatch, [*args, "--show-status"])
+    assert status["base_interaction"]["check"] is True
+    assert status["base_interaction"]["status"] == "outstanding"
+
+
+def test_base_interaction_findings_enter_fix_flow(monkeypatch, tmp_path):
+    _, state_dir, public_id = _interaction_cycle(tmp_path)
+    _stub_interaction(monkeypatch, verdict="findings")
+    original_receipt = _cycle_payload(state_dir, public_id)["review_patch"]
+    code, status = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--state-dir", str(state_dir), "--check-base-interaction"],
+    )
+    assert code == 0
+    state = _cycle_payload(state_dir, public_id)
+    assert state["stage"] == "fix-pending"
+    assert state["active_findings"]["round_id"] == "interaction-round"
+    assert state["review_patch"] == original_receipt
+    assert state["identity"]["head"] == state["active_findings"]["reviewed_head"]
+    assert state["pending_action"]["kind"] == "fix-findings"
+    code, _ = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir), "--decision", "clean", "--reason", "Verified the reported path is unreachable"])
+    assert code == 0
+    assert _cycle_payload(state_dir, public_id)["active_findings"] is None
+
+
+def test_base_interaction_override_reason_and_status(monkeypatch, tmp_path, capsys):
+    _, state_dir, public_id = _interaction_cycle(tmp_path)
+    args = [
+        "--id",
+        public_id,
+        "--state-dir",
+        str(state_dir),
+        "--accept-base-interaction",
+    ]
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", *_without_state_dir_args(monkeypatch, args)]
+    )
+    assert review.main() != 0
+    assert "requires --reason" in capsys.readouterr().out
+    code, _ = _run_review(monkeypatch, [*args, "--reason", "Owner approved"])
+    assert code == 0
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", "--id", public_id, "--show-status", "--json"]
+    )
+    assert review.main() == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["base_interaction"]["status"] == "overridden"
+    assert status["base_interaction"]["check"] is False
+    assert status["base_interaction"]["override"]["reason"] == "Owner approved"
+
+
+def test_base_interaction_resume_collects_existing_round(monkeypatch, tmp_path):
+    _, state_dir, public_id = _interaction_cycle(tmp_path)
+    calls = _stub_interaction(monkeypatch, interrupt=True)
+    args = [
+        "--id",
+        public_id,
+        "--state-dir",
+        str(state_dir),
+        "--check-base-interaction",
+    ]
+    with pytest.raises(RuntimeError, match="interrupted"):
+        _run_review(monkeypatch, args)
+    code, status = _run_review(monkeypatch, args)
+    assert code == 0
+    assert len(calls) == 2
+    assert "on_round_started" not in calls[1]
+    assert calls[1]["round_id"] == "interaction-round"
+    assert status["base_interaction"]["status"] == "checked"
+
+
+@pytest.mark.parametrize("head_change", ["none", "equivalent", "patch"])
+@pytest.mark.parametrize("round_status", ["completed", "sampled", "failed"])
+def test_base_interaction_blocked_retry_preserves_concurrent_validation(monkeypatch, tmp_path, head_change, round_status, capsys):
+    repo, state_dir, public_id = _interaction_cycle(tmp_path)
+    original = _cycle_payload(state_dir, public_id)
+    original["validation"].update(full_suite="pending", ci="pending")
+    _write_cycle_payload(state_dir, public_id, original)
+    calls = []
+    real_save = review.save_cycle
+    def concurrent_save(directory, incoming, **kwargs):
+        if incoming.get("stage") == "decision-pending":
+            latest = orchestrator_store.load_cycle_by_public_id(directory, public_id)
+            latest["validation"].update(full_suite="passed", ci="passed")
+            real_save(directory, latest)
+        return real_save(directory, incoming, **kwargs)
+    monkeypatch.setattr(review, "save_cycle", concurrent_save)
+    def run(**kwargs):
+        calls.append(kwargs)
+        round_id = f"interaction-{len(calls)}"
+        kwargs["on_round_started"]({"round_id": round_id})
+        blocked = len(calls) == 1
+        runs = [{"status": "completed", "review_status": "failed" if blocked else "completed", "grade_blocked": blocked,
+                 "terminal_command": "clean", "reviewer_output": "Review result: clean"}]
+        write_round(state_dir / "orchestrator" / "review-rounds", {
+            "round_id": round_id, "status": round_status if blocked else "completed", "runs": runs})
+        return {"round_id": round_id, "status": "completed", "blocked": blocked,
+                "runs": runs, "reviewed_head": _git(repo, "rev-parse", "HEAD")}
+    monkeypatch.setattr(review_suite_arena, "run_orchestrator_followup_review_step", run)
+    args = ["--id", public_id, "--state-dir", str(state_dir)]
+    code, _ = _run_review(monkeypatch, [*args, "--check-base-interaction"])
+    assert code == 0
+    state = _cycle_payload(state_dir, public_id)
+    assert state["validation"]["ci"] == "passed"
+    assert state["validation"]["full_suite"] == "passed"
+    assert state["base_interaction_pending"]["round_id"] == "interaction-1"
+    if head_change == "patch":
+        _commit_file(repo, "app.py", (repo / "app.py").read_text().replace("return 10", "return 11"), "change patch")
+        monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--check-base-interaction"])
+        assert review.main() != 0
+        assert "PR patch changed" in capsys.readouterr().out
+        state = _cycle_payload(state_dir, public_id)
+        assert "base_interaction_pending" not in state
+        assert state["stage"] == "review-green"
+        assert len(calls) == 1
+        return
+    if head_change == "equivalent":
+        _git(repo, "commit", "--allow-empty", "-m", "new head")
+    code, status = _run_review(monkeypatch, args)
+    assert code == 0
+    assert len(calls) == 2
+    assert status["base_interaction"]["status"] == "checked"
+    assert status["base_interaction"]["receipt"]["round_id"] == "interaction-2"
+    assert status["base_interaction"]["receipt"]["binding"]["head"] == _git(repo, "rev-parse", "HEAD")
+
+
+def test_base_interaction_not_required_without_base_drift(monkeypatch, tmp_path):
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    _init_repo(repo)
+    base = _commit_file(repo, "README.md", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/new-file")
+    head = _commit_file(repo, "new.py", "print(1)\n", "feature")
+    state = review.create_cycle(cwd=repo, base="main", branch="feature/new-file", head=head,
+        merge_base=base, requested_mode="fast", effective_mode="fast", selection="auto", effective_selection="stable")
+    state = review.record_clean_decision(state, round_id="original", lane="review_base", reviewed_head=head)
+    state["stage"] = "review-green"
+    state = orchestrator_store.save_cycle(state_dir, state)
+    calls = _stub_interaction(monkeypatch)
+    code, status = _run_review(monkeypatch, ["--id", state["public_id"], "--state-dir", str(state_dir), "--check-base-interaction"])
+    assert code == 0
+    assert status["base_interaction"]["status"] == "not_required"
+    assert calls == []
+
+
+@pytest.mark.parametrize("verdict", ["clean", "findings"])
+def test_validation_save_keeps_check_completed_after_validation_loaded(monkeypatch, tmp_path, verdict):
+    _, state_dir, public_id = _interaction_cycle(tmp_path)
+    _stub_interaction(monkeypatch, verdict=verdict)
+    record = review._record_validation_status
+    def concurrently_complete(state, args):
+        stale = record(state, args)
+        with monkeypatch.context() as context:
+            context.setattr(review, "_show_status", lambda *args, **kwargs: 0)
+            assert review._check_base_interaction(state, state_dir=state_dir, reason=None) == 0
+        return stale
+    monkeypatch.setattr(review, "_record_validation_status", concurrently_complete)
+    code, status = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir), "--full-suite", "passed", "--ci", "passed"])
+    assert code == 0
+    state = _cycle_payload(state_dir, public_id)
+    assert state["validation"]["ci"] == "passed"
+    if verdict == "clean":
+        assert state["base_interaction_receipt"]["status"] == "checked"
+        assert status["done"] is True
+    else:
+        assert state["stage"] == "fix-pending"
+        assert state["active_findings"]["round_id"] == "interaction-round"
+        assert status["done"] is False

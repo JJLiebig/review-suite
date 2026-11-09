@@ -164,6 +164,9 @@ REPO_NO_ARENA_CONFIG = "review-suite.no-arena"
 def build_parser() -> argparse.ArgumentParser:
     parser = AxiArgumentParser(description="Run the review-suite orchestrator shell.")
     parser.add_argument("--id")
+    interaction_action = parser.add_mutually_exclusive_group()
+    interaction_action.add_argument("--check-base-interaction", action="store_true")
+    interaction_action.add_argument("--accept-base-interaction", action="store_true")
     parser.add_argument("--mode", choices=SUPPORTED_MODES)
     parser.add_argument(
         "--model",
@@ -847,7 +850,9 @@ def _load_cycle_and_state_dir(
 
 def _has_id_action(args: argparse.Namespace) -> bool:
     return bool(
-        args.fixes_validated is not None
+        args.check_base_interaction
+        or args.accept_base_interaction
+        or args.fixes_validated is not None
         or args.restart_mode
         or args.restart_brief is not None
         or args.contract_conflict
@@ -1413,6 +1418,11 @@ def _show_status(
         payload["convergence"] = convergence
     action = _action_payload(state, state_dir=state_dir)
     summary = _add_review_ladder_fields(payload, state, action)
+    from review_suite_core.patch_identity import acceptance, bound_interaction
+
+    accepted_patch = acceptance(state, _identity_head(state) or "")
+    if accepted_patch:
+        payload["base_interaction"] = bound_interaction(state, accepted_patch)
     if action:
         if summary.get("review_ladder") != "invalidated":
             payload["Action"] = action
@@ -1420,7 +1430,15 @@ def _show_status(
         public = json_status_payload(payload)
         if head := str(identity.get("head") or "").strip():
             public["head"] = head
-        for key in ("reviewed_head", "accepted_head", "current_head", "acceptance", "required_checks", "validation_head", "base_interaction"):
+        for key in (
+            "reviewed_head",
+            "accepted_head",
+            "current_head",
+            "acceptance",
+            "required_checks",
+            "validation_head",
+            "base_interaction",
+        ):
             if key in payload:
                 public[key] = payload[key]
         convergence = convergence_summary(state)
@@ -1648,6 +1666,23 @@ def _apply_decision_to_ready_state(
         )
     reviewed_head = str(round_payload.get("reviewed_head") or "").strip() or None
     reviewed_tree = _reviewed_tree(state, reviewed_head)
+    if lane == "base-interaction" and decision == DECISION_CLEAN:
+        check = dict(state["base_interaction_pending"])
+        next_state = deepcopy(state)
+        next_state["base_interaction_receipt"] = {
+            "binding": check["binding"],
+            "status": "checked",
+            "round_id": round_id,
+            "output_refs": round_payload.get("output_refs", []),
+        }
+        next_state["stage"] = check["stage"]
+        next_state["pending_action"] = check["pending_action"]
+        next_state["review_heads"] = check["review_heads"]
+        next_state["decisions"].append(
+            {"round_id": round_id, "lane": lane, "command": decision}
+        )
+        next_state.pop("base_interaction_pending", None)
+        return next_state
     if decision == DECISION_CLEAN:
         if lane == FOLLOWUP_LANE:
             next_state = record_followup_clean(
@@ -1673,6 +1708,15 @@ def _apply_decision_to_ready_state(
             )
         return next_state
     if decision == DECISION_FINDINGS:
+        if lane == "base-interaction":
+            check = state["base_interaction_pending"]
+            next_state = _with_fix_action(record_findings_decision(
+                state, round_id=round_id, lane=lane, reviewed_head=reviewed_head,
+                reviewed_tree=reviewed_tree))
+            next_state["review_heads"] = deepcopy(check["review_heads"])
+            next_state["identity"].update(head=check["binding"]["head"], merge_base=check["binding"]["base"])
+            next_state.pop("base_interaction_pending", None)
+            return next_state
         if lane == FOLLOWUP_LANE:
             return _with_fix_action(
                 record_followup_findings(
@@ -3431,11 +3475,203 @@ def _run_github_review(state: dict[str, Any], *, state_dir: Path, force: bool) -
     return subprocess.run(command, check=False).returncode
 
 
+def _check_base_interaction(
+    state: dict[str, Any], *, state_dir: Path, reason: str | None
+) -> int:
+    from review_suite_core.patch_identity import (
+        acceptance,
+        bound_interaction,
+        interaction_prompt,
+    )
+    from review_suite_core.orchestrator_state import mark_decision_pending
+    from review_suite_core.orchestrator_runner import _attach_review_result
+    from review_suite_arena import (
+        run_orchestrator_followup_review_step,
+        resume_orchestrator_review_step,
+    )
+    from review_suite_local import ensure_clean_git_worktree
+
+    try:
+        with orchestrator_store_lock(
+            state_dir=state_dir,
+            name=f"base-interaction-{state['cycle_key']}",
+            timeout_seconds=1,
+        ):
+            state = load_cycle_by_key(state_dir, state["cycle_key"]) or state
+            identity = state["identity"]
+            cwd = cwd_path_from_normalized(identity["cwd"])
+            if current_branch(cwd) != identity["branch"]:
+                raise ValueError("review branch changed")
+            ensure_clean_git_worktree(cwd)
+            head = current_head(cwd)
+            accepted = acceptance(state, head)
+            pending = dict(state.get("base_interaction_pending") or {})
+            if pending and not pending.get("round_id") and (
+                not accepted or pending["binding"]["head"] != head
+                or pending["binding"]["base"] != accepted["accepted_base"]
+            ):
+                state.pop("base_interaction_pending", None)
+                state = save_cycle(state_dir, state, preserve_validation=True)
+                pending = {}
+            if not accepted and not pending:
+                raise ValueError(
+                    "PR patch changed; continue the existing review before checking base interaction"
+                )
+            binding = pending.get("binding") or {
+                "head": head,
+                "base": accepted["accepted_base"],
+                "patch": accepted["patch"],
+            }
+            if pending:
+                head = binding["head"]
+            if reason:
+                if pending or state.get("active_findings"):
+                    raise ValueError(
+                        "cannot override a pending check or active findings"
+                    )
+                state.setdefault("base_interaction_overrides", []).append({
+                    "binding": deepcopy(binding), "reason": reason.strip()})
+                state["base_interaction_receipt"] = {
+                    "binding": binding,
+                    "status": "overridden",
+                    "reason": reason.strip(),
+                }
+                return _show_status(save_cycle(state_dir, state, preserve_validation=True), state_dir=state_dir)
+            if not pending and not bound_interaction(state, accepted)["check"]:
+                return _show_status(state, state_dir=state_dir)
+            if not pending and state["stage"] not in {
+                STAGE_REVIEW_GREEN,
+                STAGE_LOCAL_GREEN_HANDOFF,
+            }:
+                raise ValueError(
+                    "finish the current review before checking base interaction"
+                )
+            common = dict(
+                review_cwd=cwd,
+                state_dir=state_dir,
+                sqlite_path=Path.home() / ".codex" / "state_5.sqlite",
+                task_id=state["public_id"],
+                progress_interval_seconds=30,
+            )
+            if pending and pending.get("round_id"):
+                payload = load_round(state_dir / "orchestrator" / "review-rounds", pending["round_id"])
+                if payload.get("status") in {"sampled", "failed"} or (
+                    payload.get("status") == "completed" and payload_has_blocked_runs(payload)
+                ):
+                    if not accepted or binding["head"] != current_head(cwd) or binding["base"] != accepted["accepted_base"]:
+                        state["stage"] = pending["stage"]
+                        state["pending_action"] = pending["pending_action"]
+                        state["review_heads"] = pending["review_heads"]
+                        state.pop("base_interaction_pending", None)
+                        state = save_cycle(state_dir, state, preserve_validation=True)
+                        pending = {}
+                        if not accepted:
+                            raise ValueError("PR patch changed; continue the existing review before checking base interaction")
+                        head = current_head(cwd)
+                        binding = {"head": head, "base": accepted["accepted_base"], "patch": accepted["patch"]}
+                    else:
+                        pending.pop("round_id")
+                        state["base_interaction_pending"] = pending
+                        state = save_cycle(state_dir, state, preserve_validation=True)
+            if pending and pending.get("round_id"):
+                result = resume_orchestrator_review_step(
+                    **common,
+                    round_id=pending["round_id"],
+                    lane="base-interaction",
+                    step_name="base-interaction",
+                    round_state_dir=None,
+                )
+            else:
+                config = _config_with_model_override(load_config(state_dir), dict(state.get("model_override") or {}))
+                resolution = resolve_orchestrator_profile(
+                    config, mode="base", selection=_configured_selection(config)
+                )
+                step = next(step for step in resolution.steps if step.kind == "review")
+                pending = pending or {
+                    "binding": binding,
+                    "stage": state["stage"],
+                    "pending_action": deepcopy(state.get("pending_action")),
+                    "review_heads": deepcopy(state.get("review_heads")),
+                }
+                state["base_interaction_pending"] = pending
+                state = save_cycle(state_dir, state, preserve_validation=True)
+
+                def started(info: dict[str, Any]) -> None:
+                    pending["round_id"] = str(info["round_id"])
+                    latest = load_cycle_by_key(state_dir, state["cycle_key"]) or state
+                    latest["base_interaction_pending"] = pending
+                    save_cycle(state_dir, latest, preserve_validation=True)
+
+                prompt = interaction_prompt(
+                    accepted, bound_interaction(state, accepted)
+                )
+                result = run_orchestrator_followup_review_step(
+                    **common,
+                    task_class="base_review",
+                    model=step.model,
+                    reasoning_effort=step.reasoning_effort,
+                    service_tier=step.service_tier,
+                    review_scope={
+                        "reviewed_head": head,
+                        "merge_base": binding["base"],
+                        "base_interaction": binding,
+                    },
+                    prompt=prompt,
+                    allow_unsafe_windows_wsl_fallback=False,
+                    on_round_started=started,
+                )
+            state = load_cycle_by_key(state_dir, state["cycle_key"]) or state
+            state = mark_decision_pending(
+                state,
+                round_id=str(result["round_id"]),
+                lane="base-interaction",
+                reviewed_head=head,
+                pending_action={
+                    "kind": "decision",
+                    "round_id": str(result["round_id"]),
+                    "lane": "base-interaction",
+                },
+            )
+            state["review_heads"] = deepcopy(state["base_interaction_pending"]["review_heads"])
+            state = _attach_review_result(state, result)
+            state = _auto_record_structured_decision(state, state_dir=state_dir)
+            return _show_status(save_cycle(state_dir, state, preserve_validation=True), state_dir=state_dir)
+    except TimeoutError:
+        return _show_status(
+            load_cycle_by_key(state_dir, state["cycle_key"]) or state,
+            state_dir=state_dir,
+        )
+
+
 def main() -> int:
     parser = build_parser()
     args: argparse.Namespace | None = None
     try:
         args = parser.parse_args()
+        if args.check_base_interaction or args.accept_base_interaction:
+            if not args.id:
+                raise ValueError("base interaction actions require --id")
+            if args.accept_base_interaction and not str(args.reason or "").strip():
+                raise ValueError("--accept-base-interaction requires --reason")
+            allowed = {
+                "id",
+                "cd",
+                "check_base_interaction",
+                "accept_base_interaction",
+                "reason",
+            }
+            if any(value for key, value in vars(args).items() if key not in allowed):
+                raise ValueError(
+                    "base interaction actions cannot be combined with other actions"
+                )
+            if args.check_base_interaction and args.reason:
+                raise ValueError("--reason requires --accept-base-interaction")
+            state_dir = Path(default_state_dir()).resolve(strict=False)
+            state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
+            _reject_id_creation_args(args, state)
+            return _check_base_interaction(
+                state, state_dir=state_dir, reason=args.reason
+            )
         arena_configuration = _configure_repo_arena(args)
         if arena_configuration is not None:
             return arena_configuration
@@ -3683,6 +3919,8 @@ def main() -> int:
             else:
                 state = _apply_runtime_options(state, args)
                 _reject_id_creation_args(args, state)
+            if state.get("base_interaction_pending") and not _has_id_action(args):
+                return _check_base_interaction(state, state_dir=state_dir, reason=None)
             if args.fixes_validated is not None:
                 identity = _current_cycle_identity_if_compatible(state)
                 if not identity and state.get("stage") == STAGE_FIX_PENDING:
@@ -3721,9 +3959,7 @@ def main() -> int:
             if args.show_findings:
                 return _show_findings(state, state_dir=state_dir)
             if args.show_status:
-                return _show_status(
-                    state, state_dir=state_dir, as_json=bool(args.json)
-                )
+                return _show_status(state, state_dir=state_dir, as_json=bool(args.json))
             if args.contract_conflict and not has_restart_brief:
                 state = record_contract_conflict(
                     state, conflict=str(args.contract_conflict)
@@ -3785,7 +4021,10 @@ def main() -> int:
                 )
             if args.github_result:
                 resumed = _resume_progress(state, state_dir=state_dir)
-                if resumed != state and resumed.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+                if resumed != state and resumed.get("stage") not in {
+                    STAGE_REVIEW_GREEN,
+                    STAGE_LOCAL_GREEN_HANDOFF,
+                }:
                     saved = save_cycle(state_dir, resumed)
                     _render(saved, state_dir=state_dir)
                     return 0
@@ -3849,7 +4088,7 @@ def main() -> int:
         else:
             state = _create_or_resume_cycle(args=args, state_dir=state_dir)
             state = _advance_without_decision(state, state_dir=state_dir)
-        saved = save_cycle(state_dir, state)
+        saved = save_cycle(state_dir, state, validation_only=has_validation_status and not args.decision)
         _render(saved, state_dir=state_dir)
         return 0
     except SuccessorAdvanceBusyError as exc:

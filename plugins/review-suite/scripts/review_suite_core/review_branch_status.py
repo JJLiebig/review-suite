@@ -114,6 +114,7 @@ def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
         "reason",
         "progress",
         "convergence",
+        "base_interaction",
     ):
         value = payload.get(key)
         if value not in (None, "", [], {}):
