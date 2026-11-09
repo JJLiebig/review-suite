@@ -288,12 +288,10 @@ def delta_prompt(old_base: str, old_head: str, new_base: str, new_head: str) -> 
 def bound_interaction(
     state: dict[str, Any], accepted: dict[str, Any]
 ) -> dict[str, Any]:
-    result = interaction(
-        Path(accepted["repo"]),
-        accepted["reviewed_base"],
-        accepted["accepted_base"],
-        accepted["reviewed_head"],
-    )
+    result = ({"check": False, "reason": "no_base_drift", "paths": [], "line_overlap_paths": []}
+              if accepted["reviewed_base"] == accepted["accepted_base"] else interaction(
+                  Path(accepted["repo"]), accepted["reviewed_base"],
+                  accepted["accepted_base"], accepted["reviewed_head"]))
     binding = {
         "head": accepted["accepted_head"],
         "base": accepted["accepted_base"],

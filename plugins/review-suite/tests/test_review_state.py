@@ -2315,7 +2315,7 @@ def test_id_json_accepts_identical_patch_with_shifted_lines_and_preserves_receip
     assert result["accepted_head"] == head
     state["validation"]["head"] = head
     review._show_status(state, state_dir=tmp_path / "state", as_json=True)
-    assert json.loads(capsys.readouterr().out)["done"] is True
+    assert json.loads(capsys.readouterr().out)["done"] is False
     assert result["reviewed_head"] == reviewed
     assert result["acceptance"]["reviewed_base"] != new_base
     assert result["acceptance"]["accepted_base"] == new_base

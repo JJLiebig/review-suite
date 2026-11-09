@@ -3510,7 +3510,7 @@ def _check_base_interaction(
                 or pending["binding"]["base"] != accepted["accepted_base"]
             ):
                 state.pop("base_interaction_pending", None)
-                state = save_cycle(state_dir, state)
+                state = save_cycle(state_dir, state, preserve_validation=True)
                 pending = {}
             if not accepted and not pending:
                 raise ValueError(
@@ -3533,7 +3533,7 @@ def _check_base_interaction(
                     "status": "overridden",
                     "reason": reason.strip(),
                 }
-                return _show_status(save_cycle(state_dir, state), state_dir=state_dir)
+                return _show_status(save_cycle(state_dir, state, preserve_validation=True), state_dir=state_dir)
             if not pending and not bound_interaction(state, accepted)["check"]:
                 return _show_status(state, state_dir=state_dir)
             if not pending and state["stage"] not in {
@@ -3551,6 +3551,12 @@ def _check_base_interaction(
                 progress_interval_seconds=30,
             )
             if pending and pending.get("round_id"):
+                payload = load_round(state_dir / "orchestrator" / "review-rounds", pending["round_id"])
+                if payload.get("status") == "completed" and payload_has_blocked_runs(payload):
+                    pending.pop("round_id")
+                    state["base_interaction_pending"] = pending
+                    state = save_cycle(state_dir, state, preserve_validation=True)
+            if pending and pending.get("round_id"):
                 result = resume_orchestrator_review_step(
                     **common,
                     round_id=pending["round_id"],
@@ -3564,20 +3570,20 @@ def _check_base_interaction(
                     config, mode="base", selection=_configured_selection(config)
                 )
                 step = next(step for step in resolution.steps if step.kind == "review")
-                pending = {
+                pending = pending or {
                     "binding": binding,
                     "stage": state["stage"],
                     "pending_action": deepcopy(state.get("pending_action")),
                     "review_heads": deepcopy(state.get("review_heads")),
                 }
                 state["base_interaction_pending"] = pending
-                state = save_cycle(state_dir, state)
+                state = save_cycle(state_dir, state, preserve_validation=True)
 
                 def started(info: dict[str, Any]) -> None:
                     pending["round_id"] = str(info["round_id"])
                     latest = load_cycle_by_key(state_dir, state["cycle_key"]) or state
                     latest["base_interaction_pending"] = pending
-                    save_cycle(state_dir, latest)
+                    save_cycle(state_dir, latest, preserve_validation=True)
 
                 prompt = interaction_prompt(
                     accepted, bound_interaction(state, accepted)
@@ -3609,9 +3615,10 @@ def _check_base_interaction(
                     "lane": "base-interaction",
                 },
             )
+            state["review_heads"] = deepcopy(state["base_interaction_pending"]["review_heads"])
             state = _attach_review_result(state, result)
             state = _auto_record_structured_decision(state, state_dir=state_dir)
-            return _show_status(save_cycle(state_dir, state), state_dir=state_dir)
+            return _show_status(save_cycle(state_dir, state, preserve_validation=True), state_dir=state_dir)
     except TimeoutError:
         return _show_status(
             load_cycle_by_key(state_dir, state["cycle_key"]) or state,
