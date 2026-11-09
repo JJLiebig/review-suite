@@ -197,7 +197,7 @@ def review_ladder_summary(
                           "validation": {**dict(state.get("validation") or {}), "head": original}}
         original_summary = review_ladder_summary(original_state) if comparison_head != original else None
         if original_summary and original_summary.get("done"):
-            ready = not validation_blockers(state)
+            ready = not validation_blockers(state) and not bound_interaction(state, accepted)["check"]
             return {**original_summary, "done": ready, "review_ladder": "complete" if ready else "pending",
                     "reviewed_head": original, "current_head": comparison_head,
                     "accepted_head": comparison_head, "acceptance": accepted,

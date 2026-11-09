@@ -332,23 +332,17 @@ def interaction_prompt(accepted: dict[str, Any], scope: dict[str, Any]) -> str:
             if p
         ]
     )
-    base_patch = git(
-        repo, "diff", "--no-ext-diff", "--no-textconv", old, base, "--", *base_paths
-    )
-    pr_patch = (
-        git(repo, "diff", "--no-ext-diff", "--no-textconv", base, head, "--", *paths)
-        if paths
-        else b""
-    )
+    from .axi_output import format_command
+    base_command = format_command(["git", "diff", "--no-ext-diff", "--no-textconv", old, base, "--", *base_paths])
+    pr_command = format_command(["git", "diff", "--no-ext-diff", "--no-textconv", base, head, "--", *paths]) if paths else "No shared-path hunks; trace affected PR call sites."
     return (
-        "Review only interactions between these flagged base changes and the PR code that uses or touches them. "
+        "Review only interactions between the flagged base changes and the PR code that uses or touches them. "
         "Never review the full PR. Inspect affected call sites and dependencies as needed, and only their "
         "relevant changed hunks. For structural changes trace callers of removed, moved or changed contracts. "
+        "Read these diffs in bounded sections, focusing on the flagged contracts and their callers. "
         "Report only material correctness defects with a reachable trigger. "
         f"Current head: {head}; base: {base}. Flag reason: {scope['reason']}.\n"
-        "Flagged base diff:\n"
-        + base_patch.decode("utf-8", "replace")
-        + "\nPR hunks in shared paths:\n"
-        + pr_patch.decode("utf-8", "replace")
-        + "\nEnd with `Review result: clean` or `Review result: findings`."
+        f"Flagged base diff command: {base_command}\n"
+        f"Shared-path PR hunks command: {pr_command}\n"
+        "End with `Review result: clean` or `Review result: findings`."
     )

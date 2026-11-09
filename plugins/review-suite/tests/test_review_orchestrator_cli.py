@@ -7115,3 +7115,31 @@ def test_base_interaction_resume_collects_existing_round(monkeypatch, tmp_path):
     assert "on_round_started" not in calls[1]
     assert calls[1]["round_id"] == "interaction-round"
     assert status["base_interaction"]["status"] == "checked"
+
+
+def test_base_interaction_blocked_retry_preserves_concurrent_validation(monkeypatch, tmp_path):
+    _, state_dir, public_id = _interaction_cycle(tmp_path)
+    original = _cycle_payload(state_dir, public_id)
+    original["validation"].update(full_suite="pending", ci="pending")
+    _write_cycle_payload(state_dir, public_id, original)
+    calls = _stub_interaction(monkeypatch)
+    normal_run = review_suite_arena.run_orchestrator_followup_review_step
+    def blocked(**kwargs):
+        result = normal_run(**kwargs)
+        state = orchestrator_store.load_cycle_by_public_id(state_dir, public_id)
+        state["validation"].update(full_suite="passed", ci="passed")
+        orchestrator_store.save_cycle(state_dir, state)
+        return {**result, "blocked": True, "status": "failed"}
+    monkeypatch.setattr(review_suite_arena, "run_orchestrator_followup_review_step", blocked)
+    args = ["--id", public_id, "--state-dir", str(state_dir)]
+    code, _ = _run_review(monkeypatch, [*args, "--check-base-interaction"])
+    assert code == 0
+    state = _cycle_payload(state_dir, public_id)
+    assert state["validation"]["ci"] == "passed"
+    assert state["validation"]["full_suite"] == "passed"
+    assert state["base_interaction_pending"]["round_id"] == "interaction-round"
+    code, status = _run_review(monkeypatch, args)
+    assert code == 0
+    assert len(calls) == 2
+    assert calls[1]["round_id"] == "interaction-round"
+    assert status["base_interaction"]["status"] == "checked"

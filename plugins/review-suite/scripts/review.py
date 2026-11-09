@@ -3505,6 +3505,13 @@ def _check_base_interaction(
             head = current_head(cwd)
             accepted = acceptance(state, head)
             pending = dict(state.get("base_interaction_pending") or {})
+            if pending and not pending.get("round_id") and (
+                not accepted or pending["binding"]["head"] != head
+                or pending["binding"]["base"] != accepted["accepted_base"]
+            ):
+                state.pop("base_interaction_pending", None)
+                state = save_cycle(state_dir, state)
+                pending = {}
             if not accepted and not pending:
                 raise ValueError(
                     "PR patch changed; continue the existing review before checking base interaction"
@@ -3568,8 +3575,9 @@ def _check_base_interaction(
 
                 def started(info: dict[str, Any]) -> None:
                     pending["round_id"] = str(info["round_id"])
-                    state["base_interaction_pending"] = pending
-                    save_cycle(state_dir, state)
+                    latest = load_cycle_by_key(state_dir, state["cycle_key"]) or state
+                    latest["base_interaction_pending"] = pending
+                    save_cycle(state_dir, latest)
 
                 prompt = interaction_prompt(
                     accepted, bound_interaction(state, accepted)
@@ -3589,6 +3597,7 @@ def _check_base_interaction(
                     allow_unsafe_windows_wsl_fallback=False,
                     on_round_started=started,
                 )
+            state = load_cycle_by_key(state_dir, state["cycle_key"]) or state
             state = mark_decision_pending(
                 state,
                 round_id=str(result["round_id"]),
@@ -3886,6 +3895,8 @@ def main() -> int:
             else:
                 state = _apply_runtime_options(state, args)
                 _reject_id_creation_args(args, state)
+            if state.get("base_interaction_pending") and not _has_id_action(args):
+                return _check_base_interaction(state, state_dir=state_dir, reason=None)
             if args.fixes_validated is not None:
                 identity = _current_cycle_identity_if_compatible(state)
                 if not identity and state.get("stage") == STAGE_FIX_PENDING:
