@@ -3528,6 +3528,8 @@ def _check_base_interaction(
                     raise ValueError(
                         "cannot override a pending check or active findings"
                     )
+                state.setdefault("base_interaction_overrides", []).append({
+                    "binding": deepcopy(binding), "reason": reason.strip()})
                 state["base_interaction_receipt"] = {
                     "binding": binding,
                     "status": "overridden",
@@ -3552,7 +3554,9 @@ def _check_base_interaction(
             )
             if pending and pending.get("round_id"):
                 payload = load_round(state_dir / "orchestrator" / "review-rounds", pending["round_id"])
-                if payload.get("status") == "completed" and payload_has_blocked_runs(payload):
+                if payload.get("status") in {"sampled", "failed"} or (
+                    payload.get("status") == "completed" and payload_has_blocked_runs(payload)
+                ):
                     if not accepted or binding["head"] != current_head(cwd) or binding["base"] != accepted["accepted_base"]:
                         state["stage"] = pending["stage"]
                         state["pending_action"] = pending["pending_action"]

@@ -7107,7 +7107,8 @@ def test_base_interaction_resume_collects_existing_round(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("head_change", ["none", "equivalent", "patch"])
-def test_base_interaction_blocked_retry_preserves_concurrent_validation(monkeypatch, tmp_path, head_change, capsys):
+@pytest.mark.parametrize("round_status", ["completed", "sampled", "failed"])
+def test_base_interaction_blocked_retry_preserves_concurrent_validation(monkeypatch, tmp_path, head_change, round_status, capsys):
     repo, state_dir, public_id = _interaction_cycle(tmp_path)
     original = _cycle_payload(state_dir, public_id)
     original["validation"].update(full_suite="pending", ci="pending")
@@ -7129,7 +7130,7 @@ def test_base_interaction_blocked_retry_preserves_concurrent_validation(monkeypa
         runs = [{"status": "completed", "review_status": "failed" if blocked else "completed", "grade_blocked": blocked,
                  "terminal_command": "clean", "reviewer_output": "Review result: clean"}]
         write_round(state_dir / "orchestrator" / "review-rounds", {
-            "round_id": round_id, "status": "completed", "runs": runs})
+            "round_id": round_id, "status": round_status if blocked else "completed", "runs": runs})
         return {"round_id": round_id, "status": "completed", "blocked": blocked,
                 "runs": runs, "reviewed_head": _git(repo, "rev-parse", "HEAD")}
     monkeypatch.setattr(review_suite_arena, "run_orchestrator_followup_review_step", run)
