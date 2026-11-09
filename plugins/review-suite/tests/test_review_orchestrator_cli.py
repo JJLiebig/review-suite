@@ -7106,7 +7106,8 @@ def test_base_interaction_resume_collects_existing_round(monkeypatch, tmp_path):
     assert status["base_interaction"]["status"] == "checked"
 
 
-def test_base_interaction_blocked_retry_preserves_concurrent_validation(monkeypatch, tmp_path):
+@pytest.mark.parametrize("head_change", ["none", "equivalent", "patch"])
+def test_base_interaction_blocked_retry_preserves_concurrent_validation(monkeypatch, tmp_path, head_change, capsys):
     repo, state_dir, public_id = _interaction_cycle(tmp_path)
     original = _cycle_payload(state_dir, public_id)
     original["validation"].update(full_suite="pending", ci="pending")
@@ -7139,11 +7140,24 @@ def test_base_interaction_blocked_retry_preserves_concurrent_validation(monkeypa
     assert state["validation"]["ci"] == "passed"
     assert state["validation"]["full_suite"] == "passed"
     assert state["base_interaction_pending"]["round_id"] == "interaction-1"
+    if head_change == "patch":
+        _commit_file(repo, "app.py", (repo / "app.py").read_text().replace("return 10", "return 11"), "change patch")
+        monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--check-base-interaction"])
+        assert review.main() != 0
+        assert "PR patch changed" in capsys.readouterr().out
+        state = _cycle_payload(state_dir, public_id)
+        assert "base_interaction_pending" not in state
+        assert state["stage"] == "review-green"
+        assert len(calls) == 1
+        return
+    if head_change == "equivalent":
+        _git(repo, "commit", "--allow-empty", "-m", "new head")
     code, status = _run_review(monkeypatch, args)
     assert code == 0
     assert len(calls) == 2
     assert status["base_interaction"]["status"] == "checked"
     assert status["base_interaction"]["receipt"]["round_id"] == "interaction-2"
+    assert status["base_interaction"]["receipt"]["binding"]["head"] == _git(repo, "rev-parse", "HEAD")
 
 
 def test_base_interaction_not_required_without_base_drift(monkeypatch, tmp_path):
@@ -7162,3 +7176,22 @@ def test_base_interaction_not_required_without_base_drift(monkeypatch, tmp_path)
     assert code == 0
     assert status["base_interaction"]["status"] == "not_required"
     assert calls == []
+
+
+def test_validation_save_keeps_check_completed_after_validation_loaded(monkeypatch, tmp_path):
+    _, state_dir, public_id = _interaction_cycle(tmp_path)
+    _stub_interaction(monkeypatch)
+    record = review._record_validation_status
+    def concurrently_complete(state, args):
+        stale = record(state, args)
+        with monkeypatch.context() as context:
+            context.setattr(review, "_show_status", lambda *args, **kwargs: 0)
+            assert review._check_base_interaction(state, state_dir=state_dir, reason=None) == 0
+        return stale
+    monkeypatch.setattr(review, "_record_validation_status", concurrently_complete)
+    code, status = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir), "--full-suite", "passed", "--ci", "passed"])
+    assert code == 0
+    state = _cycle_payload(state_dir, public_id)
+    assert state["base_interaction_receipt"]["status"] == "checked"
+    assert state["validation"]["ci"] == "passed"
+    assert status["done"] is True

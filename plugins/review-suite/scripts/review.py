@@ -3553,9 +3553,21 @@ def _check_base_interaction(
             if pending and pending.get("round_id"):
                 payload = load_round(state_dir / "orchestrator" / "review-rounds", pending["round_id"])
                 if payload.get("status") == "completed" and payload_has_blocked_runs(payload):
-                    pending.pop("round_id")
-                    state["base_interaction_pending"] = pending
-                    state = save_cycle(state_dir, state, preserve_validation=True)
+                    if not accepted or binding["head"] != current_head(cwd) or binding["base"] != accepted["accepted_base"]:
+                        state["stage"] = pending["stage"]
+                        state["pending_action"] = pending["pending_action"]
+                        state["review_heads"] = pending["review_heads"]
+                        state.pop("base_interaction_pending", None)
+                        state = save_cycle(state_dir, state, preserve_validation=True)
+                        pending = {}
+                        if not accepted:
+                            raise ValueError("PR patch changed; continue the existing review before checking base interaction")
+                        head = current_head(cwd)
+                        binding = {"head": head, "base": accepted["accepted_base"], "patch": accepted["patch"]}
+                    else:
+                        pending.pop("round_id")
+                        state["base_interaction_pending"] = pending
+                        state = save_cycle(state_dir, state, preserve_validation=True)
             if pending and pending.get("round_id"):
                 result = resume_orchestrator_review_step(
                     **common,
@@ -3565,7 +3577,7 @@ def _check_base_interaction(
                     round_state_dir=None,
                 )
             else:
-                config = load_config(state_dir)
+                config = _config_with_model_override(load_config(state_dir), dict(state.get("model_override") or {}))
                 resolution = resolve_orchestrator_profile(
                     config, mode="base", selection=_configured_selection(config)
                 )
@@ -4071,7 +4083,7 @@ def main() -> int:
         else:
             state = _create_or_resume_cycle(args=args, state_dir=state_dir)
             state = _advance_without_decision(state, state_dir=state_dir)
-        saved = save_cycle(state_dir, state)
+        saved = save_cycle(state_dir, state, validation_only=has_validation_status and not args.decision)
         _render(saved, state_dir=state_dir)
         return 0
     except SuccessorAdvanceBusyError as exc:
