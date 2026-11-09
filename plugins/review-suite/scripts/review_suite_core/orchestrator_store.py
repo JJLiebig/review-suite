@@ -216,10 +216,7 @@ def save_cycle(
         cycle_key = str(state.get("cycle_key") or "").strip()
         current = load_cycle_by_key(state_dir, cycle_key) if cycle_key else None
         payload = deepcopy(state)
-        if validation_only and current is not None and (
-            current.get("base_interaction_pending") or current.get("base_interaction_receipt")
-            or payload.get("base_interaction_pending") or payload.get("base_interaction_receipt")
-        ):
+        if validation_only and current is not None:
             validation = payload.get("validation")
             payload = deepcopy(current)
             payload["validation"] = deepcopy(validation)

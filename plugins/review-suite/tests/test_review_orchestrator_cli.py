@@ -7178,9 +7178,10 @@ def test_base_interaction_not_required_without_base_drift(monkeypatch, tmp_path)
     assert calls == []
 
 
-def test_validation_save_keeps_check_completed_after_validation_loaded(monkeypatch, tmp_path):
+@pytest.mark.parametrize("verdict", ["clean", "findings"])
+def test_validation_save_keeps_check_completed_after_validation_loaded(monkeypatch, tmp_path, verdict):
     _, state_dir, public_id = _interaction_cycle(tmp_path)
-    _stub_interaction(monkeypatch)
+    _stub_interaction(monkeypatch, verdict=verdict)
     record = review._record_validation_status
     def concurrently_complete(state, args):
         stale = record(state, args)
@@ -7192,6 +7193,11 @@ def test_validation_save_keeps_check_completed_after_validation_loaded(monkeypat
     code, status = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir), "--full-suite", "passed", "--ci", "passed"])
     assert code == 0
     state = _cycle_payload(state_dir, public_id)
-    assert state["base_interaction_receipt"]["status"] == "checked"
     assert state["validation"]["ci"] == "passed"
-    assert status["done"] is True
+    if verdict == "clean":
+        assert state["base_interaction_receipt"]["status"] == "checked"
+        assert status["done"] is True
+    else:
+        assert state["stage"] == "fix-pending"
+        assert state["active_findings"]["round_id"] == "interaction-round"
+        assert status["done"] is False
