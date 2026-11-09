@@ -5,6 +5,8 @@ description: "Run the anchored GitHub PR review cycle and relay the returned rev
 
 # Review GitHub
 
+`main` moving never blocks work. Leave a ready branch alone until merge; merge `main` in or rebase only to fix a conflict. If the PR's own diff is unchanged, its review still counts. If it changed, review only what changed. Never restart a whole review because `main` moved. Keep required checks on every new head; check concrete base interactions, including structural changes.
+
 Use for PR-scoped GitHub review.
 
 ```powershell

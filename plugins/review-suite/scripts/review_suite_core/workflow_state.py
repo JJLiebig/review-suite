@@ -373,16 +373,17 @@ def merge_base_drift_scope(
     )
     branch_paths = recorded_branch_paths | current_branch_paths
     overlapping_paths = sorted(base_changed_paths & branch_paths)
+    from .patch_identity import patch_identity, interaction
     return {
         "base_changed_paths": sorted(base_changed_paths),
         "recorded_branch_paths": sorted(recorded_branch_paths),
         "current_branch_paths": sorted(current_branch_paths),
         "overlapping_paths": overlapping_paths,
-        "patch_equivalent": diff_patch_between(
-            review_cwd, recorded_merge_base, reviewed_head
-        )
-        == diff_patch_between(review_cwd, current_merge_base, current_head),
+        "interaction": interaction(review_cwd, recorded_merge_base, current_merge_base, reviewed_head),
+        "patch_equivalent": patch_identity(review_cwd, recorded_merge_base, reviewed_head)
+        == patch_identity(review_cwd, current_merge_base, current_head),
     }
+
 
 
 def dirty_worktree_scope(
@@ -1349,23 +1350,24 @@ def inspect_workflow_status(
             payload["base_drift_overlap_paths"] = drift_scope["overlapping_paths"][
                 :TOP_PATH_LIMIT
             ]
+            payload["base_interaction"] = drift_scope["interaction"]
             payload["base_drift_patch_equivalent"] = bool(
                 drift_scope["patch_equivalent"]
             )
-            if drift_scope["overlapping_paths"] or not drift_scope["patch_equivalent"]:
+            if not drift_scope["patch_equivalent"]:
                 payload.update(
                     stage_decision(
                         {
-                            "recommendation": "full-review",
+                            "recommendation": "review-followup",
                             "reason": "base_merge_base_changed",
-                            "note": "The branch merge-base against the review base changed and the base drift may affect reviewed branch paths. Run a fresh full review.",
+                            "note": "The PR patch changed. Review only the changed portion with review_followup.py --since <reviewed-head> --note <scope>; check base interactions. Never restart because main moved.",
                         }
                     )
                 )
                 return finalize()
             base_drift_patch_equivalent = True
             reviewed_head = head
-            payload["last_reviewed_head"] = head
+            payload["accepted_head"] = head
             payload["base_drift_review_equivalent"] = True
         branch_pressure = branch_review_pressure(
             state=state,

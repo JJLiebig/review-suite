@@ -16,6 +16,7 @@ from review_suite_arena import (
     run_orchestrator_review_step,
 )
 from review_suite_local import (
+    ensure_clean_git_worktree,
     latest_rerolled_round_payload,
     load_round,
     payload_has_blocked_runs,
@@ -740,6 +741,23 @@ def _arena_recovery_review_result(
 
 
 def run_review_step(**kwargs: Any) -> dict[str, object]:
+    scope = dict(kwargs.get("review_scope") or {})
+    delta = dict(scope.get("patch_delta") or {})
+    if delta:
+        from .patch_identity import delta_prompt
+        ensure_clean_git_worktree(kwargs["review_cwd"], review_scope=scope)
+        kwargs["review_scope"] = {key: value for key, value in scope.items()
+                                  if key not in {"base", "commit", "commit_end"}}
+        kwargs["review_scope"]["branch_base"] = scope.get("branch_base") or scope.get("base")
+        keys = ("task_class", "model", "reasoning_effort", "service_tier", "review_cwd",
+                "state_dir", "sqlite_path", "review_scope", "task_id", "progress_interval_seconds",
+                "allow_unsafe_windows_wsl_fallback", "on_round_started")
+        return run_orchestrator_followup_review_step(
+            **{key: kwargs[key] for key in keys if key in kwargs},
+            prompt=delta_prompt(delta["reviewed_base"], delta["reviewed_head"],
+                                scope["merge_base"], scope["reviewed_head"])
+                   + "\n" + str(kwargs.get("custom_instructions") or ""),
+        )
     return run_orchestrator_review_step(**kwargs)
 
 
@@ -800,6 +818,9 @@ def _run_profile_review_once(
                 running_state = saved
         running_base_state = running_state
 
+    delta = dict(state.get("patch_delta") or {})
+    if delta:
+        scope["patch_delta"] = delta
     review_result = run_review_step(
         lane=lane,
         task_class=str(step["task_class"]),
@@ -1244,7 +1265,10 @@ def _followup_review_scope(
     source_round_id: str,
 ) -> tuple[dict[str, Any], bool]:
     identity = dict(state.get("identity") or {})
-    linear_range = _is_linear_followup_range(cwd, since_head, head)
+    recorded_base = (dict(state.get("review_patch") or {}).get("reviewed_base")
+                     or dict(state.get("base_drift") or {}).get("recorded_merge_base")
+                     or identity.get("merge_base"))
+    linear_range = _is_linear_followup_range(cwd, since_head, head) and recorded_base == merge_base_head
     if linear_range:
         review_scope: dict[str, Any] = {
             "base": since_head,
@@ -1258,11 +1282,11 @@ def _followup_review_scope(
         }
     else:
         review_scope = {
-            "base": base,
             "branch_base": base,
             "reviewed_head": head,
             "merge_base": merge_base_head,
-            "target_label": f"branch diff `{base}..{head}` after fixes for findings from `{since_head}`",
+            "target_label": f"PR patch changes `{recorded_base}..{since_head}` to `{merge_base_head}..{head}`",
+            "recorded_base": recorded_base,
             "source_round_id": source_round_id,
             "findings_reviewed_head": since_head,
         }
@@ -1310,10 +1334,9 @@ def _run_followup_review_once(
     )
     note = _followup_note(state, active, source_round_id)
     if not linear_range:
-        note = (
-            f"{note} The reviewed head is no longer an ancestor of HEAD; review the current branch diff "
-            f"against {base} and focus on whether the fixes address that source round's findings."
-        )
+        from .patch_identity import delta_prompt
+        ensure_clean_git_worktree(cwd)
+        note = delta_prompt(str(review_scope["recorded_base"]), since_head, merge_base_head, head) + "\n" + note
     if review_instructions := _review_instructions(state, {}):
         note = f"{note}\n\n{review_instructions}"
     prompt = build_followup_prompt(

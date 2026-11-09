@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cd")
     parser.add_argument("--base", help="Override the detected default branch ref.")
     parser.add_argument("--since")
+    parser.add_argument("--reviewed-base", help="Immutable merge-base of the previously reviewed PR patch.")
     parser.add_argument("--note")
     parser.add_argument("--note-file")
     parser.add_argument(
@@ -223,17 +224,18 @@ def main() -> int:
             state_dir=state_dir,
             review_cwd=review_root,
             base=branch_base,
-            force=bool(args.force),
+            force=bool(args.force or args.reviewed_base),
         )
         head = current_head(review_root)
-        if since_head == head:
+        if since_head == head and not args.reviewed_base:
             raise ValueError(
                 "current HEAD already matches the requested follow-up anchor"
             )
-        validated_linear_review_range(
-            review_root, since_head, head, label="native follow-up review"
-        )
-        if not has_committed_diff(review_root, since_head, head):
+        if not args.reviewed_base:
+            validated_linear_review_range(
+                review_root, since_head, head, label="native follow-up review"
+            )
+        if not args.reviewed_base and not has_committed_diff(review_root, since_head, head):
             raise ValueError(
                 f"follow-up review found no committed diff between `{since_head}` and `{head}`. "
                 "Commit the intended fix or use the appropriate full review lane."
@@ -244,6 +246,11 @@ def main() -> int:
             head=head,
             note=note_text,
         )
+        if args.reviewed_base:
+            from review_suite_core.patch_identity import delta_prompt
+            reviewed_base = resolve_ref(review_root, args.reviewed_base)
+            since_head = resolve_ref(review_root, since_head)
+            prompt = delta_prompt(reviewed_base, since_head, merge_base(review_root, branch_base), head) + "\n" + note_text
         model_config = lens_model_config("review-followup", state_dir=state_dir)
         result = run_codex_review(
             tool_name="review-followup",
@@ -253,7 +260,7 @@ def main() -> int:
             service_tier=model_config.service_tier,
             title="review-followup",
             review_root=review_root,
-            base=since_head,
+            base=None if args.reviewed_base else since_head,
             progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
             timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
             allow_unsafe_windows_wsl_fallback=bool(args.wsl),

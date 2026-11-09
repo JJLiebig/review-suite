@@ -279,6 +279,14 @@ def _save_cycle_unlocked(state_dir: Path, state: dict[str, Any]) -> dict[str, An
         raise ValueError("cycle_key is required")
     payload = deepcopy(state)
     payload["public_id"] = public_id_for_cycle_key(state_dir, cycle_key)
+    if payload.get("stage") in {"review-green", "local-green-handoff"}:
+        from .patch_identity import reviewed_receipt
+        try:
+            receipt = reviewed_receipt(payload)
+            if receipt:
+                payload["review_patch"] = receipt
+        except (OSError, ValueError):
+            pass
     _atomic_write_json(cycle_path(state_dir, cycle_key), payload)
     return payload
 

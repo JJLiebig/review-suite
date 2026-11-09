@@ -249,6 +249,7 @@ def test_review_state_status_json_emits_sanitized_running_review(
         "branch": "feature/json",
         "done": False,
         "head": "head-1",
+        "current_head": "head-1",
         "mode": "base",
         "next_action": "continue",
         "progress": "review 1/1 broad-discovery",
@@ -762,67 +763,6 @@ def test_review_state_status_keeps_persisted_classified_blocked(
     assert emitted[0]["Action"]["blocked_by"] == ["ci:classified"]
 
 
-def test_review_state_status_keeps_patch_equivalent_base_drift_done(
-    monkeypatch, tmp_path: Path
-) -> None:
-    emitted: list[dict[str, object]] = []
-    repo = tmp_path / "repo"
-    state_dir = tmp_path / "state"
-    old_head = "old-head"
-    new_head = "new-head"
-    repo.mkdir()
-    _write_orchestrator_cycle(
-        state_dir,
-        "orc-base-drift-done.json",
-        {
-            "public_id": "rvw_done",
-            "stage": "review-green",
-            "mode": {"requested": "base", "effective": "base"},
-            "identity": {
-                "cwd": str(review_state.normalize_review_cwd_value(repo)),
-                "base": "main",
-                "branch": "feature/progress",
-                "head": old_head,
-            },
-            "review_heads": {"last_reviewed_head": old_head},
-            "github_review": {"status": "clean", "reviewed_head": old_head},
-            "validation": {
-                "full_suite": "passed",
-                "ci": "waived",
-                "note": "CI unavailable for this docs-only change",
-            },
-            "deslop": {"tracked": False},
-            "base_drift": {
-                "patch_equivalent": True,
-                "reviewed_head": old_head,
-                "equivalent_reviewed_head": new_head,
-            },
-        },
-    )
-    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(
-        review_state,
-        "inspect_workflow_status",
-        lambda **kwargs: {
-            "recommendation": "coherence-review",
-            "reason": "diff_churn_exceeded",
-            "branch": "feature/progress",
-            "head": new_head,
-        },
-    )
-    _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(
-        review_state, "emit_toon", lambda payload: emitted.append(payload)
-    )
-    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
-
-    assert review.main() == 0
-
-    assert emitted[0]["status"] == "done"
-    assert emitted[0]["done"] is True
-    assert emitted[0]["review_ladder"] == "complete"
-    assert "Action" not in emitted[0]
-
 
 def test_review_state_status_uses_bare_id_for_structured_verdict(
     tmp_path: Path,
@@ -1043,7 +983,8 @@ def test_orchestrator_action_suppresses_stale_terminal_github_result(
         current_head="fixed-head",
     )
 
-    assert action is None
+    assert "--id rvw_progress" in action["cmd"]
+    assert "changed PR patch" in action["note"]
 
 
 def test_orchestrator_action_uses_clean_followup_head_for_freshness(
@@ -1606,7 +1547,7 @@ def test_inspect_workflow_status_accepts_non_overlapping_equivalent_merge_base_d
     assert payload["base_drift_overlap_paths"] == []
 
 
-def test_inspect_workflow_status_recommends_full_review_when_merge_base_drift_overlaps_branch_paths(
+def test_inspect_workflow_status_targets_changed_patch_when_base_drift_overlaps(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -1638,7 +1579,7 @@ def test_inspect_workflow_status_recommends_full_review_when_merge_base_drift_ov
         base="main",
     )
 
-    assert payload["recommendation"] == "full-review"
+    assert payload["recommendation"] == "review-followup"
     assert payload["reason"] == "base_merge_base_changed"
     assert payload["base_drift_overlap_paths"] == ["app.txt"]
 
@@ -1990,7 +1931,7 @@ def test_inspect_workflow_status_honors_requested_base_over_stored_base(
         base="release/x",
     )
 
-    assert payload["recommendation"] == "full-review"
+    assert payload["recommendation"] == "review-followup"
     assert payload["reason"] == "base_merge_base_changed"
 
 
@@ -2342,3 +2283,163 @@ def test_review_state_status_ignores_legacy_pending_grade_for_caller(
     assert emitted[0]["Action"]["cwd"] == str(tmp_path)
     assert "review_followup.py" in str(emitted[0]["Action"]["cmd"])
     assert "review_suite_arena.py" not in str(emitted[0]["Action"])
+
+
+def _equivalent_review_repo(tmp_path):
+    from review_suite_core.patch_identity import reviewed_receipt
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    content = "".join(f"line {i}\n" for i in range(30))
+    base = _commit_file(repo, "app.txt", content, "base")
+    _git(repo, "checkout", "-b", "feature")
+    reviewed = _commit_file(repo, "app.txt", content.replace("line 25\n", "reviewed edit\n"), "feature")
+    state = {"stage": "review-green", "mode": {"effective": "fast"},
+             "identity": {"cwd": str(repo), "base": "main", "merge_base": base, "head": reviewed},
+             "review_heads": {"last_reviewed_head": reviewed}, "deslop": {"tracked": False},
+             "validation": {"full_suite": "passed", "ci": "passed"}}
+    state["review_patch"] = reviewed_receipt(state)
+    _git(repo, "checkout", "main")
+    new_base = _commit_file(repo, "app.txt", "new base line\n" + content, "base advances")
+    _git(repo, "checkout", "feature")
+    _git(repo, "merge", "--no-ff", "main", "-m", "integrate")
+    return repo, state, reviewed, new_base
+
+
+def test_id_json_accepts_identical_patch_with_shifted_lines_and_preserves_receipt(tmp_path, capsys):
+    from review_suite_core.orchestrator_state import review_ladder_summary
+    repo, state, reviewed, new_base = _equivalent_review_repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD")
+    review._show_status(state, state_dir=tmp_path / "state", as_json=True)
+    result = json.loads(capsys.readouterr().out)
+    assert result["done"] is False
+    assert result["accepted_head"] == head
+    state["validation"]["head"] = head
+    review._show_status(state, state_dir=tmp_path / "state", as_json=True)
+    assert json.loads(capsys.readouterr().out)["done"] is True
+    assert result["reviewed_head"] == reviewed
+    assert result["acceptance"]["reviewed_base"] != new_base
+    assert result["acceptance"]["accepted_base"] == new_base
+    assert result["required_checks"] == "current_head_required"
+    assert result["base_interaction"]["check"] is True
+    assert result["base_interaction"]["line_overlap_paths"] == []
+    assert state["review_heads"]["last_reviewed_head"] == reviewed
+    _commit_file(repo, "app.txt", (repo / "app.txt").read_text().replace("reviewed edit", "reviewed  edit"), "meaningful whitespace")
+    assert review_ladder_summary(state, current_head=_git(repo, "rev-parse", "HEAD"))["done"] is False
+
+
+@pytest.mark.parametrize("blocker", ["running", "decision-pending", "fix-pending", "blocked", "crashed", "github_pending", "github_findings", "ci_failed", "ci_unknown", "unresolved", "exhausted"])
+def test_equal_patch_never_completes_ineligible_review(tmp_path, blocker):
+    from review_suite_core.orchestrator_state import review_ladder_summary
+    repo, state, reviewed, _ = _equivalent_review_repo(tmp_path)
+    if blocker.startswith("github_"):
+        state["github_review"] = {"status": blocker.removeprefix("github_"), "reviewed_head": reviewed}
+    elif blocker.startswith("ci_"):
+        state["validation"]["ci"] = blocker.removeprefix("ci_")
+    elif blocker == "unresolved":
+        state["active_findings"] = {"reviewed_head": reviewed}
+    elif blocker == "exhausted":
+        state["convergence"] = {"status": "DECISION_REQUIRED"}
+    else:
+        state["stage"] = blocker
+    assert not review_ladder_summary(state, current_head=_git(repo, "rev-parse", "HEAD"))["done"]
+
+
+@pytest.mark.parametrize("kind", ["binary", "delete", "rename", "mode"])
+def test_structural_base_changes_require_targeted_check(tmp_path, kind):
+    from review_suite_core.patch_identity import interaction
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    base = _commit_file(repo, "base.txt", "original\n", "base")
+    _git(repo, "checkout", "-b", "feature")
+    reviewed = _commit_file(repo, "feature.txt", "feature\n", "feature")
+    _git(repo, "checkout", "main")
+    if kind == "binary":
+        (repo / "blob").write_bytes(b"a\0b")
+        _git(repo, "add", "blob")
+    elif kind == "delete":
+        _git(repo, "rm", "base.txt")
+    elif kind == "rename":
+        _git(repo, "mv", "base.txt", "renamed.txt")
+    else:
+        _git(repo, "update-index", "--chmod=+x", "base.txt")
+    _git(repo, "commit", "-m", "structural base change")
+    result = interaction(repo, base, _git(repo, "rev-parse", "HEAD"), reviewed)
+    assert result["check"] is True
+    assert result["reason"] == "structural_or_unknown"
+
+
+@pytest.mark.parametrize("completion", ["followup", "validated_fix"])
+def test_clean_followup_receipt_covers_fixed_patch_and_rejects_returned_findings(tmp_path, completion):
+    from review_suite_core.orchestrator_state import record_findings_decision, mark_fix_detected, mark_followup_review_pending, record_followup_clean
+    from review_suite_core.patch_identity import reviewed_receipt, acceptance
+    repo, state, original, _ = _equivalent_review_repo(tmp_path)
+    findings = record_findings_decision(state, round_id="source", lane="review_base", reviewed_head=original)
+    fixed_head = _commit_file(repo, "app.txt", (repo / "app.txt").read_text().replace("reviewed edit", "fixed edit"), "fix finding")
+    fixed = mark_fix_detected(findings, head=fixed_head)
+    pending = mark_followup_review_pending(fixed, round_id="followup", reviewed_head=fixed_head, source_round_id="source")
+    clean = record_followup_clean(pending, round_id="followup", reviewed_head=fixed_head)
+    if completion == "validated_fix":
+        from review_suite_core.orchestrator_state import record_fixes_validated
+        clean = record_findings_decision(clean, round_id="later", lane="review_base", reviewed_head=fixed_head)
+        fixed_head = _commit_file(repo, "app.txt", (repo / "app.txt").read_text().replace("fixed edit", "fixed edit again"), "later fix")
+        clean = record_fixes_validated(clean, head=fixed_head, note="Relevant validation passed")
+    clean["identity"]["merge_base"] = _git(repo, "merge-base", "main", "HEAD")
+    clean["review_patch"] = reviewed_receipt(clean)
+    assert clean["review_patch"]["reviewed_head"] == fixed_head
+    _commit_file(repo, "app.txt", (repo / "app.txt").read_text().replace("fixed edit", "reviewed edit"), "regression returns")
+    assert acceptance(clean, _git(repo, "rev-parse", "HEAD")) is None
+
+
+def test_targeted_followup_handles_changed_patch_with_equal_head_trees(tmp_path, monkeypatch):
+    import review_followup
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    base = _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature")
+    reviewed = _commit_file(repo, "app.txt", "base\nfeature\n", "feature")
+    _git(repo, "checkout", "main")
+    _commit_file(repo, "app.txt", "base\nfeature\n", "same edit upstream")
+    _git(repo, "checkout", "feature")
+    _git(repo, "merge", "--no-ff", "main", "-m", "integrate")
+    assert _git(repo, "rev-parse", reviewed + "^{tree}") == _git(repo, "rev-parse", "HEAD^{tree}")
+    results = []
+    def run(**kwargs):
+        results.append(kwargs)
+        return {"returncode": 0, "final_message": "Review result: clean", "session_id": None, "elapsed_seconds": 0}
+    monkeypatch.setattr(review_followup, "run_codex_review", run)
+    monkeypatch.setattr(sys, "argv", ["review_followup.py", "--cd", str(repo), "--base", "main", "--since", reviewed, "--reviewed-base", base, "--note", "Check upstream adoption", "--state-dir", str(tmp_path / "state")])
+    assert review_followup.main() == 0
+    assert results[0]["base"] is None
+    monkeypatch.setattr(sys, "argv", ["review_followup.py", "--cd", str(repo), "--base", "main", "--since", _git(repo, "rev-parse", "HEAD"), "--reviewed-base", base, "--note", "Check base-only change", "--state-dir", str(tmp_path / "state")])
+    assert review_followup.main() == 0
+
+
+@pytest.mark.parametrize("move_block", [False, True])
+def test_moved_replacement_requires_targeted_review(tmp_path, move_block):
+    from review_suite_core.patch_identity import acceptance, reviewed_receipt
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    before = "def first():\n    prepare()\n    unique_call()\n    finish()\n\n\n\ndef second():\n    prepare()\n    finish()\n"
+    base = _commit_file(repo, "app.py", before, "base")
+    _git(repo, "checkout", "-b", "feature")
+    old_head = _commit_file(repo, "app.py", before.replace("unique_call", "reviewed_call"), "reviewed replacement")
+    state = {"identity": {"cwd": str(repo), "base": "main", "head": old_head, "merge_base": base}, "review_heads": {"last_reviewed_head": old_head}}
+    state["review_patch"] = reviewed_receipt(state)
+    _git(repo, "checkout", "main")
+    moved = before.replace("    unique_call()\n", "").replace("def second():\n    prepare()\n", "def second():\n    prepare()\n    unique_call()\n")
+    if move_block:
+        before = "def first():\n    prepare()\n    unique_call()\n    finish()\n\n\n\ndef second():\n    return 2\n"
+        _git(repo, "checkout", "-b", "block-base", base)
+        base = _commit_file(repo, "app.py", before, "unique movable block")
+        _git(repo, "checkout", "-b", "block-feature")
+        old_head = _commit_file(repo, "app.py", before.replace("unique_call", "reviewed_call"), "review block replacement")
+        state["identity"].update(head=old_head, merge_base=base)
+        state["review_heads"]["last_reviewed_head"] = old_head
+        state.pop("review_patch", None)
+        state["review_patch"] = reviewed_receipt(state)
+        _git(repo, "checkout", "main")
+        moved = "def first():\n    return 1\n\n\n\ndef second():\n    prepare()\n    unique_call()\n    finish()\n"
+    _commit_file(repo, "app.py", moved, "move call between functions")
+    _git(repo, "checkout", "-b", "rebased-feature")
+    new_head = _commit_file(repo, "app.py", moved.replace("unique_call", "reviewed_call"), "same bytes at different semantic location")
+    assert acceptance(state, new_head) is None
