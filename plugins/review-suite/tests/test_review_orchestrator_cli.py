@@ -5532,7 +5532,7 @@ def test_patch_equivalent_rebase_after_cleanup_keeps_local_signoff(
     assert state["identity"]["head"] == rebased_head
     assert state["identity"]["merge_base"] == current_base
     assert state["deslop"]["status"] == "closed"
-    assert state["deslop"]["reviewed_head"] == rebased_head
+    assert state["deslop"]["reviewed_head"] == original_head
     assert state["base_drift"] == {
         "status": "ignored_no_path_overlap",
         "recorded_merge_base": base_at_review,
@@ -5861,7 +5861,7 @@ def test_mode_rerun_after_initial_review_commit_reuses_cycle(
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
 
 
-def test_mode_rerun_after_overlapping_merge_base_drift_starts_fresh_cycle(
+def test_mode_rerun_after_overlapping_merge_base_drift_preserves_pending_cycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -5911,11 +5911,11 @@ def test_mode_rerun_after_overlapping_merge_base_drift_starts_fresh_cycle(
     )
 
     assert exit_code == 0
-    assert fresh["review"] != old_id
-    assert len(deslop_calls) == 0
+    assert fresh["review"] == old_id
+    assert len(deslop_calls) == 1
     state = _cycle_payload(state_dir, str(fresh["review"]))
     assert state["identity"]["head"] == rebased_head
-    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
 
 
 def test_mode_rerun_after_initial_review_reset_reuses_cycle(
@@ -6076,8 +6076,8 @@ def test_id_rerun_after_pending_decision_equivalent_base_drift_updates_reviewed_
     assert state["stage"] == "decision-pending"
     assert state["identity"]["head"] == rebased_head
     assert state["identity"]["merge_base"] == current_base
-    assert state["rounds"][0]["reviewed_head"] == rebased_head
-    assert state["review_heads"]["last_reviewed_head"] == rebased_head
+    assert state["rounds"][0]["reviewed_head"] == original_head
+    assert state["review_heads"]["last_reviewed_head"] == original_head
     assert state["base_drift"]["equivalent_reviewed_head"] == rebased_head
 
     _, findings = _run_review(
@@ -6086,8 +6086,8 @@ def test_id_rerun_after_pending_decision_equivalent_base_drift_updates_reviewed_
     )
     assert "--fixes-validated" in str(findings["Action"]["choices"])
     state = _cycle_payload(state_dir, public_id)
-    assert state["active_findings"]["reviewed_head"] == rebased_head
-    assert state["decisions"][0]["reviewed_head"] == rebased_head
+    assert state["active_findings"]["reviewed_head"] == original_head
+    assert state["decisions"][0]["reviewed_head"] == original_head
 
 
 def test_id_rerun_after_findings_fix_allows_non_overlapping_merge_base_drift(
@@ -6151,10 +6151,10 @@ def test_id_rerun_after_findings_fix_allows_non_overlapping_merge_base_drift(
     assert state["review_heads"]["last_fix_head"] == fixed_head
     assert (
         state["pending_action"]["fix_verification"]["findings_reviewed_head"]
-        == rebased_head
+        == reviewed_head
     )
-    assert state["decisions"][0]["reviewed_head"] == rebased_head
-    assert state["rounds"][0]["reviewed_head"] == rebased_head
+    assert state["decisions"][0]["reviewed_head"] == reviewed_head
+    assert state["rounds"][0]["reviewed_head"] == reviewed_head
     assert state["rounds"][1]["reviewed_head"] == fixed_head
     assert state["base_drift"] == {
         "status": "ignored_no_path_overlap",
@@ -6915,3 +6915,29 @@ def test_decision_pending_with_missing_metadata_still_errors(
     assert review.main() == 2
     assert errors[-1] == "no decision is pending for this review cycle"
     assert _cycle_payload(state_dir, public_id) == state
+
+
+def test_changed_pr_patch_reuses_id_and_reviews_only_delta(monkeypatch, tmp_path):
+    calls = _stub_review_with_terminal(monkeypatch, "clean", "clean", "clean", "clean",
+                                      round_ids=("first", "second", "delta", "delta2"))
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    _init_repo(repo)
+    base = _commit_file(repo, "base.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature")
+    original = _commit_file(repo, "app.txt", "feature\n", "feature")
+    _, opened = _run_review(monkeypatch, ["--mode", "fast", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)])
+    review_id = opened["review"]
+    for _ in range(3):
+        _, result = _run_review(monkeypatch, ["--id", review_id])
+        if result.get("done"):
+            break
+    assert result["done"]
+    before = len(calls)
+    changed = _commit_file(repo, "app.txt", "feature\nnew behavior\n", "change patch")
+    _run_review(monkeypatch, ["--id", review_id])
+    assert len(calls) == before + 1
+    assert calls[-1]["review_scope"]["patch_delta"]["reviewed_head"] == original
+    assert calls[-1]["review_scope"]["patch_delta"]["reviewed_base"] == base
+    assert calls[-1]["review_scope"]["reviewed_head"] == changed
+    state = _cycle_payload(state_dir, review_id)
+    assert state["rounds"][0]["reviewed_head"] == original

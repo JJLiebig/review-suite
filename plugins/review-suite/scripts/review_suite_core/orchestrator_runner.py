@@ -740,6 +740,19 @@ def _arena_recovery_review_result(
 
 
 def run_review_step(**kwargs: Any) -> dict[str, object]:
+    scope = dict(kwargs.get("review_scope") or {})
+    delta = dict(scope.get("patch_delta") or {})
+    if delta:
+        from .patch_identity import delta_prompt
+        keys = ("task_class", "model", "reasoning_effort", "service_tier", "review_cwd",
+                "state_dir", "sqlite_path", "review_scope", "task_id", "progress_interval_seconds",
+                "allow_unsafe_windows_wsl_fallback", "on_round_started")
+        return run_orchestrator_followup_review_step(
+            **{key: kwargs[key] for key in keys if key in kwargs},
+            prompt=delta_prompt(delta["reviewed_base"], delta["reviewed_head"],
+                                scope["merge_base"], scope["reviewed_head"])
+                   + "\n" + str(kwargs.get("custom_instructions") or ""),
+        )
     return run_orchestrator_review_step(**kwargs)
 
 
@@ -800,6 +813,9 @@ def _run_profile_review_once(
                 running_state = saved
         running_base_state = running_state
 
+    delta = dict(state.get("patch_delta") or {})
+    if delta and delta.get("reviewed_head") != scope.get("reviewed_head"):
+        scope["patch_delta"] = delta
     review_result = run_review_step(
         lane=lane,
         task_class=str(step["task_class"]),

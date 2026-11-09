@@ -1420,6 +1420,9 @@ def _show_status(
         public = json_status_payload(payload)
         if head := str(identity.get("head") or "").strip():
             public["head"] = head
+        for key in ("reviewed_head", "accepted_head", "current_head", "acceptance", "required_checks", "validation_head", "base_interaction"):
+            if key in payload:
+                public[key] = payload[key]
         convergence = convergence_summary(state)
         if convergence.get("status") != "ACTIVE":
             route_convergence(public, convergence)
@@ -1482,8 +1485,6 @@ def _allowed_base_drift(
         current_merge_base=current_merge_base,
         reviewed_head=reviewed_head,
     )
-    if list(drift.get("overlapping_paths") or []):
-        return None
     base_changed_paths = list(drift.get("base_changed_paths") or [])
     payload = {
         "status": "ignored_no_path_overlap",
@@ -1493,7 +1494,7 @@ def _allowed_base_drift(
         "current_head": current_head_value,
         "base_changed_path_count": len(base_changed_paths),
         "base_changed_paths": base_changed_paths[:BASE_DRIFT_PATH_SAMPLE_LIMIT],
-        "overlap_paths": [],
+        "overlap_paths": list(drift.get("overlapping_paths") or []),
         "patch_equivalent": bool(drift.get("patch_equivalent")),
     }
     if payload["patch_equivalent"]:
@@ -1955,11 +1956,11 @@ def _resume_progress(
             cleanup_head = str(
                 dict(state.get("deslop") or {}).get("reviewed_head") or ""
             )
+            from review_suite_core.patch_identity import acceptance
+            unchanged_patch = bool(acceptance(state, identity["head"]))
             fixes_applied = _is_material_fix_head(
                 state, head=identity["head"], reviewed_head=cleanup_head
-            ) and not bool(
-                dict(identity.get("base_drift") or {}).get("patch_equivalent")
-            )
+            ) and not unchanged_patch
             state = _with_current_identity(
                 state,
                 head=identity["head"],
@@ -2012,6 +2013,14 @@ def _resume_progress(
             )
         return state
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        from review_suite_core.patch_identity import acceptance
+        live = _current_cycle_identity_if_compatible(state)
+        accepted = acceptance(state, live["head"]) if live else None
+        if accepted and (live["head"] != dict(state.get("identity") or {}).get("head")
+                         or live["merge_base"] != dict(state.get("identity") or {}).get("merge_base")):
+            updated = _with_current_identity(state, head=live["head"],
+                                             merge_base_head=live["merge_base"], base_drift=live.get("base_drift"))
+            return {**updated, "accepted_review": accepted}
         identity = _github_pending_head_change_identity(state)
         if not identity:
             return state
@@ -2028,6 +2037,8 @@ def _resume_progress(
             base_drift=base_drift,
         )
         next_state = _with_equivalent_base_drift_review_head(next_state, base_drift)
+        from review_suite_core.patch_identity import reviewed_receipt
+        next_state["patch_delta"] = reviewed_receipt(state)
         next_state["github_review"] = {"status": "unknown"}
         return mark_latest_profile_step_rerun_needed(next_state, head=head)
     if stage != STAGE_FIX_PENDING:
@@ -2115,6 +2126,12 @@ def _with_current_identity(
     base_drift: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     next_state = dict(state)
+    from review_suite_core.patch_identity import reviewed_receipt
+    try:
+        if receipt := reviewed_receipt(state):
+            next_state["review_patch"] = receipt
+    except (OSError, ValueError):
+        pass
     identity = dict(next_state.get("identity") or {})
     identity["head"] = head
     identity["merge_base"] = merge_base_head
@@ -2133,64 +2150,9 @@ def _with_equivalent_base_drift_review_head(
     base_drift: dict[str, Any] | None,
 ) -> dict[str, Any]:
     drift = dict(base_drift or {})
-    old_head = str(drift.get("reviewed_head") or "").strip()
-    new_head = str(drift.get("equivalent_reviewed_head") or "").strip()
-    if not old_head or not new_head or old_head == new_head:
-        return state
-    next_state = dict(state)
-    deslop = dict(next_state.get("deslop") or {})
-    if deslop.get("reviewed_head") == old_head:
-        next_state["deslop"] = {**deslop, "reviewed_head": new_head}
-    rounds = []
-    for item in list(next_state.get("rounds") or []):
-        if not isinstance(item, dict):
-            rounds.append(item)
-            continue
-        next_item = dict(item)
-        if str(next_item.get("reviewed_head") or "").strip() == old_head:
-            next_item["reviewed_head"] = new_head
-        rounds.append(next_item)
-    next_state["rounds"] = rounds
-    active = dict(next_state.get("active_findings") or {})
-    if str(active.get("reviewed_head") or "").strip() == old_head:
-        active["reviewed_head"] = new_head
-        next_state["active_findings"] = active
-    decisions = []
-    for item in list(next_state.get("decisions") or []):
-        if not isinstance(item, dict):
-            decisions.append(item)
-            continue
-        next_item = dict(item)
-        if str(next_item.get("reviewed_head") or "").strip() == old_head:
-            next_item["reviewed_head"] = new_head
-        decisions.append(next_item)
-    if decisions:
-        next_state["decisions"] = decisions
-    review_heads = dict(next_state.get("review_heads") or {})
-    for key in ("last_reviewed_head", "last_fix_head", "last_followup_head", "head"):
-        if str(review_heads.get(key) or "").strip() == old_head:
-            review_heads[key] = new_head
-    next_state["review_heads"] = review_heads
-    progress = dict(next_state.get("review_progress") or {})
-    completed = []
-    for item in list(progress.get("completed_steps") or []):
-        if not isinstance(item, dict):
-            completed.append(item)
-            continue
-        next_item = dict(item)
-        if str(next_item.get("reviewed_head") or "").strip() == old_head:
-            next_item["reviewed_head"] = new_head
-        completed.append(next_item)
-    if completed:
-        progress["completed_steps"] = completed
-        next_state["review_progress"] = progress
-    pending = dict(next_state.get("pending_action") or {})
-    fix_verification = dict(pending.get("fix_verification") or {})
-    if str(fix_verification.get("findings_reviewed_head") or "").strip() == old_head:
-        fix_verification["findings_reviewed_head"] = new_head
-        pending["fix_verification"] = fix_verification
-        next_state["pending_action"] = pending
-    return next_state
+    from review_suite_core.patch_identity import acceptance
+    accepted = acceptance(state, str(drift.get("equivalent_reviewed_head") or ""))
+    return {**state, "accepted_review": accepted} if accepted else state
 
 
 def _cycle_cli_skips_deslop(state: dict[str, Any]) -> bool:
@@ -2256,7 +2218,7 @@ def _continuation_head_match_kind(
         "decision-required",
     }:
         return "changed"
-    if _green_cycle_needs_current_head_signoff(state, head=head):
+    if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         return "changed"
     return None
 
@@ -2947,13 +2909,16 @@ def _has_validation_status(args: argparse.Namespace) -> bool:
 def _record_validation_status(
     state: dict[str, Any], args: argparse.Namespace
 ) -> dict[str, Any]:
-    return record_validation_statuses(
+    updated = record_validation_statuses(
         state,
         focused=args.focused_validation,
         full_suite=args.full_suite,
         ci=args.ci,
         validation_note=args.validation_note,
     )
+
+    updated.setdefault("validation", {})["head"] = _identity_head(state) or dict(state.get("identity") or {}).get("head")
+    return updated
 
 
 def _record_github_result(
@@ -3133,6 +3098,9 @@ def _github_pending_head_change_identity(
         or dict(state.get("identity") or {}).get("head")
         or ""
     ).strip()
+    from review_suite_core.patch_identity import acceptance
+    if acceptance(state, head):
+        return None
     terminal = _github_review_status(state) in {"clean", "waived"}
     if (
         str(deslop.get("status") or "").strip() != DESLOP_STATUS_SKIPPED or terminal
@@ -3339,7 +3307,8 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
         summary = review_ladder_summary(state, current_head=_identity_head(state))
         if summary.get("review_ladder") == "invalidated":
             if green_review_head_change_summary(state, summary=summary):
-                action = _github_terminal_action(state, public_id, state_dir=state_dir)
+                action = {"cmd": _review_command(public_id, state_dir=state_dir),
+                          "note": "Review only the changed PR patch on this id; keep required current-head checks."}
             elif _github_pending_head_change_identity(state):
                 action = {
                     "cmd": _review_command(public_id, state_dir=state_dir),
@@ -3803,11 +3772,11 @@ def main() -> int:
                 )
             if args.github_result:
                 resumed = _resume_progress(state, state_dir=state_dir)
-                if resumed != state:
+                if resumed != state and resumed.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
                     saved = save_cycle(state_dir, resumed)
                     _render(saved, state_dir=state_dir)
                     return 0
-                state = _record_github_result(state, args)
+                state = _record_github_result(resumed, args)
                 saved = save_cycle(state_dir, state)
                 _render(saved, state_dir=state_dir)
                 return 0

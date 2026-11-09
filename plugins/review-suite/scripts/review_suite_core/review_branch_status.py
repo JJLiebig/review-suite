@@ -155,7 +155,7 @@ def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
 def json_status_payload(payload: dict[str, object]) -> dict[str, object]:
     public = _public_status_payload(payload)
     public.pop("Action", None)
-    for key in ("base", "branch", "head", "mode"):
+    for key in ("base", "branch", "head", "mode", "reviewed_head", "accepted_head", "current_head", "acceptance", "required_checks", "validation_head", "base_interaction"):
         value = payload.get(key)
         if value not in (None, "", [], {}):
             public[key] = value
@@ -697,7 +697,7 @@ def _orchestrator_action(
             return (
                 _orchestrator_validation_blocker_action(public_id, blockers)
                 if blockers
-                else None
+                else {"cmd": _review_command(public_id), "note": "Review only the changed PR patch on this id."}
             )
         if _orchestrator_github_review_is_terminal(state, current_head=current_head):
             blockers = validation_blockers(state)
@@ -884,6 +884,8 @@ def _status_action(
             "--since",
             since_head,
         ]
+        if payload.get("recorded_merge_base"):
+            command.extend(["--reviewed-base", str(payload["recorded_merge_base"])])
         command.extend(
             [
                 "--note-file",

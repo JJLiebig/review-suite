@@ -76,11 +76,10 @@ VALIDATION_STATUSES = {"unknown", *CLI_VALIDATION_STATUSES}
 VALIDATION_READY_STATUSES = {"passed", "waived"}
 HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER = "head_changed_after_review"
 HEAD_CHANGED_AFTER_GREEN_REVIEW_NOTE = (
-    "The review remains green after test-only fixes. If the changes since the reviewed HEAD "
-    "only correct stale tests to match behavior that was already reviewed, do not rerun the "
-    "review. Run the affected tests and required validation, then proceed. Rerun the review "
-    "only if production code or intended behavior changed."
+    "The PR patch changed. Continue the same review id to review only what changed "
+    "and check concrete interactions with base changes. Keep required current-head checks."
 )
+
 CHANGED_SINCE_REVIEW_PATH_LIMIT = 20
 
 
@@ -97,33 +96,17 @@ def _optional_text(value: Any) -> str | None:
 
 
 def _base_drift_equivalent_head(state: dict[str, Any], head: str) -> str:
-    drift = dict(state.get("base_drift") or {})
-    if not bool(drift.get("patch_equivalent")):
-        return head
-    reviewed_head = str(drift.get("reviewed_head") or "").strip()
-    equivalent_head = str(drift.get("equivalent_reviewed_head") or "").strip()
-    if head and reviewed_head == head and equivalent_head:
-        return equivalent_head
+    # Historical receipts always name the commit actually inspected.
     return head
 
 
 def _review_ladder_heads(state: dict[str, Any]) -> list[str]:
     review_heads = dict(state.get("review_heads") or {})
-    heads: list[str] = []
-    for key in (
-        "last_followup_head",
-        "last_reviewed_head",
-        "last_fix_head",
-        "head",
-    ):
-        value = str(review_heads.get(key) or "").strip()
-        if value:
-            heads.append(_base_drift_equivalent_head(state, value))
-    identity_head = _base_drift_equivalent_head(
-        state, str(dict(state.get("identity") or {}).get("head") or "").strip()
-    )
-    if identity_head:
-        heads.append(identity_head)
+    heads = [str(review_heads[key]) for key in ("last_followup_head", "last_reviewed_head") if review_heads.get(key)]
+    if not heads:
+        head = str(review_heads.get("head") or dict(state.get("identity") or {}).get("head") or "")
+        if head:
+            heads.append(head)
     return heads
 
 
@@ -185,11 +168,37 @@ def review_ladder_summary(
     state: dict[str, Any], *, current_head: str | None = None
 ) -> dict[str, Any]:
     stage = str(state.get("stage") or "").strip()
-    summary: dict[str, Any] = {"done": False, "review_ladder": "pending"}
+    original_head = str(dict(state.get("review_heads") or {}).get("last_reviewed_head") or dict(state.get("identity") or {}).get("head") or "")
+    summary: dict[str, Any] = {"done": False, "review_ladder": "pending", "reviewed_head": original_head}
+    if current_head:
+        summary["current_head"] = current_head
     if stage not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         return summary
 
     comparison_head = str(current_head or "").strip()
+    from .patch_identity import acceptance, interaction
+    accepted = acceptance(state, comparison_head) if comparison_head else None
+    if accepted and convergence_summary(state).get("status") == "ACTIVE" and not state.get("active_findings"):
+        original = accepted["reviewed_head"]
+        # Evaluate every existing stage, GitHub and closure gate on the actual receipt.
+        original_state = {**state, "base_drift": {}}
+        original_summary = review_ladder_summary(original_state) if comparison_head != original else None
+        if original_summary and original_summary.get("done") and not validation_blockers(state):
+            return {**original_summary, "reviewed_head": original, "current_head": comparison_head,
+                    "accepted_head": comparison_head, "acceptance": accepted,
+                    "required_checks": "current_head_required",
+                    "validation_head": dict(state.get("validation") or {}).get("head") or original,
+                    "base_interaction": interaction(
+                        Path(accepted["repo"]), accepted["reviewed_base"], accepted["accepted_base"], original)}
+    if comparison_head == original_head and state.get("review_patch") and not accepted:
+        from .patch_identity import git
+        receipt = dict(state["review_patch"])
+        try:
+            live_base = git(Path(receipt["repo"]), "merge-base", receipt["base"], comparison_head).decode().strip()
+            if live_base != receipt["reviewed_base"]:
+                return {**summary, "review_ladder": "invalidated"}
+        except (OSError, ValueError):
+            return summary
     reviewed_head = _review_ladder_head(state, current_head=comparison_head)
     comparison_head = comparison_head or reviewed_head
     if reviewed_head and comparison_head and reviewed_head != comparison_head:
@@ -224,12 +233,12 @@ def review_ladder_summary(
 
     github_required = _github_review_required(state)
     if not github_required and _deslop_closed_or_untracked(state):
-        summary.update({"done": True, "review_ladder": "complete"})
+        summary.update({"done": True, "review_ladder": "complete", "accepted_head": comparison_head})
         return summary
 
     github_ready = _github_review_matches_head(state, comparison_head)
     if github_ready and _validation_ready(state) and _deslop_closed_or_untracked(state):
-        summary.update({"done": True, "review_ladder": "complete"})
+        summary.update({"done": True, "review_ladder": "complete", "accepted_head": comparison_head})
     return summary
 
 

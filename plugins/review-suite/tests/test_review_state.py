@@ -249,6 +249,7 @@ def test_review_state_status_json_emits_sanitized_running_review(
         "branch": "feature/json",
         "done": False,
         "head": "head-1",
+        "current_head": "head-1",
         "mode": "base",
         "next_action": "continue",
         "progress": "review 1/1 broad-discovery",
@@ -762,67 +763,6 @@ def test_review_state_status_keeps_persisted_classified_blocked(
     assert emitted[0]["Action"]["blocked_by"] == ["ci:classified"]
 
 
-def test_review_state_status_keeps_patch_equivalent_base_drift_done(
-    monkeypatch, tmp_path: Path
-) -> None:
-    emitted: list[dict[str, object]] = []
-    repo = tmp_path / "repo"
-    state_dir = tmp_path / "state"
-    old_head = "old-head"
-    new_head = "new-head"
-    repo.mkdir()
-    _write_orchestrator_cycle(
-        state_dir,
-        "orc-base-drift-done.json",
-        {
-            "public_id": "rvw_done",
-            "stage": "review-green",
-            "mode": {"requested": "base", "effective": "base"},
-            "identity": {
-                "cwd": str(review_state.normalize_review_cwd_value(repo)),
-                "base": "main",
-                "branch": "feature/progress",
-                "head": old_head,
-            },
-            "review_heads": {"last_reviewed_head": old_head},
-            "github_review": {"status": "clean", "reviewed_head": old_head},
-            "validation": {
-                "full_suite": "passed",
-                "ci": "waived",
-                "note": "CI unavailable for this docs-only change",
-            },
-            "deslop": {"tracked": False},
-            "base_drift": {
-                "patch_equivalent": True,
-                "reviewed_head": old_head,
-                "equivalent_reviewed_head": new_head,
-            },
-        },
-    )
-    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(
-        review_state,
-        "inspect_workflow_status",
-        lambda **kwargs: {
-            "recommendation": "coherence-review",
-            "reason": "diff_churn_exceeded",
-            "branch": "feature/progress",
-            "head": new_head,
-        },
-    )
-    _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(
-        review_state, "emit_toon", lambda payload: emitted.append(payload)
-    )
-    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
-
-    assert review.main() == 0
-
-    assert emitted[0]["status"] == "done"
-    assert emitted[0]["done"] is True
-    assert emitted[0]["review_ladder"] == "complete"
-    assert "Action" not in emitted[0]
-
 
 def test_review_state_status_uses_bare_id_for_structured_verdict(
     tmp_path: Path,
@@ -1043,7 +983,8 @@ def test_orchestrator_action_suppresses_stale_terminal_github_result(
         current_head="fixed-head",
     )
 
-    assert action is None
+    assert "--id rvw_progress" in action["cmd"]
+    assert "changed PR patch" in action["note"]
 
 
 def test_orchestrator_action_uses_clean_followup_head_for_freshness(
@@ -1606,7 +1547,7 @@ def test_inspect_workflow_status_accepts_non_overlapping_equivalent_merge_base_d
     assert payload["base_drift_overlap_paths"] == []
 
 
-def test_inspect_workflow_status_recommends_full_review_when_merge_base_drift_overlaps_branch_paths(
+def test_inspect_workflow_status_targets_changed_patch_when_base_drift_overlaps(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -1638,7 +1579,7 @@ def test_inspect_workflow_status_recommends_full_review_when_merge_base_drift_ov
         base="main",
     )
 
-    assert payload["recommendation"] == "full-review"
+    assert payload["recommendation"] == "review-followup"
     assert payload["reason"] == "base_merge_base_changed"
     assert payload["base_drift_overlap_paths"] == ["app.txt"]
 
@@ -1990,7 +1931,7 @@ def test_inspect_workflow_status_honors_requested_base_over_stored_base(
         base="release/x",
     )
 
-    assert payload["recommendation"] == "full-review"
+    assert payload["recommendation"] == "review-followup"
     assert payload["reason"] == "base_merge_base_changed"
 
 
@@ -2342,3 +2283,83 @@ def test_review_state_status_ignores_legacy_pending_grade_for_caller(
     assert emitted[0]["Action"]["cwd"] == str(tmp_path)
     assert "review_followup.py" in str(emitted[0]["Action"]["cmd"])
     assert "review_suite_arena.py" not in str(emitted[0]["Action"])
+
+
+def _equivalent_review_repo(tmp_path):
+    from review_suite_core.patch_identity import reviewed_receipt
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    content = "".join(f"line {i}\n" for i in range(30))
+    base = _commit_file(repo, "app.txt", content, "base")
+    _git(repo, "checkout", "-b", "feature")
+    reviewed = _commit_file(repo, "app.txt", content.replace("line 25\n", "reviewed edit\n"), "feature")
+    state = {"stage": "review-green", "mode": {"effective": "fast"},
+             "identity": {"cwd": str(repo), "base": "main", "merge_base": base, "head": reviewed},
+             "review_heads": {"last_reviewed_head": reviewed}, "deslop": {"tracked": False},
+             "validation": {"full_suite": "passed", "ci": "passed"}}
+    state["review_patch"] = reviewed_receipt(state)
+    _git(repo, "checkout", "main")
+    new_base = _commit_file(repo, "app.txt", "new base line\n" + content, "base advances")
+    _git(repo, "checkout", "feature")
+    _git(repo, "merge", "--no-ff", "main", "-m", "integrate")
+    return repo, state, reviewed, new_base
+
+
+def test_id_json_accepts_identical_patch_with_shifted_lines_and_preserves_receipt(tmp_path, capsys):
+    from review_suite_core.orchestrator_state import review_ladder_summary
+    repo, state, reviewed, new_base = _equivalent_review_repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD")
+    review._show_status(state, state_dir=tmp_path / "state", as_json=True)
+    result = json.loads(capsys.readouterr().out)
+    assert result["done"] is True
+    assert result["accepted_head"] == head
+    assert result["reviewed_head"] == reviewed
+    assert result["acceptance"]["reviewed_base"] != new_base
+    assert result["acceptance"]["accepted_base"] == new_base
+    assert result["required_checks"] == "current_head_required"
+    assert result["base_interaction"]["check"] is True
+    assert result["base_interaction"]["line_overlap_paths"] == []
+    assert state["review_heads"]["last_reviewed_head"] == reviewed
+    _commit_file(repo, "app.txt", (repo / "app.txt").read_text().replace("reviewed edit", "reviewed  edit"), "meaningful whitespace")
+    assert review_ladder_summary(state, current_head=_git(repo, "rev-parse", "HEAD"))["done"] is False
+
+
+@pytest.mark.parametrize("blocker", ["running", "decision-pending", "fix-pending", "blocked", "crashed", "github_pending", "github_findings", "ci_failed", "ci_unknown", "unresolved", "exhausted"])
+def test_equal_patch_never_completes_ineligible_review(tmp_path, blocker):
+    from review_suite_core.orchestrator_state import review_ladder_summary
+    repo, state, reviewed, _ = _equivalent_review_repo(tmp_path)
+    if blocker.startswith("github_"):
+        state["github_review"] = {"status": blocker.removeprefix("github_"), "reviewed_head": reviewed}
+    elif blocker.startswith("ci_"):
+        state["validation"]["ci"] = blocker.removeprefix("ci_")
+    elif blocker == "unresolved":
+        state["active_findings"] = {"reviewed_head": reviewed}
+    elif blocker == "exhausted":
+        state["convergence"] = {"status": "DECISION_REQUIRED"}
+    else:
+        state["stage"] = blocker
+    assert not review_ladder_summary(state, current_head=_git(repo, "rev-parse", "HEAD"))["done"]
+
+
+@pytest.mark.parametrize("kind", ["binary", "delete", "rename", "mode"])
+def test_structural_base_changes_require_targeted_check(tmp_path, kind):
+    from review_suite_core.patch_identity import interaction
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    base = _commit_file(repo, "base.txt", "original\n", "base")
+    _git(repo, "checkout", "-b", "feature")
+    reviewed = _commit_file(repo, "feature.txt", "feature\n", "feature")
+    _git(repo, "checkout", "main")
+    if kind == "binary":
+        (repo / "blob").write_bytes(b"a\0b")
+        _git(repo, "add", "blob")
+    elif kind == "delete":
+        _git(repo, "rm", "base.txt")
+    elif kind == "rename":
+        _git(repo, "mv", "base.txt", "renamed.txt")
+    else:
+        _git(repo, "update-index", "--chmod=+x", "base.txt")
+    _git(repo, "commit", "-m", "structural base change")
+    result = interaction(repo, base, _git(repo, "rev-parse", "HEAD"), reviewed)
+    assert result["check"] is True
+    assert result["reason"] == "structural_or_unknown"
