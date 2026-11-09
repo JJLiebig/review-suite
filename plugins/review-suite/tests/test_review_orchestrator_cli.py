@@ -3304,6 +3304,7 @@ def test_restart_brief_supersedes_invalid_cycle_with_fresh_same_mode_ladder(
     old_state = _cycle_payload(state_dir, old_id)
     assert old_state["stage"] == "decision-pending"
     assert old_state["validation"] == {
+        "head": old_state["identity"]["head"],
         "review_green": "unknown",
         "focused": "passed",
         "full_suite": "passed",

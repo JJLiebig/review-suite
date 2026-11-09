@@ -118,10 +118,14 @@ def reviewed_receipt(state: dict[str, Any]) -> dict[str, Any] | None:
     identity = dict(state.get("identity") or {})
     heads = dict(state.get("review_heads") or {})
     head = (
-        heads.get("last_reviewed_head")
-        or heads.get("last_followup_head")
+        heads.get("last_followup_head")
+        or heads.get("last_reviewed_head")
         or identity.get("head")
     )
+    for decision in reversed(state.get("decisions") or []):
+        if decision.get("command") == "clean" and decision.get("reviewed_head"):
+            head = decision["reviewed_head"]
+            break
     base = identity.get("merge_base")
     if not identity.get("cwd") or not head or not base:
         return None
@@ -229,5 +233,5 @@ def delta_prompt(old_base: str, old_head: str, new_base: str, new_head: str) -> 
         f"Check concrete interactions with base changes using `git diff {old_base} {new_base}`. "
         "Renames, moves, binaries, deletions and ambiguous alignment need a targeted check. "
         "Preserve prior findings. Report only material correctness defects with a reachable trigger. "
-        "End with `Review decision: clean` or `Review decision: findings`."
+        "End with `Review result: clean` or `Review result: findings`."
     )

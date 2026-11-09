@@ -2311,8 +2311,11 @@ def test_id_json_accepts_identical_patch_with_shifted_lines_and_preserves_receip
     head = _git(repo, "rev-parse", "HEAD")
     review._show_status(state, state_dir=tmp_path / "state", as_json=True)
     result = json.loads(capsys.readouterr().out)
-    assert result["done"] is True
+    assert result["done"] is False
     assert result["accepted_head"] == head
+    state["validation"]["head"] = head
+    review._show_status(state, state_dir=tmp_path / "state", as_json=True)
+    assert json.loads(capsys.readouterr().out)["done"] is True
     assert result["reviewed_head"] == reviewed
     assert result["acceptance"]["reviewed_base"] != new_base
     assert result["acceptance"]["accepted_base"] == new_base
@@ -2363,3 +2366,41 @@ def test_structural_base_changes_require_targeted_check(tmp_path, kind):
     result = interaction(repo, base, _git(repo, "rev-parse", "HEAD"), reviewed)
     assert result["check"] is True
     assert result["reason"] == "structural_or_unknown"
+
+
+def test_clean_followup_receipt_covers_fixed_patch_and_rejects_returned_findings(tmp_path):
+    from review_suite_core.orchestrator_state import record_findings_decision, mark_fix_detected, mark_followup_review_pending, record_followup_clean
+    from review_suite_core.patch_identity import reviewed_receipt, acceptance
+    repo, state, original, _ = _equivalent_review_repo(tmp_path)
+    findings = record_findings_decision(state, round_id="source", lane="review_base", reviewed_head=original)
+    fixed_head = _commit_file(repo, "app.txt", (repo / "app.txt").read_text().replace("reviewed edit", "fixed edit"), "fix finding")
+    fixed = mark_fix_detected(findings, head=fixed_head)
+    pending = mark_followup_review_pending(fixed, round_id="followup", reviewed_head=fixed_head, source_round_id="source")
+    clean = record_followup_clean(pending, round_id="followup", reviewed_head=fixed_head)
+    clean["identity"]["merge_base"] = _git(repo, "merge-base", "main", "HEAD")
+    clean["review_patch"] = reviewed_receipt(clean)
+    assert clean["review_patch"]["reviewed_head"] == fixed_head
+    _commit_file(repo, "app.txt", (repo / "app.txt").read_text().replace("fixed edit", "reviewed edit"), "regression returns")
+    assert acceptance(clean, _git(repo, "rev-parse", "HEAD")) is None
+
+
+def test_targeted_followup_handles_changed_patch_with_equal_head_trees(tmp_path, monkeypatch):
+    import review_followup
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    base = _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature")
+    reviewed = _commit_file(repo, "app.txt", "base\nfeature\n", "feature")
+    _git(repo, "checkout", "main")
+    _commit_file(repo, "app.txt", "base\nfeature\n", "same edit upstream")
+    _git(repo, "checkout", "feature")
+    _git(repo, "merge", "--no-ff", "main", "-m", "integrate")
+    assert _git(repo, "rev-parse", reviewed + "^{tree}") == _git(repo, "rev-parse", "HEAD^{tree}")
+    results = []
+    def run(**kwargs):
+        results.append(kwargs)
+        return {"returncode": 0, "final_message": "Review result: clean", "session_id": None, "elapsed_seconds": 0}
+    monkeypatch.setattr(review_followup, "run_codex_review", run)
+    monkeypatch.setattr(sys, "argv", ["review_followup.py", "--cd", str(repo), "--base", "main", "--since", reviewed, "--reviewed-base", base, "--note", "Check upstream adoption", "--state-dir", str(tmp_path / "state")])
+    assert review_followup.main() == 0
+    assert results[0]["base"] is None

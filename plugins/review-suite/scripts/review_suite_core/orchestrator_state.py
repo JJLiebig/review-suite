@@ -147,8 +147,19 @@ def validation_blockers(state: dict[str, Any]) -> list[str]:
     validation = dict(state.get("validation") or {})
     note = _optional_text(validation.get("note"))
     blockers: list[str] = []
+    identity = dict(state.get("identity") or {})
+    checked_head = validation.get("head") or dict(state.get("review_patch") or {}).get("reviewed_head") or identity.get("head")
+    live_head = identity.get("head")
+    if state.get("review_patch") and identity.get("cwd"):
+        from .patch_identity import git
+        try:
+            live_head = git(cwd_path_from_normalized(identity["cwd"]), "rev-parse", "HEAD").decode().strip()
+        except (OSError, ValueError):
+            pass
     for key in ("full_suite", "ci"):
         value = str(validation.get(key) or "unknown").strip() or "unknown"
+        if live_head and checked_head and live_head != checked_head:
+            value = "pending"
         if value not in VALIDATION_READY_STATUSES:
             blockers.append(f"{key}:{value}")
         elif value == "waived" and not note:
@@ -181,10 +192,14 @@ def review_ladder_summary(
     if accepted and convergence_summary(state).get("status") == "ACTIVE" and not state.get("active_findings"):
         original = accepted["reviewed_head"]
         # Evaluate every existing stage, GitHub and closure gate on the actual receipt.
-        original_state = {**state, "base_drift": {}}
+        original_state = {**state, "base_drift": {},
+                          "identity": {**dict(state.get("identity") or {}), "head": original, "cwd": ""},
+                          "validation": {**dict(state.get("validation") or {}), "head": original}}
         original_summary = review_ladder_summary(original_state) if comparison_head != original else None
-        if original_summary and original_summary.get("done") and not validation_blockers(state):
-            return {**original_summary, "reviewed_head": original, "current_head": comparison_head,
+        if original_summary and original_summary.get("done"):
+            ready = not validation_blockers(state)
+            return {**original_summary, "done": ready, "review_ladder": "complete" if ready else "pending",
+                    "reviewed_head": original, "current_head": comparison_head,
                     "accepted_head": comparison_head, "acceptance": accepted,
                     "required_checks": "current_head_required",
                     "validation_head": dict(state.get("validation") or {}).get("head") or original,

@@ -1559,9 +1559,10 @@ def test_runner_runs_real_followup_once_from_followup_pending(
     _assert_review_brief_instructions(followup_calls[0]["prompt"])
 
 
-def test_runner_runs_rewritten_followup_against_branch_scope(
+def test_runner_runs_rewritten_followup_against_changed_patch_scope(
     monkeypatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(orchestrator_runner, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
     followup_calls = _stub_followup(monkeypatch)
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(
@@ -1615,18 +1616,18 @@ def test_runner_runs_rewritten_followup_against_branch_scope(
     assert result.state["stage"] == STAGE_DECISION_PENDING
     assert len(followup_calls) == 1
     scope = followup_calls[0]["review_scope"]
-    assert scope["base"] == "origin/main"
+    assert "base" not in scope
     assert scope["branch_base"] == "origin/main"
     assert scope["reviewed_head"] == "head-2"
     assert scope["findings_reviewed_head"] == "head-1"
     assert "commit" not in scope
     assert "commit_end" not in scope
     assert (
-        "The review target is branch diff `origin/main..head-2` after fixes for findings from `head-1`."
+        "The review target is PR patch changes `base-1..head-1` to `base-1..head-2`."
         in str(followup_calls[0]["prompt"])
     )
     assert "interdiff `head-1..head-2`" not in str(followup_calls[0]["prompt"])
-    assert "no longer an ancestor" in str(followup_calls[0]["prompt"])
+    assert "Review only changes to the PR patch" in str(followup_calls[0]["prompt"])
 
 
 def test_runner_discovery_findings_fix_advances_with_findings_context(

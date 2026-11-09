@@ -235,7 +235,7 @@ def main() -> int:
             validated_linear_review_range(
                 review_root, since_head, head, label="native follow-up review"
             )
-        if not has_committed_diff(review_root, since_head, head):
+        if not args.reviewed_base and not has_committed_diff(review_root, since_head, head):
             raise ValueError(
                 f"follow-up review found no committed diff between `{since_head}` and `{head}`. "
                 "Commit the intended fix or use the appropriate full review lane."

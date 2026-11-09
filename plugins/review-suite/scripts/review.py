@@ -2909,6 +2909,17 @@ def _has_validation_status(args: argparse.Namespace) -> bool:
 def _record_validation_status(
     state: dict[str, Any], args: argparse.Namespace
 ) -> dict[str, Any]:
+    from review_suite_core.patch_identity import reviewed_receipt
+    current = _identity_head(state) or dict(state.get("identity") or {}).get("head")
+    previous = dict(state.get("validation") or {}).get("head")
+    if not previous:
+        try:
+            previous = dict(reviewed_receipt(state) or {}).get("reviewed_head")
+        except (OSError, ValueError):
+            previous = None
+    if previous and current != previous:
+        state = deepcopy(state)
+        state["validation"] = {**dict(state.get("validation") or {}), "full_suite": "unknown", "ci": "unknown"}
     updated = record_validation_statuses(
         state,
         focused=args.focused_validation,
