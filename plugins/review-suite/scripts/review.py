@@ -1709,8 +1709,13 @@ def _apply_decision_to_ready_state(
         return next_state
     if decision == DECISION_FINDINGS:
         if lane == "base-interaction":
-            state = deepcopy(state)
-            state.pop("base_interaction_pending", None)
+            check = state["base_interaction_pending"]
+            next_state = _with_fix_action(record_findings_decision(
+                state, round_id=round_id, lane=lane, reviewed_head=reviewed_head,
+                reviewed_tree=reviewed_tree))
+            next_state["review_heads"] = deepcopy(check["review_heads"])
+            next_state.pop("base_interaction_pending", None)
+            return next_state
         if lane == FOLLOWUP_LANE:
             return _with_fix_action(
                 record_followup_findings(

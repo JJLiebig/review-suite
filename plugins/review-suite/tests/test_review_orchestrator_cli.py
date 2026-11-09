@@ -7058,6 +7058,7 @@ def test_base_interaction_clean_receipt_and_new_head_reflags(monkeypatch, tmp_pa
 def test_base_interaction_findings_enter_fix_flow(monkeypatch, tmp_path):
     _, state_dir, public_id = _interaction_cycle(tmp_path)
     _stub_interaction(monkeypatch, verdict="findings")
+    original_receipt = _cycle_payload(state_dir, public_id)["review_patch"]
     code, status = _run_review(
         monkeypatch,
         ["--id", public_id, "--state-dir", str(state_dir), "--check-base-interaction"],
@@ -7066,6 +7067,7 @@ def test_base_interaction_findings_enter_fix_flow(monkeypatch, tmp_path):
     state = _cycle_payload(state_dir, public_id)
     assert state["stage"] == "fix-pending"
     assert state["active_findings"]["round_id"] == "interaction-round"
+    assert state["review_patch"] == original_receipt
     assert state["pending_action"]["kind"] == "fix-findings"
 
 
