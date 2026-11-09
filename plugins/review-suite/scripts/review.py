@@ -1714,6 +1714,7 @@ def _apply_decision_to_ready_state(
                 state, round_id=round_id, lane=lane, reviewed_head=reviewed_head,
                 reviewed_tree=reviewed_tree))
             next_state["review_heads"] = deepcopy(check["review_heads"])
+            next_state["identity"].update(head=check["binding"]["head"], merge_base=check["binding"]["base"])
             next_state.pop("base_interaction_pending", None)
             return next_state
         if lane == FOLLOWUP_LANE:

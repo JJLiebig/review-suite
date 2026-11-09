@@ -7015,6 +7015,7 @@ def _stub_interaction(monkeypatch: pytest.MonkeyPatch, *, verdict: str = "clean"
                 "reviewed_head": _git(kwargs["review_cwd"], "rev-parse", "HEAD"),
                 "runs": [{"status": "completed", "review_status": "completed", "terminal_command": verdict,
                           "reviewer_output": f"Review result: {verdict}"}]}
+        result["review_scope"] = kwargs.get("review_scope") or {"reviewed_head": result["reviewed_head"]}
         write_round(kwargs["state_dir"] / "orchestrator" / "review-rounds", result)
         return result
     monkeypatch.setattr(review_suite_arena, "run_orchestrator_followup_review_step", run)
@@ -7057,7 +7058,11 @@ def test_base_interaction_findings_enter_fix_flow(monkeypatch, tmp_path):
     assert state["stage"] == "fix-pending"
     assert state["active_findings"]["round_id"] == "interaction-round"
     assert state["review_patch"] == original_receipt
+    assert state["identity"]["head"] == state["active_findings"]["reviewed_head"]
     assert state["pending_action"]["kind"] == "fix-findings"
+    code, _ = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir), "--decision", "clean", "--reason", "Verified the reported path is unreachable"])
+    assert code == 0
+    assert _cycle_payload(state_dir, public_id)["active_findings"] is None
 
 
 def test_base_interaction_override_reason_and_status(monkeypatch, tmp_path, capsys):
