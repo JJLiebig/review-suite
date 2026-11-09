@@ -6960,3 +6960,156 @@ def test_changed_pr_patch_reuses_id_and_reviews_only_delta(monkeypatch, tmp_path
     state = _cycle_payload(state_dir, review_id)
     assert state["review_patch"]["reviewed_base"] == original
     assert state["review_patch_history"]
+
+
+def _interaction_cycle(tmp_path: Path) -> tuple[Path, Path, str]:
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    _init_repo(repo)
+    base = _commit_file(
+        repo, "app.py", "def a():\n    return 1\n\ndef b():\n    return 2\n", "base"
+    )
+    _git(repo, "checkout", "-b", "feature/interaction")
+    head = _commit_file(
+        repo, "app.py", "def a():\n    return 10\n\ndef b():\n    return 2\n", "feature"
+    )
+    state = review.create_cycle(
+        cwd=repo,
+        base="main",
+        branch="feature/interaction",
+        head=head,
+        merge_base=base,
+        requested_mode="fast",
+        effective_mode="fast",
+        selection="auto",
+        effective_selection="stable",
+    )
+    state = review.record_clean_decision(
+        state, round_id="original", lane="review_base", reviewed_head=head
+    )
+    state["stage"] = "review-green"
+    state["validation"].update(full_suite="passed", ci="passed", head=head)
+    state = orchestrator_store.save_cycle(state_dir, state)
+    _git(repo, "checkout", "main")
+    _commit_file(
+        repo,
+        "app.py",
+        "def a():\n    return 1\n\ndef b():\n    return 20\n",
+        "base changes",
+    )
+    _git(repo, "checkout", "feature/interaction")
+    _git(repo, "rebase", "main")
+    return repo, state_dir, state["public_id"]
+
+
+def _stub_interaction(
+    monkeypatch: pytest.MonkeyPatch, *, verdict: str = "clean", interrupt: bool = False
+) -> list:
+    calls = []
+
+    def run(**kwargs):
+        calls.append(kwargs)
+        if "on_round_started" in kwargs:
+            kwargs["on_round_started"]({"round_id": "interaction-round"})
+            if interrupt:
+                raise RuntimeError("interrupted")
+        return {
+            "round_id": "interaction-round",
+            "status": "completed",
+            "blocked": False,
+            "reviewed_head": _git(kwargs["review_cwd"], "rev-parse", "HEAD"),
+            "runs": [
+                {
+                    "status": "completed",
+                    "terminal_command": verdict,
+                    "reviewer_output": f"Review result: {verdict}",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        review_suite_arena, "run_orchestrator_followup_review_step", run
+    )
+    monkeypatch.setattr(review_suite_arena, "resume_orchestrator_review_step", run)
+    return calls
+
+
+def test_base_interaction_clean_receipt_and_new_head_reflags(monkeypatch, tmp_path):
+    repo, state_dir, public_id = _interaction_cycle(tmp_path)
+    calls = _stub_interaction(monkeypatch)
+    args = ["--id", public_id, "--state-dir", str(state_dir)]
+    code, status = _run_review(
+        monkeypatch, [*args, "--check-base-interaction", "--cd", str(repo)]
+    )
+    assert code == 0
+    assert status["base_interaction"]["check"] is False
+    assert status["base_interaction"]["status"] == "checked"
+    assert status["base_interaction"]["receipt"]["round_id"] == "interaction-round"
+    assert _cycle_payload(state_dir, public_id)["review_patch"][
+        "reviewed_head"
+    ] != _git(repo, "rev-parse", "HEAD")
+    _run_review(monkeypatch, [*args, "--check-base-interaction"])
+    assert len(calls) == 1
+    _git(repo, "commit", "--allow-empty", "-m", "new head")
+    _, status = _run_review(monkeypatch, [*args, "--show-status"])
+    assert status["base_interaction"]["check"] is True
+    assert status["base_interaction"]["status"] == "outstanding"
+
+
+def test_base_interaction_findings_enter_fix_flow(monkeypatch, tmp_path):
+    _, state_dir, public_id = _interaction_cycle(tmp_path)
+    _stub_interaction(monkeypatch, verdict="findings")
+    code, status = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--state-dir", str(state_dir), "--check-base-interaction"],
+    )
+    assert code == 0
+    state = _cycle_payload(state_dir, public_id)
+    assert state["stage"] == "fix-pending"
+    assert state["active_findings"]["round_id"] == "interaction-round"
+    assert state["pending_action"]["kind"] == "fix-findings"
+
+
+def test_base_interaction_override_reason_and_status(monkeypatch, tmp_path, capsys):
+    _, state_dir, public_id = _interaction_cycle(tmp_path)
+    args = [
+        "--id",
+        public_id,
+        "--state-dir",
+        str(state_dir),
+        "--accept-base-interaction",
+    ]
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", *_without_state_dir_args(monkeypatch, args)]
+    )
+    assert review.main() != 0
+    assert "requires --reason" in capsys.readouterr().out
+    code, _ = _run_review(monkeypatch, [*args, "--reason", "Owner approved"])
+    assert code == 0
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", "--id", public_id, "--show-status", "--json"]
+    )
+    assert review.main() == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["base_interaction"]["status"] == "overridden"
+    assert status["base_interaction"]["check"] is False
+    assert status["base_interaction"]["override"]["reason"] == "Owner approved"
+
+
+def test_base_interaction_resume_collects_existing_round(monkeypatch, tmp_path):
+    _, state_dir, public_id = _interaction_cycle(tmp_path)
+    calls = _stub_interaction(monkeypatch, interrupt=True)
+    args = [
+        "--id",
+        public_id,
+        "--state-dir",
+        str(state_dir),
+        "--check-base-interaction",
+    ]
+    with pytest.raises(RuntimeError, match="interrupted"):
+        _run_review(monkeypatch, args)
+    code, status = _run_review(monkeypatch, args)
+    assert code == 0
+    assert len(calls) == 2
+    assert "on_round_started" not in calls[1]
+    assert calls[1]["round_id"] == "interaction-round"
+    assert status["base_interaction"]["status"] == "checked"

@@ -187,7 +187,7 @@ def review_ladder_summary(
         return summary
 
     comparison_head = str(current_head or "").strip()
-    from .patch_identity import acceptance, interaction
+    from .patch_identity import acceptance, bound_interaction
     accepted = acceptance(state, comparison_head) if comparison_head else None
     if accepted and convergence_summary(state).get("status") == "ACTIVE" and not state.get("active_findings"):
         original = accepted["reviewed_head"]
@@ -203,8 +203,7 @@ def review_ladder_summary(
                     "accepted_head": comparison_head, "acceptance": accepted,
                     "required_checks": "current_head_required",
                     "validation_head": dict(state.get("validation") or {}).get("head") or original,
-                    "base_interaction": interaction(
-                        Path(accepted["repo"]), accepted["reviewed_base"], accepted["accepted_base"], original)}
+                    "base_interaction": bound_interaction(state, accepted)}
     if comparison_head == original_head and state.get("review_patch") and not accepted:
         from .patch_identity import git
         receipt = dict(state["review_patch"])

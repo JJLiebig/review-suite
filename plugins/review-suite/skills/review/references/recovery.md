@@ -2,6 +2,8 @@
 
 `main` moving never blocks work. Leave a ready branch alone until merge; merge `main` in or rebase only to fix a conflict. If the PR's own diff is unchanged, its review still counts. If it changed, review only what changed. Never restart a whole review because `main` moved. Keep required checks on every new head; check concrete base interactions, including structural changes.
 
+When status flags `base_interaction.check`, run `review.py --id <id> --check-base-interaction [--cd <worktree>]`. This reviews only the flagged base changes and the PR code that uses or touches them, using the configured base-mode reviewer; rerunning resumes the check. A clean receipt clears only the current head/base/patch binding; findings use the normal fix flow. The owner can use `review.py --id <id> --accept-base-interaction --reason "<why>"` instead. Agents use this override only on their parent's say-so. Status JSON reports `outstanding`, `checked` with a receipt, or `overridden` with the reason.
+
 Use the installed launcher and existing review id. These commands preserve the existing review and validation gates.
 
 - If a follow-up reports that `CreateDesktopW error 5` prevented inspection, use the emitted `review.py --id <id>` retry after repairing the reviewer transport. This preserves the failed output and accepted findings, uses the cycle's model/reasoning override, and keeps cleanup, signoff and validation gates pending. Do not classify an uninspected attempt as clean.

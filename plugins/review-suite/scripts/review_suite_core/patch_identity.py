@@ -283,3 +283,72 @@ def delta_prompt(old_base: str, old_head: str, new_base: str, new_head: str) -> 
         "Preserve prior findings. Report only material correctness defects with a reachable trigger. "
         "End with `Review result: clean` or `Review result: findings`."
     )
+
+
+def bound_interaction(
+    state: dict[str, Any], accepted: dict[str, Any]
+) -> dict[str, Any]:
+    result = interaction(
+        Path(accepted["repo"]),
+        accepted["reviewed_base"],
+        accepted["accepted_base"],
+        accepted["reviewed_head"],
+    )
+    binding = {
+        "head": accepted["accepted_head"],
+        "base": accepted["accepted_base"],
+        "patch": accepted["patch"],
+    }
+    receipt = dict(state.get("base_interaction_receipt") or {})
+    if receipt.get("binding") == binding:
+        result.update(check=False, status=receipt["status"])
+        if receipt["status"] == "overridden":
+            result["override"] = {
+                "reason": receipt["reason"],
+                "head": binding["head"],
+                "base": binding["base"],
+            }
+        else:
+            result["receipt"] = receipt
+    else:
+        result["status"] = "outstanding" if result["check"] else "not_required"
+    return result
+
+
+def interaction_prompt(accepted: dict[str, Any], scope: dict[str, Any]) -> str:
+    repo = Path(accepted["repo"])
+    old, base, head = (
+        accepted["reviewed_base"],
+        accepted["accepted_base"],
+        accepted["accepted_head"],
+    )
+    paths = scope["paths"]
+    base_paths = (
+        paths
+        if scope["reason"] == "shared_paths"
+        else [
+            p.decode("utf-8", "surrogateescape")
+            for p in git(repo, "diff", "--name-only", "-z", old, base).split(b"\0")
+            if p
+        ]
+    )
+    base_patch = git(
+        repo, "diff", "--no-ext-diff", "--no-textconv", old, base, "--", *base_paths
+    )
+    pr_patch = (
+        git(repo, "diff", "--no-ext-diff", "--no-textconv", base, head, "--", *paths)
+        if paths
+        else b""
+    )
+    return (
+        "Review only interactions between these flagged base changes and the PR code that uses or touches them. "
+        "Never review the full PR. Inspect affected call sites and dependencies as needed, and only their "
+        "relevant changed hunks. For structural changes trace callers of removed, moved or changed contracts. "
+        "Report only material correctness defects with a reachable trigger. "
+        f"Current head: {head}; base: {base}. Flag reason: {scope['reason']}.\n"
+        "Flagged base diff:\n"
+        + base_patch.decode("utf-8", "replace")
+        + "\nPR hunks in shared paths:\n"
+        + pr_patch.decode("utf-8", "replace")
+        + "\nEnd with `Review result: clean` or `Review result: findings`."
+    )
