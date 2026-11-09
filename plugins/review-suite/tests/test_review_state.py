@@ -2414,7 +2414,8 @@ def test_targeted_followup_handles_changed_patch_with_equal_head_trees(tmp_path,
     assert review_followup.main() == 0
 
 
-def test_moved_replacement_requires_targeted_review(tmp_path):
+@pytest.mark.parametrize("move_block", [False, True])
+def test_moved_replacement_requires_targeted_review(tmp_path, move_block):
     from review_suite_core.patch_identity import acceptance, reviewed_receipt
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -2426,6 +2427,18 @@ def test_moved_replacement_requires_targeted_review(tmp_path):
     state["review_patch"] = reviewed_receipt(state)
     _git(repo, "checkout", "main")
     moved = before.replace("    unique_call()\n", "").replace("def second():\n    prepare()\n", "def second():\n    prepare()\n    unique_call()\n")
+    if move_block:
+        before = "def first():\n    prepare()\n    unique_call()\n    finish()\n\n\n\ndef second():\n    return 2\n"
+        _git(repo, "checkout", "-b", "block-base", base)
+        base = _commit_file(repo, "app.py", before, "unique movable block")
+        _git(repo, "checkout", "-b", "block-feature")
+        old_head = _commit_file(repo, "app.py", before.replace("unique_call", "reviewed_call"), "review block replacement")
+        state["identity"].update(head=old_head, merge_base=base)
+        state["review_heads"]["last_reviewed_head"] = old_head
+        state.pop("review_patch", None)
+        state["review_patch"] = reviewed_receipt(state)
+        _git(repo, "checkout", "main")
+        moved = "def first():\n    return 1\n\n\n\ndef second():\n    prepare()\n    unique_call()\n    finish()\n"
     _commit_file(repo, "app.py", moved, "move call between functions")
     _git(repo, "checkout", "-b", "rebased-feature")
     new_head = _commit_file(repo, "app.py", moved.replace("unique_call", "reviewed_call"), "same bytes at different semantic location")

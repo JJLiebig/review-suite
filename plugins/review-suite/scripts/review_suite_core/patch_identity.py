@@ -174,6 +174,38 @@ def acceptance(state: dict[str, Any], current_head: str) -> dict[str, Any] | Non
         patch = patch_identity(repo, base, current_head)
         if patch != receipt["patch"]:
             return None
+        # Identical edit bytes cannot prove location across a base-side move.
+        changed_paths = git(
+            repo,
+            "diff",
+            "--name-only",
+            "-z",
+            receipt["reviewed_base"],
+            receipt["reviewed_head"],
+        ).split(b"\0")
+        for raw_path in filter(None, changed_paths):
+            drift = git(
+                repo,
+                "diff",
+                "--no-renames",
+                "--unified=0",
+                receipt["reviewed_base"],
+                base,
+                "--",
+                raw_path.decode("utf-8", "surrogateescape"),
+            )
+            removed = {
+                line[1:]
+                for line in drift.splitlines()
+                if line.startswith(b"-") and not line.startswith(b"---")
+            }
+            added = {
+                line[1:]
+                for line in drift.splitlines()
+                if line.startswith(b"+") and not line.startswith(b"+++")
+            }
+            if removed & added:
+                return None
         return {**receipt, "accepted_head": current_head, "accepted_base": base}
     except OSError, ValueError:
         return None
