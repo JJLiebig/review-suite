@@ -1664,6 +1664,7 @@ def record_fixes_validated(
     if state.get("stage") != STAGE_FIX_PENDING:
         raise ValueError("--fixes-validated requires accepted findings awaiting fixes")
     next_state = _copy_state(state)
+    _archive_review_patch(next_state)
     active = _active_findings(next_state)
     note = _required_text(note, field="fix eligibility and validation note")
     resolution = {
@@ -1784,6 +1785,11 @@ def mark_followup_review_pending(
     return next_state
 
 
+def _archive_review_patch(state: dict[str, Any]) -> None:
+    if receipt := state.pop("review_patch", None):
+        state.setdefault("review_patch_history", []).append(receipt)
+
+
 def record_followup_clean(
     state: dict[str, Any],
     *,
@@ -1791,6 +1797,7 @@ def record_followup_clean(
     reviewed_head: str | None = None,
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
+    _archive_review_patch(next_state)
     active = _active_findings(next_state)
     head = reviewed_head or active.get("fix_head") or _state_head(next_state)
     _upsert_decision(
@@ -2060,6 +2067,7 @@ def record_clean_decision(
     reviewed_head: str | None = None,
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
+    _archive_review_patch(next_state)
     resolved_lane = _required_text(lane, field="lane")
     head = reviewed_head or _state_head(next_state)
     active = next_state.get("active_findings")

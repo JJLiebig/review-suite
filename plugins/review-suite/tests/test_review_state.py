@@ -2418,14 +2418,14 @@ def test_moved_replacement_requires_targeted_review(tmp_path):
     from review_suite_core.patch_identity import acceptance, reviewed_receipt
     repo = tmp_path / "repo"
     _init_repo(repo)
-    before = "def first():\n    unique_call()\n    return 1\n\n\n\ndef second():\n    return 2\n"
+    before = "def first():\n    prepare()\n    unique_call()\n    finish()\n\n\n\ndef second():\n    prepare()\n    finish()\n"
     base = _commit_file(repo, "app.py", before, "base")
     _git(repo, "checkout", "-b", "feature")
     old_head = _commit_file(repo, "app.py", before.replace("unique_call", "reviewed_call"), "reviewed replacement")
     state = {"identity": {"cwd": str(repo), "base": "main", "head": old_head, "merge_base": base}, "review_heads": {"last_reviewed_head": old_head}}
     state["review_patch"] = reviewed_receipt(state)
     _git(repo, "checkout", "main")
-    moved = before.replace("    unique_call()\n", "").replace("def second():\n", "def second():\n    unique_call()\n")
+    moved = before.replace("    unique_call()\n", "").replace("def second():\n    prepare()\n", "def second():\n    prepare()\n    unique_call()\n")
     _commit_file(repo, "app.py", moved, "move call between functions")
     _git(repo, "checkout", "-b", "rebased-feature")
     new_head = _commit_file(repo, "app.py", moved.replace("unique_call", "reviewed_call"), "same bytes at different semantic location")

@@ -6952,3 +6952,11 @@ def test_changed_pr_patch_reuses_id_and_reviews_only_delta(monkeypatch, tmp_path
     assert _git(repo, "rev-parse", "HEAD") == changed
     assert len(calls) == before + 1
     assert calls[-1]["review_scope"]["patch_delta"]["reviewed_head"] == changed
+    for _ in range(3):
+        _, result = _run_review(monkeypatch, ["--id", review_id])
+        if result.get("done"):
+            break
+    assert result["done"]
+    state = _cycle_payload(state_dir, review_id)
+    assert state["review_patch"]["reviewed_base"] == original
+    assert state["review_patch_history"]

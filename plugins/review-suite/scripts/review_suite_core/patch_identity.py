@@ -18,6 +18,35 @@ def git(repo: Path, *args: str) -> bytes:
     return result.stdout
 
 
+def alignment_boundary(lines: list[bytes], start: int, count: int) -> bytes | None:
+    """Find context that identifies the edit even without its removed statement."""
+    radius = 1
+    while radius <= len(lines) * 2:
+        before = lines[max(0, start - radius) : start]
+        after = lines[start + count : start + count + radius]
+        locations = set()
+        for at in range(len(before), len(lines) + 1):
+            if lines[at - len(before) : at] != before:
+                continue
+            for gap in range(count + 1):
+                if (
+                    at + gap + len(after) <= len(lines)
+                    and lines[at + gap : at + gap + len(after)] == after
+                ):
+                    locations.add(at)
+                    break
+        if locations == {start}:
+            left, right = b"".join(before), b"".join(after)
+            return (
+                len(left).to_bytes(8, "big")
+                + left
+                + len(right).to_bytes(8, "big")
+                + right
+            )
+        radius *= 2
+    return None
+
+
 def patch_identity(repo: Path, base: str, head: str) -> dict[str, Any]:
     # Byte output avoids platform newline conversion and preserves whitespace.
     patch = git(
@@ -73,30 +102,14 @@ def patch_identity(repo: Path, base: str, head: str) -> dict[str, Any]:
                 start = int(location[1])
                 count = int(location[2]) if location[2] is not None else 1
                 if old_lines:
-                    if count:
-                        removed = old_lines[start - 1 : start - 1 + count]
-                        matches = sum(
-                            old_lines[i : i + count] == removed
-                            for i in range(len(old_lines) - count + 1)
-                        )
-                        ambiguous |= matches != 1
-                        boundary = (
-                            old_lines[max(0, start - 2) : start - 1]
-                            + old_lines[start - 1 + count : start + count]
-                        )
-                        normalized.append(
-                            b"boundary:" + hashlib.sha256(b"".join(boundary)).digest()
-                        )
+                    boundary = alignment_boundary(
+                        old_lines, start - 1 if count else start, count
+                    )
+                    if boundary is None:
+                        ambiguous = True
                     else:
-                        boundary = old_lines[max(0, start - 1) : start + 1]
-                        matches = sum(
-                            old_lines[i : i + len(boundary)] == boundary
-                            for i in range(len(old_lines) - len(boundary) + 1)
-                        )
-                        ambiguous |= matches != 1
-                        # Bind insertions to a unique boundary rather than just inserted bytes.
                         normalized.append(
-                            b"boundary:" + hashlib.sha256(b"".join(boundary)).digest()
+                            b"boundary:" + hashlib.sha256(boundary).digest()
                         )
                 line = (
                     b"@@ -"
