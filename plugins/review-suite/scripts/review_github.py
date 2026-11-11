@@ -716,6 +716,11 @@ def public_cycle_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if items:
         ordered_items = sorted_cycle_items(items)
         result["responses"] = [public_response_item(item) for item in ordered_items]
+        if any(item.get("kind") == "review_comment" for item in items):
+            result["resolve"] = format_command([
+                sys.executable, str(launcher_script_path(Path(__file__))),
+                "resolve", "<comment-url>",
+            ]) + ' --fixed <sha> OR --reason "<why not relevant>"'
     attempts = payload.get("request_attempts")
     if attempts not in (None, 0, 1):
         result["attempts"] = attempts
@@ -757,9 +762,9 @@ def github_review_scope(
     return scope
 
 
-def _help_command() -> str:
+def _help_command(command: str = "run") -> str:
     return format_command(
-        [sys.executable, str(launcher_script_path(__file__)), "run", "--help"]
+        [sys.executable, str(launcher_script_path(__file__)), command, "--help"]
     )
 
 
@@ -1229,9 +1234,115 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
 
 
+THREAD_FIELDS = """
+id isResolved viewerCanResolve
+comments(first: 100) {
+  nodes { databaseId body author { __typename login } }
+  pageInfo { hasNextPage endCursor }
+}
+"""
+
+
+def find_review_thread(owner: str, repo: str, number: int, comment_id: int) -> tuple[dict[str, Any], str]:
+    cursor = None
+    while True:
+        data = github_graphql("""
+query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      headRefOid
+      reviewThreads(first: 100, after: $cursor) {
+        nodes { """ + THREAD_FIELDS + """ }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+""", {"owner": owner, "repo": repo, "number": number, "cursor": cursor})
+        pr = (data.get("repository") or {}).get("pullRequest")
+        if not pr:
+            raise ValueError("pull request not found")
+        threads = pr["reviewThreads"]
+        for thread in graphql_nodes(threads):
+            if any(comment["databaseId"] == comment_id for comment in thread_comments(thread)):
+                return thread, pr["headRefOid"]
+        if not threads["pageInfo"]["hasNextPage"]:
+            raise ValueError("inline review comment not found; use the finding's discussion_r URL")
+        cursor = threads["pageInfo"]["endCursor"]
+
+
+def thread_comments(thread: dict[str, Any]):
+    comments = thread["comments"]
+    while True:
+        yield from graphql_nodes(comments)
+        if not comments["pageInfo"]["hasNextPage"]:
+            return
+        data = github_graphql("""
+query($id: ID!, $cursor: String!) {
+  node(id: $id) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $cursor) {
+        nodes { databaseId body author { __typename login } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+""", {"id": thread["id"], "cursor": comments["pageInfo"]["endCursor"]})
+        comments = data["node"]["comments"]
+
+
+def cmd_resolve(args: argparse.Namespace) -> int:
+    match = re.fullmatch(
+        r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)#discussion_r(\d+)", args.url
+    )
+    if not match:
+        raise ValueError("use an inline review comment URL: https://github.com/owner/repo/pull/123#discussion_r456")
+    owner, repo, number, comment_id = match.groups()
+    if args.fixed is not None:
+        if not re.fullmatch(r"[0-9a-fA-F]{7,40}", args.fixed):
+            raise ValueError("--fixed requires a commit SHA (7–40 hex characters)")
+    elif not args.reason.strip():
+        raise ValueError("--reason requires why the finding is not relevant")
+    thread, head = find_review_thread(owner, repo, int(number), int(comment_id))
+    if thread["isResolved"]:
+        emit_toon({"status": "already_resolved", "url": args.url})
+        return 0
+    if not thread["viewerCanResolve"]:
+        raise ValueError("GitHub account cannot resolve this thread")
+    if args.fixed is not None:
+        commit = github_request("GET", f"repos/{owner}/{repo}/commits/{args.fixed}")
+        sha = commit["sha"]
+        comparison = github_request("GET", f"repos/{owner}/{repo}/compare/{sha}...{head}")
+        if comparison["merge_base_commit"]["sha"] != sha:
+            raise ValueError("fix commit is not on the remote PR branch; push the fix first")
+        body = f"Fixed in {sha[:7]}."
+    else:
+        body = f"Not relevant: {args.reason.strip()}"
+    login = github_request("GET", "user")["login"]
+    if not any(item.get("body") == body and graphql_login(item.get("author")) == login
+               for item in thread_comments(thread)):
+        github_graphql("""
+mutation($thread: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $thread, body: $body}) {
+    comment { id }
+  }
+}
+""", {"thread": thread["id"], "body": body})
+    result = github_graphql("""
+mutation($thread: ID!) {
+  resolveReviewThread(input: {threadId: $thread}) { thread { isResolved } }
+}
+""", {"thread": thread["id"]})
+    if not result["resolveReviewThread"]["thread"]["isResolved"]:
+        raise RuntimeError("reply posted, but thread remains open; retry the same command")
+    emit_toon({"status": "resolved", "reply": body})
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = AxiArgumentParser(
-        description="Deterministic GitHub PR review request and anchored polling."
+        description="Request GitHub PR reviews and reply to and resolve inline findings."
     )
     sub = parser.add_subparsers(
         dest="command", required=True, parser_class=AxiArgumentParser
@@ -1247,6 +1358,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--state-dir", default=None, help=argparse.SUPPRESS
     )
     run.add_argument("--force", action="store_true")
+
+    resolve = sub.add_parser("resolve", help="Reply to an inline finding and resolve its thread.")
+    resolve.add_argument("url", help="Inline finding's GitHub URL.")
+    outcome = resolve.add_mutually_exclusive_group(required=True)
+    outcome.add_argument("--fixed", metavar="SHA", help="Fixed in this pushed commit.")
+    outcome.add_argument("--reason", metavar="WHY", help="Why the finding is not relevant.")
+    resolve.add_argument("--state-dir", default=None, help=argparse.SUPPRESS)
 
     return parser
 
@@ -1264,11 +1382,13 @@ def main() -> int:
             args.state_dir = str(default_state_dir())
         if args.command == "run":
             return cmd_run(args)
+        if args.command == "resolve":
+            return cmd_resolve(args)
     except (RuntimeError, ValueError) as exc:
         return emit_error(
             str(exc),
             status="error",
-            help_items=[_help_command()],
+            help_items=[_help_command(args.command)],
         )
     finally:
         scope.close()

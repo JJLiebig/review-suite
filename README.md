@@ -34,6 +34,21 @@ The agent picks the lane from the change's risk.
 
 Note, if reviews take too long, there is a circuit breaker.
 
+### Resolve GitHub findings
+
+GitHub review output includes a `resolve` command. Use the inline finding's URL
+with either `--fixed <short-sha>` or `--reason "<why it is not relevant>"`:
+
+```sh
+python <plugin-root>/scripts/review_github.py resolve <comment-url> --fixed abc1234
+python <plugin-root>/scripts/review_github.py resolve <comment-url> --reason "The caller already handles this case."
+```
+
+This replies “Fixed in abc1234.” or “Not relevant: …” and resolves that thread.
+Push fixes first; the command checks that the commit is on the remote PR branch.
+Retry the same command after a failure; it reuses an existing matching reply.
+Review and validation results are recorded separately, as before.
+
 ## Settings
 
 Override the [shipped defaults](plugins/review-suite/default_settings.toml) in

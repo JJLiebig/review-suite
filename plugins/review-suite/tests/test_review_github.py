@@ -1544,3 +1544,140 @@ def test_github_request_rereads_the_token_once_on_401_and_never_reports_it(
     assert "HTTP 403" in str(error.value)
     assert "fresh-token" not in str(error.value)
     assert clock["sleeps"] == []
+
+
+class ResolutionGitHub:
+    """Stateful GitHub boundary: replies persist independently of resolution."""
+
+    def __init__(self):
+        self.sha = "abcdef1234567890abcdef1234567890abcdef12"
+        self.head = "f" * 40
+        self.resolved = False
+        self.can_resolve = True
+        self.pushed = True
+        self.fail_reply = False
+        self.fail_resolve = False
+        self.replies = []
+        self.thread_page = False
+        self.comment_page = False
+        self.reply_target = False
+
+    def request(self, method, path, *, body=None):
+        if path == "user":
+            return {"login": "alice"}
+        if path.endswith("/commits/abcdef1"):
+            return {"sha": self.sha}
+        if "/compare/" in path:
+            return {"merge_base_commit": {"sha": self.sha if self.pushed else "0" * 40}}
+        assert path == "graphql"
+        query, variables = body["query"], body["variables"]
+        if "reviewThreads(" in query:
+            assert variables["owner"] == "owner" and variables["repo"] == "repo"
+            assert variables["number"] == 12
+            thread = {
+                "id": "THREAD", "isResolved": self.resolved,
+                "viewerCanResolve": self.can_resolve,
+                "comments": self.comments(first=True),
+            }
+            next_page = self.thread_page and variables["cursor"] is None
+            return {"data": {"repository": {"pullRequest": {
+                "headRefOid": self.head,
+                "reviewThreads": {
+                    "nodes": [] if next_page else [thread],
+                    "pageInfo": {"hasNextPage": next_page, "endCursor": "next-thread"},
+                },
+            }}}}
+        if "node(id:" in query:
+            return {"data": {"node": {"comments": self.comments(first=False)}}}
+        if "addPullRequestReviewThreadReply(" in query:
+            if self.fail_reply:
+                raise RuntimeError("reply failed")
+            self.replies.append({"body": variables["body"], "author": {"login": "alice"}})
+            return {"data": {"addPullRequestReviewThreadReply": {"comment": {"id": "REPLY"}}}}
+        assert "resolveReviewThread(" in query
+        if self.fail_resolve:
+            raise RuntimeError("resolution failed")
+        self.resolved = True
+        return {"data": {"resolveReviewThread": {"thread": {"isResolved": True}}}}
+
+    def comments(self, *, first):
+        root = {"databaseId": 35 if self.reply_target else 34, "body": "finding", "author": {"login": "bot"}}
+        replies = [dict(item, databaseId=100 + index) for index, item in enumerate(self.replies)]
+        if self.reply_target:
+            replies.insert(0, {"databaseId": 34, "body": "another finding", "author": {"login": "bot"}})
+        more = first and self.comment_page
+        return {
+            "nodes": [root] if more else [root, *replies],
+            "pageInfo": {"hasNextPage": more, "endCursor": "next-comment"},
+        }
+
+
+@pytest.fixture
+def resolution_github(monkeypatch):
+    remote = ResolutionGitHub()
+    monkeypatch.setattr(review_github, "github_request", remote.request)
+    return remote
+
+
+def resolve_finding(*outcome):
+    args = review_github.build_parser().parse_args([
+        "resolve", "https://github.com/owner/repo/pull/12#discussion_r34", *outcome,
+    ])
+    return review_github.cmd_resolve(args)
+
+
+@pytest.mark.parametrize("outcome,reply", [
+    (("--fixed", "abcdef1"), "Fixed in abcdef1."),
+    (("--reason", "  The caller already rejects empty input.  "),
+     "Not relevant: The caller already rejects empty input."),
+])
+def test_resolve_posts_outcome_then_closes_thread(resolution_github, capsys, outcome, reply):
+    assert resolve_finding(*outcome) == 0
+    assert resolution_github.resolved
+    assert [item["body"] for item in resolution_github.replies] == [reply]
+    assert "resolved" in capsys.readouterr().out
+    assert resolve_finding(*outcome) == 0
+    assert len(resolution_github.replies) == 1
+    assert "already_resolved" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("reply_target", [False, True])
+def test_resolution_retry_preserves_reply_across_paginated_results(resolution_github, reply_target):
+    remote = resolution_github
+    remote.reply_target = reply_target
+    remote.thread_page = remote.comment_page = remote.fail_resolve = True
+    # Someone else's identical response must not count as this caller's reply.
+    remote.replies.append({"body": "Not relevant: unreachable", "author": {"login": "bob"}})
+    with pytest.raises(RuntimeError, match="resolution failed"):
+        resolve_finding("--reason", "unreachable")
+    assert not remote.resolved
+    assert len(remote.replies) == 2
+    remote.fail_resolve = False
+    assert resolve_finding("--reason", "unreachable") == 0
+    assert remote.resolved
+    assert len(remote.replies) == 2
+
+
+@pytest.mark.parametrize("failure,message", [
+    ("unpushed", "push the fix first"),
+    ("permission", "cannot resolve"),
+    ("reply", "reply failed"),
+])
+def test_resolution_failures_leave_thread_open(resolution_github, failure, message):
+    remote = resolution_github
+    remote.pushed = failure != "unpushed"
+    remote.can_resolve = failure != "permission"
+    remote.fail_reply = failure == "reply"
+    with pytest.raises((ValueError, RuntimeError), match=message):
+        resolve_finding("--fixed", "abcdef1")
+    assert not remote.resolved
+    assert not remote.replies
+
+
+@pytest.mark.parametrize("outcome", [("--fixed", "main"), ("--reason", " ")])
+def test_resolution_rejects_unusable_outcome_before_network(monkeypatch, outcome):
+    def unexpected(*args, **kwargs):
+        pytest.fail("invalid outcome reached GitHub")
+    monkeypatch.setattr(review_github, "github_request", unexpected)
+    with pytest.raises(ValueError):
+        resolve_finding(*outcome)
