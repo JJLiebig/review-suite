@@ -762,9 +762,9 @@ def github_review_scope(
     return scope
 
 
-def _help_command() -> str:
+def _help_command(command: str = "run") -> str:
     return format_command(
-        [sys.executable, str(launcher_script_path(__file__)), "run", "--help"]
+        [sys.executable, str(launcher_script_path(__file__)), command, "--help"]
     )
 
 
@@ -1264,28 +1264,25 @@ query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
             raise ValueError("pull request not found")
         threads = pr["reviewThreads"]
         for thread in graphql_nodes(threads):
-            comments = graphql_nodes(thread["comments"])
-            if comments and comments[0]["databaseId"] == comment_id:
+            if any(comment["databaseId"] == comment_id for comment in thread_comments(thread)):
                 return thread, pr["headRefOid"]
         if not threads["pageInfo"]["hasNextPage"]:
             raise ValueError("inline review comment not found; use the finding's discussion_r URL")
         cursor = threads["pageInfo"]["endCursor"]
 
 
-def thread_reply_exists(thread: dict[str, Any], body: str, login: str) -> bool:
+def thread_comments(thread: dict[str, Any]):
     comments = thread["comments"]
     while True:
-        if any(item.get("body") == body and graphql_login(item.get("author")) == login
-               for item in graphql_nodes(comments)):
-            return True
+        yield from graphql_nodes(comments)
         if not comments["pageInfo"]["hasNextPage"]:
-            return False
+            return
         data = github_graphql("""
 query($id: ID!, $cursor: String!) {
   node(id: $id) {
     ... on PullRequestReviewThread {
       comments(first: 100, after: $cursor) {
-        nodes { body author { __typename login } }
+        nodes { databaseId body author { __typename login } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -1323,7 +1320,8 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     else:
         body = f"Not relevant: {args.reason.strip()}"
     login = github_request("GET", "user")["login"]
-    if not thread_reply_exists(thread, body, login):
+    if not any(item.get("body") == body and graphql_login(item.get("author")) == login
+               for item in thread_comments(thread)):
         github_graphql("""
 mutation($thread: ID!, $body: String!) {
   addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $thread, body: $body}) {
@@ -1390,7 +1388,7 @@ def main() -> int:
         return emit_error(
             str(exc),
             status="error",
-            help_items=[_help_command()],
+            help_items=[_help_command(args.command)],
         )
     finally:
         scope.close()

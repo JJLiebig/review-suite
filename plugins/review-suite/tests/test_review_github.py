@@ -1560,6 +1560,7 @@ class ResolutionGitHub:
         self.replies = []
         self.thread_page = False
         self.comment_page = False
+        self.reply_target = False
 
     def request(self, method, path, *, body=None):
         if path == "user":
@@ -1600,10 +1601,13 @@ class ResolutionGitHub:
         return {"data": {"resolveReviewThread": {"thread": {"isResolved": True}}}}
 
     def comments(self, *, first):
-        root = {"databaseId": 34, "body": "finding", "author": {"login": "bot"}}
+        root = {"databaseId": 35 if self.reply_target else 34, "body": "finding", "author": {"login": "bot"}}
+        replies = [dict(item, databaseId=100 + index) for index, item in enumerate(self.replies)]
+        if self.reply_target:
+            replies.insert(0, {"databaseId": 34, "body": "another finding", "author": {"login": "bot"}})
         more = first and self.comment_page
         return {
-            "nodes": [root] if more else [root, *self.replies],
+            "nodes": [root] if more else [root, *replies],
             "pageInfo": {"hasNextPage": more, "endCursor": "next-comment"},
         }
 
@@ -1637,8 +1641,10 @@ def test_resolve_posts_outcome_then_closes_thread(resolution_github, capsys, out
     assert "already_resolved" in capsys.readouterr().out
 
 
-def test_resolution_retry_preserves_reply_across_paginated_results(resolution_github):
+@pytest.mark.parametrize("reply_target", [False, True])
+def test_resolution_retry_preserves_reply_across_paginated_results(resolution_github, reply_target):
     remote = resolution_github
+    remote.reply_target = reply_target
     remote.thread_page = remote.comment_page = remote.fail_resolve = True
     # Someone else's identical response must not count as this caller's reply.
     remote.replies.append({"body": "Not relevant: unreachable", "author": {"login": "bob"}})
