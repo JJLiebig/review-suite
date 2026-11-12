@@ -1428,6 +1428,10 @@ def _show_status(
             payload["Action"] = action
     if as_json:
         public = json_status_payload(payload)
+        if successor := str(dict(state.get("superseded_by") or {}).get("review") or "").strip():
+            public["superseded_by"] = {"review": successor}
+        if predecessor := str(dict(state.get("restart") or {}).get("supersedes") or "").strip():
+            public["supersedes"] = {"review": predecessor}
         if head := str(identity.get("head") or "").strip():
             public["head"] = head
         for key in (
