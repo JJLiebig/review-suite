@@ -3195,6 +3195,23 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert new_state["restart"]["supersedes"] == old_id
     assert new_state["restart"]["supersedes_cycle_key"] == old_state["cycle_key"]
     assert new_state["restart"]["from_mode"] == "base"
+    for cycle_id, link, target in (
+        (old_id, "superseded_by", new_id),
+        (new_id, "supersedes", old_id),
+    ):
+        output: list[str] = []
+        monkeypatch.setattr(review, "write_text", output.append)
+        monkeypatch.setattr(sys, "argv", [
+            "review.py", "--id", cycle_id,
+            "--show-status", "--json",
+        ])
+        assert review.main() == 0
+        status = json.loads(output[-1])
+        assert status[link] == {"review": target}
+        assert status["branch"] == "feature/restart-deep"
+        assert "Action" not in status
+    assert _cycle_payload(state_dir, old_id) == old_state
+    assert _cycle_payload(state_dir, new_id) == new_state
     assert review._is_successor_cycle(new_state) is True
     assert review._successor_needs_locked_resume(new_state) is False
     assert [step["name"] for step in new_state["review_plan"]["steps"]] == [
@@ -4702,6 +4719,8 @@ def test_show_status_json_by_id(
     }
     assert {"steps", "rounds", "round_history", "review_ladder"} <= set(payload)
     assert "Action" not in payload
+    assert "superseded_by" not in payload
+    assert "supersedes" not in payload
     assert _cycle_payload(state_dir, "rvw_caller0001") == before
 
     checkpoint = deepcopy(before)

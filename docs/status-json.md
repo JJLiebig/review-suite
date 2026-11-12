@@ -42,3 +42,9 @@ cycle, wherever it is run. `head` is the full commit the cycle reviews, and
 `status`, `done`, and `next_action` say whether it is still running, finished,
 or waiting on the caller. An unknown id exits with code 2 and prints
 `{"error": "unknown review cycle id: <id>", "status": "usage_error"}`.
+
+When a supported restart links cycles, the predecessor includes
+`superseded_by: {"review": "<successor id>"}` and the successor includes
+`supersedes: {"review": "<predecessor id>"}`. These optional fields expose the
+recorded links without changing either cycle's verdict, history or readiness.
+Consumers can read each linked id to follow a chain; status reads never advance it.
