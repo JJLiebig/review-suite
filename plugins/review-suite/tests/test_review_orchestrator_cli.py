@@ -7153,6 +7153,25 @@ def test_mode_continuation_preserves_equivalent_signoff_without_base_drift(monke
         assert final[key] == historical[key]
 
 
+def test_equivalent_github_receipt_survives_return_to_original_head(monkeypatch, tmp_path):
+    repo, state_dir, public_id = _interaction_cycle(tmp_path)
+    state = _cycle_payload(state_dir, public_id)
+    original = state["review_heads"]["last_reviewed_head"]
+    _git(repo, "reset", "--hard", original)
+    _git(repo, "commit", "--allow-empty", "-m", "equivalent GitHub head")
+    github_head = _git(repo, "rev-parse", "HEAD")
+    state["mode"]["effective"] = "base"
+    state = review.record_github_result(state, result="clean", reviewed_head=github_head)
+    _write_cycle_payload(state_dir, public_id, state)
+    _git(repo, "reset", "--hard", original)
+    code, status = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert code == 0
+    assert status["done"]
+    final = _cycle_payload(state_dir, public_id)
+    assert final["github_review"]["reviewed_head"] == github_head
+    assert final["review_heads"]["last_reviewed_head"] == original
+
+
 def test_base_interaction_findings_enter_fix_flow(monkeypatch, tmp_path):
     _, state_dir, public_id = _interaction_cycle(tmp_path)
     _stub_interaction(monkeypatch, verdict="findings")

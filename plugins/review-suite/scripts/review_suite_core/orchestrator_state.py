@@ -201,7 +201,8 @@ def review_ladder_summary(
         github_ready = github_terminal and bool(
             acceptance(state, str(github_review.get("reviewed_head") or ""))
         )
-        if comparison_head != original and (not github_terminal or github_ready):
+        equivalent_github = github_ready and not _github_review_matches_head(state, comparison_head)
+        if (comparison_head != original or equivalent_github) and (not github_terminal or github_ready):
             base_interaction = bound_interaction(state, accepted)
             ready = (
                 (not github_required or github_ready)
