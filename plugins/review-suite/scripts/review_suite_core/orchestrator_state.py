@@ -191,19 +191,31 @@ def review_ladder_summary(
     accepted = acceptance(state, comparison_head) if comparison_head else None
     if accepted and convergence_summary(state).get("status") == "ACTIVE" and not state.get("active_findings"):
         original = accepted["reviewed_head"]
-        # Evaluate every existing stage, GitHub and closure gate on the actual receipt.
-        original_state = {**state, "base_drift": {},
-                          "identity": {**dict(state.get("identity") or {}), "head": original, "cwd": ""},
-                          "validation": {**dict(state.get("validation") or {}), "head": original}}
-        original_summary = review_ladder_summary(original_state) if comparison_head != original else None
-        if original_summary and original_summary.get("done"):
-            ready = not validation_blockers(state) and not bound_interaction(state, accepted)["check"]
-            return {**original_summary, "done": ready, "review_ladder": "complete" if ready else "pending",
+        # Patch acceptance binds local signoff independently of unfinished external gates.
+        # Keep every historical receipt on the commit that was actually inspected.
+        github_required = _github_review_required(state)
+        github_review = dict(state.get("github_review") or {})
+        github_terminal = github_review.get("status") in {
+            GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED,
+        }
+        github_ready = github_terminal and bool(
+            acceptance(state, str(github_review.get("reviewed_head") or ""))
+        )
+        equivalent_github = github_ready and not _github_review_matches_head(state, comparison_head)
+        if (comparison_head != original or equivalent_github) and (not github_terminal or github_ready):
+            base_interaction = bound_interaction(state, accepted)
+            ready = (
+                (not github_required or github_ready)
+                and _deslop_closed_or_untracked(state)
+                and not validation_blockers(state)
+                and not base_interaction["check"]
+            )
+            return {**summary, "done": ready, "review_ladder": "complete" if ready else "pending",
                     "reviewed_head": original, "current_head": comparison_head,
                     "accepted_head": comparison_head, "acceptance": accepted,
                     "required_checks": "current_head_required",
                     "validation_head": dict(state.get("validation") or {}).get("head") or original,
-                    "base_interaction": bound_interaction(state, accepted)}
+                    "base_interaction": base_interaction}
     if comparison_head == original_head and state.get("review_patch") and not accepted:
         from .patch_identity import git
         receipt = dict(state["review_patch"])

@@ -7064,6 +7064,114 @@ def test_base_interaction_clean_receipt_and_new_head_reflags(monkeypatch, tmp_pa
     assert status["base_interaction"]["status"] == "outstanding"
 
 
+@pytest.mark.parametrize("github_head", ["original", "current"])
+def test_equivalent_patch_with_older_followup_exposes_remaining_gates(
+    monkeypatch, tmp_path, github_head
+):
+    repo, state_dir, public_id = _interaction_cycle(tmp_path)
+    state = _cycle_payload(state_dir, public_id)
+    original_head = state["review_heads"]["last_reviewed_head"]
+    state["review_heads"]["last_followup_head"] = _git(repo, "rev-parse", f"{original_head}^")
+    state["mode"]["effective"] = "base"
+    state["convergence"].update(
+        accepted_findings_heads=[{"head": f"historical-{i}"} for i in range(3)],
+        continue_used=True, decision="CONTINUE", reason="budget_exhausted",
+        decisions=[{"decision": "CONTINUE", "reason": "budget_exhausted"}],
+    )
+    _write_cycle_payload(state_dir, public_id, state)
+    historical = deepcopy(state)
+    current = _git(repo, "rev-parse", "HEAD")
+    calls = _stub_interaction(monkeypatch)
+    args = ["--id", public_id, "--state-dir", str(state_dir)]
+
+    code, status = _run_review(monkeypatch, [*args, "--check-base-interaction"])
+    assert code == 0
+    assert status["base_interaction"]["status"] == "checked"
+    assert status["review_ladder"] == "pending"
+    assert status["reviewed_head"] == original_head
+    assert status["accepted_head"] == current
+    assert status["next_action"] == "github_review"
+    _, resumed = _run_review(monkeypatch, args)
+    assert resumed["next_action"] == "github_review"
+    assert not resumed["done"]
+    assert len(calls) == 1
+
+    # Both a carried receipt and a new exact-head receipt leave current checks due.
+    state = _cycle_payload(state_dir, public_id)
+    state = review.record_github_result(
+        state, result="clean",
+        reviewed_head=original_head if github_head == "original" else current,
+    )
+    _write_cycle_payload(state_dir, public_id, state)
+    _, status = _run_review(monkeypatch, args)
+    assert status["next_action"] == "validation"
+    assert not status["done"]
+    _, status = _run_review(monkeypatch, [*args, "--full-suite", "passed", "--ci", "passed"])
+    assert status["done"]
+    final = _cycle_payload(state_dir, public_id)
+    for key in ("review_patch", "convergence", "active_findings"):
+        assert final.get(key) == historical.get(key)
+    assert final["decisions"][:len(historical["decisions"])] == historical["decisions"]
+    for key in ("last_reviewed_head", "last_followup_head"):
+        assert final["review_heads"][key] == historical["review_heads"][key]
+
+    # A receipt for C must not clear the interaction on an equivalent later head.
+    _git(repo, "commit", "--allow-empty", "-m", "new identity")
+    _, status = _run_review(monkeypatch, [*args, "--show-status"])
+    assert not status["done"]
+    assert status["base_interaction"]["status"] == "outstanding"
+    assert status["base_interaction"]["check"]
+    assert status["review_ladder"] == "pending"
+    assert status["accepted_head"] == _git(repo, "rev-parse", "HEAD")
+    assert status["next_action"] == "validation"
+    _commit_file(repo, "app.py", "def a():\n    return 30\n\ndef b():\n    return 20\n", "changed patch")
+    _, status = _run_review(monkeypatch, [*args, "--show-status"])
+    assert not status["done"]
+    assert "acceptance" not in status
+
+
+def test_mode_continuation_preserves_equivalent_signoff_without_base_drift(monkeypatch, tmp_path):
+    repo, state_dir, public_id = _interaction_cycle(tmp_path)
+    state = _cycle_payload(state_dir, public_id)
+    state["mode"]["effective"] = "base"
+    _write_cycle_payload(state_dir, public_id, state)
+    calls = _stub_interaction(monkeypatch)
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir), "--check-base-interaction"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    historical = _cycle_payload(state_dir, public_id)
+    _git(repo, "commit", "--allow-empty", "-m", "equivalent head")
+    code, status = _run_review(monkeypatch, [
+        "--mode", "base", "--no-arena", "--cd", str(repo),
+        "--base", "main", "--state-dir", str(state_dir),
+    ])
+    assert code == 0
+    assert status["review"] == public_id
+    assert status["next_action"] == "github_review"
+    assert len(calls) == 1
+    final = _cycle_payload(state_dir, public_id)
+    for key in ("rounds", "review_progress", "review_patch", "validation", "decisions", "convergence"):
+        assert final[key] == historical[key]
+
+
+def test_equivalent_github_receipt_survives_return_to_original_head(monkeypatch, tmp_path):
+    repo, state_dir, public_id = _interaction_cycle(tmp_path)
+    state = _cycle_payload(state_dir, public_id)
+    original = state["review_heads"]["last_reviewed_head"]
+    _git(repo, "reset", "--hard", original)
+    _git(repo, "commit", "--allow-empty", "-m", "equivalent GitHub head")
+    github_head = _git(repo, "rev-parse", "HEAD")
+    state["mode"]["effective"] = "base"
+    state = review.record_github_result(state, result="clean", reviewed_head=github_head)
+    _write_cycle_payload(state_dir, public_id, state)
+    _git(repo, "reset", "--hard", original)
+    code, status = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert code == 0
+    assert status["done"]
+    final = _cycle_payload(state_dir, public_id)
+    assert final["github_review"]["reviewed_head"] == github_head
+    assert final["review_heads"]["last_reviewed_head"] == original
+
+
 def test_base_interaction_findings_enter_fix_flow(monkeypatch, tmp_path):
     _, state_dir, public_id = _interaction_cycle(tmp_path)
     _stub_interaction(monkeypatch, verdict="findings")

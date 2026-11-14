@@ -2230,7 +2230,7 @@ def _green_cycle_needs_current_head_signoff(
     ) or github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
         return False
     summary = review_ladder_summary(state, current_head=head)
-    return summary.get("review_ladder") == "invalidated"
+    return summary.get("review_ladder") == "invalidated" or bool(summary.get("acceptance"))
 
 
 def _continuation_head_match_kind(
@@ -2389,6 +2389,9 @@ def _compatible_continuation_cycle(
         STAGE_REVIEW_GREEN,
         STAGE_LOCAL_GREEN_HANDOFF,
     }:
+        from review_suite_core.patch_identity import acceptance
+        if acceptance(selected_state, head):
+            return _resume_progress(selected_state, state_dir=state_dir)
         if bool(dict(selected_base_drift or {}).get("patch_equivalent")):
             return _with_equivalent_base_drift_review_head(resumed, selected_base_drift)
         return mark_latest_profile_step_rerun_needed(resumed, head=head)
