@@ -2230,7 +2230,7 @@ def _green_cycle_needs_current_head_signoff(
     ) or github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
         return False
     summary = review_ladder_summary(state, current_head=head)
-    return summary.get("review_ladder") == "invalidated"
+    return summary.get("review_ladder") == "invalidated" or bool(summary.get("acceptance"))
 
 
 def _continuation_head_match_kind(
