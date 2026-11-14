@@ -7121,10 +7121,36 @@ def test_equivalent_patch_with_older_followup_exposes_remaining_gates(
     assert not status["done"]
     assert status["base_interaction"]["status"] == "outstanding"
     assert status["base_interaction"]["check"]
+    assert status["review_ladder"] == "pending"
+    assert status["accepted_head"] == _git(repo, "rev-parse", "HEAD")
+    assert status["next_action"] == "validation"
     _commit_file(repo, "app.py", "def a():\n    return 30\n\ndef b():\n    return 20\n", "changed patch")
     _, status = _run_review(monkeypatch, [*args, "--show-status"])
     assert not status["done"]
     assert "acceptance" not in status
+
+
+def test_mode_continuation_preserves_equivalent_signoff_without_base_drift(monkeypatch, tmp_path):
+    repo, state_dir, public_id = _interaction_cycle(tmp_path)
+    state = _cycle_payload(state_dir, public_id)
+    state["mode"]["effective"] = "base"
+    _write_cycle_payload(state_dir, public_id, state)
+    calls = _stub_interaction(monkeypatch)
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir), "--check-base-interaction"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    historical = _cycle_payload(state_dir, public_id)
+    _git(repo, "commit", "--allow-empty", "-m", "equivalent head")
+    code, status = _run_review(monkeypatch, [
+        "--mode", "base", "--no-arena", "--cd", str(repo),
+        "--base", "main", "--state-dir", str(state_dir),
+    ])
+    assert code == 0
+    assert status["review"] == public_id
+    assert status["next_action"] == "github_review"
+    assert len(calls) == 1
+    final = _cycle_payload(state_dir, public_id)
+    for key in ("rounds", "review_progress", "review_patch", "validation", "decisions", "convergence"):
+        assert final[key] == historical[key]
 
 
 def test_base_interaction_findings_enter_fix_flow(monkeypatch, tmp_path):

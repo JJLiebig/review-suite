@@ -194,13 +194,13 @@ def review_ladder_summary(
         # Patch acceptance binds local signoff independently of unfinished external gates.
         # Keep every historical receipt on the commit that was actually inspected.
         github_required = _github_review_required(state)
-        github_ready = any(
-            _github_review_matches_head(state, head)
-            for head in (original, comparison_head)
-        )
-        github_terminal = dict(state.get("github_review") or {}).get("status") in {
+        github_review = dict(state.get("github_review") or {})
+        github_terminal = github_review.get("status") in {
             GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED,
         }
+        github_ready = github_terminal and bool(
+            acceptance(state, str(github_review.get("reviewed_head") or ""))
+        )
         if comparison_head != original and (not github_terminal or github_ready):
             base_interaction = bound_interaction(state, accepted)
             ready = (
