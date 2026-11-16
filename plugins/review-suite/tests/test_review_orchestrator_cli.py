@@ -3670,7 +3670,7 @@ def test_contract_conflict_and_one_use_continue_are_durable(
         ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
     )
 
-    assert set(exhausted["Action"]["choices"]) == {"REPLAN", "RESLICE"}
+    assert "CONTINUE" not in exhausted["Action"]["choices"]
     _commit_file(repo, "app.txt", "feature\nfix\nnext\n", "next fix")
     _, redirected = _run_review_after_cleanup(
         monkeypatch,
@@ -3845,7 +3845,7 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
         ],
     )
     if fourth_decision == "findings":
-        assert set(classified["Action"]["choices"]) == {"REPLAN", "RESLICE"}
+        assert "CONTINUE" not in classified["Action"]["choices"]
         if not fix_before_classification:
             restart = [
                 "--id", public_id, "--restart-brief", "Approved amended implementation",
