@@ -47,7 +47,7 @@ Rules:
   1. Docs/test-only, preserving intended behavior and test coverage.
   2. A low-blast-radius P2 or lower, outside high-stakes or business-critical behavior such as security, billing, data integrity, or concurrency.
 - Otherwise, rerun on the same review id. Do not rerun solely for a clean verdict, a changed commit hash, or extra confidence. Report: **“Fixed and validated; no repeat review required.”**
-- For eligible fixes, commit/amend and run `review.py --id <id> --fixes-validated "<eligibility and validation passed>"`. This records caller validation, preserves the findings, and skips repeat review. Remaining scheduled steps and required validation still apply.
+- For eligible fixes, commit/amend and run `review.py --id <id> --fixes-validated "<eligibility and validation passed>"`. This also works at a budget-exhausted checkpoint or an idle follow-up checkpoint with active findings. Finish and consume any running follow-up first. It records caller validation, preserves accepted findings and the spent CONTINUE allowance, and skips only the eligible repeat review. Any later accepted findings still face the existing budget. Contract conflicts and recorded REPLAN/RESLICE decisions require their existing recovery. Remaining scheduled steps and required validation still apply.
 - After GitHub review returns, record the result on the owning review id: `--github-result clean`, `--github-result findings`, or `--github-result waived --github-note "why"`. Do not start a new ladder for GitHub findings.
 - Do not call PR-final/merge-ready until required validation passes. Record full-suite/CI gates as passed or explicitly waived with a reason; follow the emitted validation commands.
 

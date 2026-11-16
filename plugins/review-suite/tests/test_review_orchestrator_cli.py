@@ -6389,6 +6389,57 @@ def test_validated_fixes_preserve_findings_and_remaining_gates_without_review(
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("checkpoint", ["exhausted", "idle", "running", "unconsumed", "contract"])
+def test_validated_fixes_close_checkpoints_without_spending_or_bypassing_review(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, checkpoint: str
+) -> None:
+    repo, state_dir, before, _ = _automatic_findings_cycle(
+        tmp_path, prior_count=3 if checkpoint == "exhausted" else 0
+    )
+    (repo / "tests").mkdir()
+    head = _commit_file(repo, "tests/test_fixture.py", "fixed\n", "fixture fix")
+    if checkpoint not in {"exhausted", "contract"}:
+        before = review.mark_fix_detected(before, head=head)
+        assert before["stage"] == "followup-pending"
+    if checkpoint == "contract":
+        before = review.record_contract_conflict(before, conflict="scope")
+    if checkpoint in {"running", "unconsumed"}:
+        write_round(state_dir / "orchestrator" / "review-rounds", {
+            "round_id": "unconsumed",
+            "review_scope": {"source_round_id": "automatic"},
+            "status": "running" if checkpoint == "running" else "completed",
+            "runs": [{"pid": os.getpid()}] if checkpoint == "running" else [],
+        })
+    before = review.save_cycle(state_dir, before)
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)
+    code, _ = _run_review(monkeypatch, [
+        "--id", before["public_id"], "--fixes-validated",
+        "Test-only fixture correction preserves coverage; owning tests passed",
+        "--state-dir", str(state_dir),
+    ])
+    saved = _cycle_payload(state_dir, before["public_id"])
+    if checkpoint in {"running", "unconsumed", "contract"}:
+        assert code == 2
+        assert saved == before
+        return
+    assert code == 0
+    assert saved["active_findings"] is None
+    assert saved["rounds"] == before["rounds"]
+    assert saved["decisions"] == before["decisions"]
+    for field in ("accepted_findings_heads", "continue_used", "decisions"):
+        assert saved["convergence"][field] == before["convergence"][field]
+    assert saved["stage"] == "created"
+    assert saved["review_progress"]["next_step_index"] == 1
+    assert saved["validation"]["ci"] == saved["validation"]["full_suite"] == "unknown"
+    assert saved["github_review"] == before["github_review"]
+    assert saved["validated_fixes"][-1]["findings_head"] == before["active_findings"]["reviewed_head"]
+    if checkpoint == "exhausted":
+        again = review.record_findings_decision(saved, round_id="remaining-signoff", lane="review_base", reviewed_head=head, reviewed_tree="new-tree")
+        assert again["stage"] == "decision-required"
+        with pytest.raises(ValueError, match="CONTINUE is available once"):
+            review.record_convergence_decision(again, decision="CONTINUE")
+
+
 def test_clean_followup_note_does_not_leak_to_later_review_steps(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
