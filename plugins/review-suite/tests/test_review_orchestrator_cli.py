@@ -2047,6 +2047,10 @@ def test_id_auto_records_structured_findings_before_fix_loop(
         ],
     )
     public_id = str(created["review"])
+    pending = _cycle_payload(state_dir, public_id)
+    assert pending["stage"] == "decision-pending"
+    assert pending["active_findings"] is None
+    assert review.convergence_summary(pending)["accepted_findings_heads"] == 0
 
     exit_code, findings = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
@@ -6382,6 +6386,9 @@ def test_validated_fixes_preserve_findings_and_remaining_gates_without_review(
     public_id = str(opened["review"])
     if github:
         _run_review(monkeypatch, ["--id", public_id, "--github-result", "findings"])
+    else:
+        assert _cycle_payload(state_dir, public_id)["stage"] == "decision-pending"
+        _run_review(monkeypatch, ["--id", public_id, "--decision", "findings"])
     before = _cycle_payload(state_dir, public_id)
     assert before["stage"] == "fix-pending"
 
@@ -6531,6 +6538,9 @@ def test_followup_automatic_verdict_releases_owned_round(
     code, _ = _run_review(monkeypatch, ["--id", public_id])
 
     assert code == 0
+    if verdict == "findings":
+        assert _cycle_payload(state_dir, public_id)["stage"] == "decision-pending"
+        _run_review(monkeypatch, ["--id", public_id])
     completed = _cycle_payload(state_dir, public_id)
     assert completed["stage"] == ("fix-pending" if verdict == "findings" else "created" if remaining else "review-green")
     assert completed["decisions"][-1]["command"] == verdict

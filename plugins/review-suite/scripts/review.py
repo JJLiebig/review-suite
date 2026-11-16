@@ -2964,6 +2964,9 @@ def _advance_without_decision(
         if result.ran_step:
             ran_expensive_step = True
             ready_state = result.state
+            if _auto_decision_command(ready_state, state_dir=state_dir) == DECISION_FINDINGS:
+                # Return completed findings for inspection before accepting them.
+                return ready_state
             continue
         if _run_arena_recovery_backend_once(resumed, state_dir=state_dir):
             ready_state = resumed
