@@ -2516,6 +2516,13 @@ def test_pending_caller_disposition_precedes_automatic_findings_count(
     (repo / Path(descendant).parent).mkdir(exist_ok=True)
     head = _commit_file(repo, descendant, "changed\n", "fixture correction")
     monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)
+    if descendant != "app.py":
+        code, status = _run_review(monkeypatch, ["--id", before["public_id"], "--state-dir", str(state_dir)])
+        assert code == 0
+        paused = _cycle_payload(state_dir, before["public_id"])
+        assert paused["stage"] == "decision-pending"
+        assert paused["convergence"] == before["convergence"]
+        assert "--reason" in status["Action"]["choices"]["clean"]
     code, _ = _run_review(monkeypatch, [
         "--id", before["public_id"], "--decision", "clean", "--reason",
         "Cited rule does not exist; descendant preserves coverage; owning checks passed",

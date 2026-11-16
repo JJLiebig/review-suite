@@ -1760,6 +1760,11 @@ def _auto_record_pending_decision_fix(
     reviewed_head = str(round_payload.get("reviewed_head") or "").strip()
     if not reviewed_head or reviewed_head == current_head_value:
         return state
+    if (
+        _auto_decision_command(state, state_dir=state_dir) == DECISION_FINDINGS
+        and _test_docs_only_interdiff(state, reviewed_head, current_head_value)
+    ):
+        return state
     if _stored_clean_review(_load_output_round_payload(state_dir, round_payload)):
         if not _is_material_fix_head(
             state, head=current_head_value, reviewed_head=reviewed_head
@@ -1906,6 +1911,11 @@ def _auto_record_structured_decision(
 ) -> dict[str, Any]:
     command = _auto_decision_command(state, state_dir=state_dir)
     if command is None:
+        return state
+    round_id, _ = _pending_decision(state)
+    reviewed_head = str(_round_by_id(state, round_id).get("reviewed_head") or "")
+    head = str(dict(state.get("identity") or {}).get("head") or "")
+    if command == DECISION_FINDINGS and head != reviewed_head and _test_docs_only_interdiff(state, reviewed_head, head):
         return state
     next_state = _apply_decision_to_ready_state(state, command, state_dir=state_dir)
     next_state["decisions"][-1]["source"] = "automatic"
@@ -2976,6 +2986,13 @@ def _apply_decision(
             return ready_state
         ready_state = _resume_progress(ready_state, state_dir=state_dir)
     try:
+        if (
+            decision == DECISION_CLEAN
+            and _auto_decision_command(ready_state, state_dir=state_dir) == DECISION_FINDINGS
+            and str(_round_by_id(ready_state, _pending_decision(ready_state)[0]).get("reviewed_head") or "")
+            != str(dict(ready_state.get("identity") or {}).get("head") or "")
+        ):
+            raise ValueError("rejecting pending findings after HEAD changed requires --reason")
         result = _apply_decision_to_ready_state(
             ready_state, decision, state_dir=state_dir
         )
@@ -3363,6 +3380,14 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
                     ),
                 },
             }
+            round_id, _ = _pending_decision(state)
+            reviewed_head = str(_round_by_id(state, round_id).get("reviewed_head") or "")
+            head = str(dict(state.get("identity") or {}).get("head") or "")
+            if auto_decision == DECISION_FINDINGS and head != reviewed_head and _test_docs_only_interdiff(state, reviewed_head, head):
+                action = {
+                    "choices": action["override"],
+                    "note": "Classify the completed findings before accepting a convergence head; explain rejection and descendant validation with --reason.",
+                }
             return _with_deslop_done_action(
                 state, action, public_id, state_dir=state_dir
             )
