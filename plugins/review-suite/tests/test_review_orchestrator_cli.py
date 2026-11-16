@@ -2401,6 +2401,7 @@ def _automatic_findings_cycle(
     prior_count: int = 0,
     final_step: bool = False,
     followup: bool = False,
+    pending: bool = False,
 ) -> tuple[Path, Path, dict, dict]:
     repo, state_dir = tmp_path / "repo", tmp_path / "state"
     _init_repo(repo)
@@ -2497,11 +2498,45 @@ def _automatic_findings_cycle(
     if followup:
         payload["review_scope"]["source_round_id"] = "automatic"
     write_round(state_dir / "orchestrator" / "review-rounds", payload)
-    state = review._auto_record_structured_decision(state, state_dir=state_dir)
+    if not pending:
+        state = review._auto_record_structured_decision(state, state_dir=state_dir)
     state["deslop"] = {"status": "closed", "tracked": False, "reviewed_head": head}
     state["validation"].update(focused="passed", full_suite="pending", ci="pending")
     state = review.save_cycle(state_dir, state)
     return repo, state_dir, state, payload
+
+
+@pytest.mark.parametrize("descendant", ["tests/test_fixture.py", "docs/usage.md", "app.py"])
+def test_pending_caller_disposition_precedes_automatic_findings_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, descendant: str
+) -> None:
+    repo, state_dir, before, payload = _automatic_findings_cycle(
+        tmp_path, prior_count=2, pending=True
+    )
+    (repo / Path(descendant).parent).mkdir(exist_ok=True)
+    head = _commit_file(repo, descendant, "changed\n", "fixture correction")
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)
+    code, _ = _run_review(monkeypatch, [
+        "--id", before["public_id"], "--decision", "clean", "--reason",
+        "Cited rule does not exist; descendant preserves coverage; owning checks passed",
+        "--state-dir", str(state_dir),
+    ])
+    saved = _cycle_payload(state_dir, before["public_id"])
+    if descendant == "app.py":
+        assert code == 2
+        assert saved == before
+        return
+    assert code == 0
+    assert saved["convergence"] == before["convergence"]
+    assert saved["rounds"][-1]["reviewed_head"] == payload["review_scope"]["reviewed_head"]
+    assert saved["decisions"][-1]["source"] == "caller"
+    assert saved["decisions"][-1]["head"] == head
+    assert len(saved["decisions"][-1]["verdict_digest"]) == 64
+    assert saved["active_findings"] is None
+    assert saved["stage"] == "created"
+    assert saved["review_progress"]["next_step_index"] == 1
+    assert saved["github_review"] == before["github_review"]
+    assert saved["validation"]["ci"] == "unknown"
 
 
 @pytest.mark.parametrize(

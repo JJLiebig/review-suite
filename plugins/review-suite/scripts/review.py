@@ -1915,6 +1915,8 @@ def _auto_record_structured_decision(
 def _record_caller_disagreement(
     state: dict[str, Any], *, state_dir: Path, reason: str
 ) -> dict[str, Any]:
+    if state.get("stage") == STAGE_DECISION_PENDING:
+        return _record_pending_caller_disposition(state, state_dir=state_dir, reason=reason)
     _, _, _, head, _ = _current_restart_identity(state)
     dispositions = state.get("finding_dispositions") or []
     round_record = (state.get("rounds") or [{}])[-1]
@@ -1987,6 +1989,45 @@ def _record_caller_disagreement(
         "\n\n".join(str(run["reviewer_output"]) for run in payload["runs"]).encode()
     ).hexdigest()
     return reject_automatic_findings(state, reason=reason, verdict_digest=digest)
+
+
+def _record_pending_caller_disposition(
+    state: dict[str, Any], *, state_dir: Path, reason: str
+) -> dict[str, Any]:
+    """Classify completed findings before accepting a convergence head."""
+    identity = _current_cycle_identity_if_compatible(state)
+    round_id, _ = _pending_decision(state)
+    record = _round_by_id(state, round_id)
+    payload = _load_output_round_payload(state_dir, record)
+    reviewed_head = str(record.get("reviewed_head") or "")
+    if (
+        not identity
+        or not reviewed_head
+        or _auto_decision_command(state, state_dir=state_dir) != DECISION_FINDINGS
+        or dict(payload.get("review_scope") or {}).get("reviewed_head") != reviewed_head
+        or not payload.get("runs")
+        or any(
+            str(run.get("review_status") or run.get("status") or "") != "completed"
+            or not str(run.get("reviewer_output") or "").strip()
+            for run in payload["runs"]
+        )
+        or any(round_has_live_reviewer_process(_load_output_round_payload(state_dir, item))
+               for item in state.get("rounds") or [])
+    ):
+        raise ValueError("caller disposition requires completed structured findings on the clean review branch")
+    head = identity["head"]
+    if head != reviewed_head and not (
+        is_ancestor(cwd_path_from_normalized(state["identity"]["cwd"]), reviewed_head, head)
+        and _test_docs_only_interdiff(state, reviewed_head, head)
+    ):
+        raise ValueError("caller disposition requires the reviewed head or a test/docs-only descendant")
+    current = _with_current_identity(state, head=head, merge_base_head=identity["merge_base"])
+    result = _apply_decision_to_ready_state(current, DECISION_CLEAN, state_dir=state_dir)
+    result["decisions"][-1].update(
+        source="caller", reason=reason, head=head,
+        verdict_digest=sha256("\n\n".join(str(run["reviewer_output"]) for run in payload["runs"]).encode()).hexdigest(),
+    )
+    return result
 
 
 def _resume_progress(
@@ -3312,7 +3353,10 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
                 "note": f"Structured {auto_decision} verdict is ready; rerun this review id to record it and continue.",
                 "override": {
                     DECISION_CLEAN: _review_command(
-                        public_id, "--decision", DECISION_CLEAN, state_dir=state_dir
+                        public_id, "--decision", DECISION_CLEAN,
+                        *(["--reason", "WHY_FINDING_IS_INVALID_AND_DESCENDANT_VALIDATION"]
+                          if auto_decision == DECISION_FINDINGS else []),
+                        state_dir=state_dir
                     ),
                     DECISION_FINDINGS: _review_command(
                         public_id, "--decision", DECISION_FINDINGS, state_dir=state_dir
