@@ -7239,15 +7239,15 @@ def test_base_interaction_findings_enter_fix_flow(monkeypatch, tmp_path):
         ["--id", public_id, "--state-dir", str(state_dir), "--check-base-interaction"],
     )
     assert code == 0
+    assert _cycle_payload(state_dir, public_id)["stage"] == "decision-pending"
+    code, _ = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir), "--decision", "findings"])
+    assert code == 0
     state = _cycle_payload(state_dir, public_id)
     assert state["stage"] == "fix-pending"
     assert state["active_findings"]["round_id"] == "interaction-round"
     assert state["review_patch"] == original_receipt
     assert state["identity"]["head"] == state["active_findings"]["reviewed_head"]
     assert state["pending_action"]["kind"] == "fix-findings"
-    code, _ = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir), "--decision", "clean", "--reason", "Verified the reported path is unreachable"])
-    assert code == 0
-    assert _cycle_payload(state_dir, public_id)["active_findings"] is None
 
 
 def test_base_interaction_override_reason_and_status(monkeypatch, tmp_path, capsys):
@@ -7389,6 +7389,6 @@ def test_validation_save_keeps_check_completed_after_validation_loaded(monkeypat
         assert state["base_interaction_receipt"]["status"] == "checked"
         assert status["done"] is True
     else:
-        assert state["stage"] == "fix-pending"
-        assert state["active_findings"]["round_id"] == "interaction-round"
+        assert state["stage"] == "decision-pending"
+        assert state["pending_action"]["round_id"] == "interaction-round"
         assert status["done"] is False
