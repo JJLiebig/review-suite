@@ -1762,7 +1762,6 @@ def _auto_record_pending_decision_fix(
         return state
     if (
         _auto_decision_command(state, state_dir=state_dir) == DECISION_FINDINGS
-        and _test_docs_only_interdiff(state, reviewed_head, current_head_value)
     ):
         return state
     if _stored_clean_review(_load_output_round_payload(state_dir, round_payload)):
@@ -1910,12 +1909,8 @@ def _auto_record_structured_decision(
     state: dict[str, Any], *, state_dir: Path
 ) -> dict[str, Any]:
     command = _auto_decision_command(state, state_dir=state_dir)
-    if command is None:
-        return state
-    round_id, _ = _pending_decision(state)
-    reviewed_head = str(_round_by_id(state, round_id).get("reviewed_head") or "")
-    head = str(dict(state.get("identity") or {}).get("head") or "")
-    if command == DECISION_FINDINGS and head != reviewed_head and _test_docs_only_interdiff(state, reviewed_head, head):
+    # Findings require caller classification, including after arena grading.
+    if command is None or command == DECISION_FINDINGS:
         return state
     next_state = _apply_decision_to_ready_state(state, command, state_dir=state_dir)
     next_state["decisions"][-1]["source"] = "automatic"
@@ -2964,9 +2959,6 @@ def _advance_without_decision(
         if result.ran_step:
             ran_expensive_step = True
             ready_state = result.state
-            if _auto_decision_command(ready_state, state_dir=state_dir) == DECISION_FINDINGS:
-                # Return completed findings for inspection before accepting them.
-                return ready_state
             continue
         if _run_arena_recovery_backend_once(resumed, state_dir=state_dir):
             ready_state = resumed
@@ -3383,10 +3375,7 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
                     ),
                 },
             }
-            round_id, _ = _pending_decision(state)
-            reviewed_head = str(_round_by_id(state, round_id).get("reviewed_head") or "")
-            head = str(dict(state.get("identity") or {}).get("head") or "")
-            if auto_decision == DECISION_FINDINGS and head != reviewed_head and _test_docs_only_interdiff(state, reviewed_head, head):
+            if auto_decision == DECISION_FINDINGS:
                 action = {
                     "choices": action["override"],
                     "note": "Classify the completed findings before accepting a convergence head; explain rejection and descendant validation with --reason.",

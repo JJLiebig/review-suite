@@ -2018,7 +2018,7 @@ def test_id_auto_records_structured_clean_and_runs_next_step(
     assert state["validation"]["review_green"] == "passed"
 
 
-def test_id_auto_records_structured_findings_before_fix_loop(
+def test_id_classifies_structured_findings_before_fix_loop(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _stub_deslop(monkeypatch)
@@ -2053,7 +2053,7 @@ def test_id_auto_records_structured_findings_before_fix_loop(
     assert review.convergence_summary(pending)["accepted_findings_heads"] == 0
 
     exit_code, findings = _run_review_after_cleanup(
-        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+        monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)]
     )
 
     assert exit_code == 0
@@ -2503,7 +2503,9 @@ def _automatic_findings_cycle(
         payload["review_scope"]["source_round_id"] = "automatic"
     write_round(state_dir / "orchestrator" / "review-rounds", payload)
     if not pending:
-        state = review._auto_record_structured_decision(state, state_dir=state_dir)
+        # Reproduce findings accepted automatically by older launchers.
+        state = review._apply_decision_to_ready_state(state, "findings", state_dir=state_dir)
+        state["decisions"][-1]["source"] = "automatic"
     state["deslop"] = {"status": "closed", "tracked": False, "reviewed_head": head}
     state["validation"].update(focused="passed", full_suite="pending", ci="pending")
     state = review.save_cycle(state_dir, state)
@@ -6540,7 +6542,7 @@ def test_followup_automatic_verdict_releases_owned_round(
     assert code == 0
     if verdict == "findings":
         assert _cycle_payload(state_dir, public_id)["stage"] == "decision-pending"
-        _run_review(monkeypatch, ["--id", public_id])
+        _run_review(monkeypatch, ["--id", public_id, "--decision", "findings"])
     completed = _cycle_payload(state_dir, public_id)
     assert completed["stage"] == ("fix-pending" if verdict == "findings" else "created" if remaining else "review-green")
     assert completed["decisions"][-1]["command"] == verdict
