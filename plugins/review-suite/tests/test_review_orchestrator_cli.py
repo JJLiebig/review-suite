@@ -2018,7 +2018,7 @@ def test_id_auto_records_structured_clean_and_runs_next_step(
     assert state["validation"]["review_green"] == "passed"
 
 
-def test_id_auto_records_structured_findings_before_fix_loop(
+def test_id_classifies_structured_findings_before_fix_loop(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _stub_deslop(monkeypatch)
@@ -2047,9 +2047,13 @@ def test_id_auto_records_structured_findings_before_fix_loop(
         ],
     )
     public_id = str(created["review"])
+    pending = _cycle_payload(state_dir, public_id)
+    assert pending["stage"] == "decision-pending"
+    assert pending["active_findings"] is None
+    assert review.convergence_summary(pending)["accepted_findings_heads"] == 0
 
     exit_code, findings = _run_review_after_cleanup(
-        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+        monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)]
     )
 
     assert exit_code == 0
@@ -2401,6 +2405,7 @@ def _automatic_findings_cycle(
     prior_count: int = 0,
     final_step: bool = False,
     followup: bool = False,
+    pending: bool = False,
 ) -> tuple[Path, Path, dict, dict]:
     repo, state_dir = tmp_path / "repo", tmp_path / "state"
     _init_repo(repo)
@@ -2497,11 +2502,58 @@ def _automatic_findings_cycle(
     if followup:
         payload["review_scope"]["source_round_id"] = "automatic"
     write_round(state_dir / "orchestrator" / "review-rounds", payload)
-    state = review._auto_record_structured_decision(state, state_dir=state_dir)
+    if not pending:
+        # Reproduce findings accepted automatically by older launchers.
+        state = review._apply_decision_to_ready_state(state, "findings", state_dir=state_dir)
+        state["decisions"][-1]["source"] = "automatic"
     state["deslop"] = {"status": "closed", "tracked": False, "reviewed_head": head}
     state["validation"].update(focused="passed", full_suite="pending", ci="pending")
     state = review.save_cycle(state_dir, state)
     return repo, state_dir, state, payload
+
+
+@pytest.mark.parametrize("descendant", ["tests/test_fixture.py", "docs/usage.md", "app.py"])
+def test_pending_caller_disposition_precedes_automatic_findings_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, descendant: str
+) -> None:
+    repo, state_dir, before, payload = _automatic_findings_cycle(
+        tmp_path, prior_count=2, pending=True
+    )
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)
+    code, _ = _run_review(monkeypatch, ["--id", before["public_id"], "--decision", "clean", "--state-dir", str(state_dir)])
+    assert code == 2
+    assert _cycle_payload(state_dir, before["public_id"]) == before
+    (repo / Path(descendant).parent).mkdir(exist_ok=True)
+    head = _commit_file(repo, descendant, "changed\n", "fixture correction")
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)
+    if descendant != "app.py":
+        code, status = _run_review(monkeypatch, ["--id", before["public_id"], "--state-dir", str(state_dir)])
+        assert code == 0
+        paused = _cycle_payload(state_dir, before["public_id"])
+        assert paused["stage"] == "decision-pending"
+        assert paused["convergence"] == before["convergence"]
+        assert "--reason" in status["Action"]["choices"]["clean"]
+    code, _ = _run_review(monkeypatch, [
+        "--id", before["public_id"], "--decision", "clean", "--reason",
+        "Cited rule does not exist; descendant preserves coverage; owning checks passed",
+        "--state-dir", str(state_dir),
+    ])
+    saved = _cycle_payload(state_dir, before["public_id"])
+    if descendant == "app.py":
+        assert code == 2
+        assert saved == before
+        return
+    assert code == 0
+    assert saved["convergence"] == before["convergence"]
+    assert saved["rounds"][-1]["reviewed_head"] == payload["review_scope"]["reviewed_head"]
+    assert saved["decisions"][-1]["source"] == "caller"
+    assert saved["decisions"][-1]["head"] == head
+    assert len(saved["decisions"][-1]["verdict_digest"]) == 64
+    assert saved["active_findings"] is None
+    assert saved["stage"] == "created"
+    assert saved["review_progress"]["next_step_index"] == 1
+    assert saved["github_review"] == before["github_review"]
+    assert saved["validation"]["ci"] == "unknown"
 
 
 @pytest.mark.parametrize(
@@ -6340,6 +6392,9 @@ def test_validated_fixes_preserve_findings_and_remaining_gates_without_review(
     public_id = str(opened["review"])
     if github:
         _run_review(monkeypatch, ["--id", public_id, "--github-result", "findings"])
+    else:
+        assert _cycle_payload(state_dir, public_id)["stage"] == "decision-pending"
+        _run_review(monkeypatch, ["--id", public_id, "--decision", "findings"])
     before = _cycle_payload(state_dir, public_id)
     assert before["stage"] == "fix-pending"
 
@@ -6540,6 +6595,9 @@ def test_followup_automatic_verdict_releases_owned_round(
     code, _ = _run_review(monkeypatch, ["--id", public_id])
 
     assert code == 0
+    if verdict == "findings":
+        assert _cycle_payload(state_dir, public_id)["stage"] == "decision-pending"
+        _run_review(monkeypatch, ["--id", public_id, "--decision", "findings"])
     completed = _cycle_payload(state_dir, public_id)
     assert completed["stage"] == ("fix-pending" if verdict == "findings" else "created" if remaining else "review-green")
     assert completed["decisions"][-1]["command"] == verdict
@@ -7232,15 +7290,15 @@ def test_base_interaction_findings_enter_fix_flow(monkeypatch, tmp_path):
         ["--id", public_id, "--state-dir", str(state_dir), "--check-base-interaction"],
     )
     assert code == 0
+    assert _cycle_payload(state_dir, public_id)["stage"] == "decision-pending"
+    code, _ = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir), "--decision", "findings"])
+    assert code == 0
     state = _cycle_payload(state_dir, public_id)
     assert state["stage"] == "fix-pending"
     assert state["active_findings"]["round_id"] == "interaction-round"
     assert state["review_patch"] == original_receipt
     assert state["identity"]["head"] == state["active_findings"]["reviewed_head"]
     assert state["pending_action"]["kind"] == "fix-findings"
-    code, _ = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir), "--decision", "clean", "--reason", "Verified the reported path is unreachable"])
-    assert code == 0
-    assert _cycle_payload(state_dir, public_id)["active_findings"] is None
 
 
 def test_base_interaction_override_reason_and_status(monkeypatch, tmp_path, capsys):
@@ -7382,6 +7440,6 @@ def test_validation_save_keeps_check_completed_after_validation_loaded(monkeypat
         assert state["base_interaction_receipt"]["status"] == "checked"
         assert status["done"] is True
     else:
-        assert state["stage"] == "fix-pending"
-        assert state["active_findings"]["round_id"] == "interaction-round"
+        assert state["stage"] == "decision-pending"
+        assert state["pending_action"]["round_id"] == "interaction-round"
         assert status["done"] is False
