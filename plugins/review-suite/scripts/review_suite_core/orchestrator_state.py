@@ -1672,7 +1672,14 @@ def record_fixes_validated(
     state: dict[str, Any], *, head: str, note: str
 ) -> dict[str, Any]:
     """Close accepted findings by caller validation without inventing a reviewer verdict."""
-    if state.get("stage") != STAGE_FIX_PENDING:
+    convergence = dict(state.get("convergence") or {})
+    exhausted = (
+        state.get("stage") == "decision-required"
+        and convergence.get("status") == "DECISION_REQUIRED"
+        and convergence.get("reason") == "budget_exhausted"
+        and not convergence.get("conflict")
+    )
+    if state.get("stage") not in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING} and not exhausted:
         raise ValueError("--fixes-validated requires accepted findings awaiting fixes")
     next_state = _copy_state(state)
     _archive_review_patch(next_state)
@@ -1684,6 +1691,10 @@ def record_fixes_validated(
         "head": head,
         "note": note,
     }
+    if exhausted:
+        resolution["convergence"] = convergence_summary(state)
+        # Resolve this finding without granting another findings head or CONTINUE.
+        _convergence(next_state).update(status="ACTIVE", reason=None, decision=None)
     next_state.setdefault("validated_fixes", []).append(resolution)
     next_state["active_findings"] = None
     next_state["validation"] = {

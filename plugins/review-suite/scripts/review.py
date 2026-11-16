@@ -3266,7 +3266,11 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
                     state_dir=state_dir,
                 )
                 for decision in convergence["recommendations"]
-            },
+            } | ({
+                "fixes_validated": _review_command(
+                    public_id, "--fixes-validated", "ELIGIBILITY_AND_VALIDATION", state_dir=state_dir
+                ),
+            } if convergence.get("reason") == "budget_exhausted" and state.get("active_findings") else {}),
             "note": "At this checkpoint, reassess how to deliver the same feature and record an available decision: CONTINUE grants the one permitted extra fix/review round, REPLAN revises the implementation plan, and RESLICE splits the work into smaller reviewable changes.",
         }
     if stage == STAGE_ABORTED and isinstance(state.get("superseded_by"), dict):
@@ -3332,7 +3336,7 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
             "note": "Classify the reviewer output, then record clean or findings.",
         }
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
-    if stage == STAGE_FIX_PENDING:
+    if stage in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}:
         note = FIX_REVIEW_POLICY
         if str(state.get("review_brief") or "").strip():
             note += (
@@ -3955,6 +3959,16 @@ def main() -> int:
                     merge_base_head=identity["merge_base"],
                     base_drift=identity.get("base_drift"),
                 )
+                source = str(active.get("round_id") or "")
+                for candidate_dir in _round_state_dir_candidates(state_dir, active):
+                    for path in rounds_dir(candidate_dir).glob("*.json"):
+                        payload = load_round(candidate_dir, path.stem)
+                        if dict(payload.get("review_scope") or {}).get("source_round_id") != source:
+                            continue
+                        if round_has_live_reviewer_process(payload):
+                            raise ValueError("cannot validate fixes while a follow-up reviewer is running")
+                        if payload.get("status") in {"completed", "running"} and not _round_by_id(state, path.stem):
+                            raise ValueError("inspect the unconsumed follow-up review before validating fixes")
                 state = record_fixes_validated(
                     state,
                     head=identity["head"],
