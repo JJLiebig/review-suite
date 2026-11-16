@@ -2519,6 +2519,10 @@ def test_pending_caller_disposition_precedes_automatic_findings_count(
     repo, state_dir, before, payload = _automatic_findings_cycle(
         tmp_path, prior_count=2, pending=True
     )
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)
+    code, _ = _run_review(monkeypatch, ["--id", before["public_id"], "--decision", "clean", "--state-dir", str(state_dir)])
+    assert code == 2
+    assert _cycle_payload(state_dir, before["public_id"]) == before
     (repo / Path(descendant).parent).mkdir(exist_ok=True)
     head = _commit_file(repo, descendant, "changed\n", "fixture correction")
     monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)

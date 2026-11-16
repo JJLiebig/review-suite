@@ -2984,10 +2984,8 @@ def _apply_decision(
         if (
             decision == DECISION_CLEAN
             and _auto_decision_command(ready_state, state_dir=state_dir) == DECISION_FINDINGS
-            and str(_round_by_id(ready_state, _pending_decision(ready_state)[0]).get("reviewed_head") or "")
-            != str(dict(ready_state.get("identity") or {}).get("head") or "")
         ):
-            raise ValueError("rejecting pending findings after HEAD changed requires --reason")
+            raise ValueError("rejecting pending structured findings requires --reason")
         result = _apply_decision_to_ready_state(
             ready_state, decision, state_dir=state_dir
         )
