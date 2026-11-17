@@ -68,6 +68,19 @@ MODEL_PRICING_PER_MILLION = {
         "cached_input": 0.05,
         "cache_write": 1.25,
     },
+    # Launch rates: https://openai.com/index/introducing-gpt-6-2-astra-sol/ (6.2 Sol keeps 6.1 Sol rates).
+    "gpt-6.2-sol": {
+        "input": 2.00,
+        "output": 10.00,
+        "cached_input": 0.10,
+        "cache_write": 2.50,
+    },
+    "gpt-6.2-astra": {
+        "input": 8.00,
+        "output": 40.00,
+        "cached_input": 0.40,
+        "cache_write": 10.00,
+    },
     # Launch rates: user screenshot, 2026-09-29; cache writes: OpenAI prompt-caching guide.
     "gpt-6.1-sol": {
         "input": 2.00,
