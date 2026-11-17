@@ -1,0 +1,59 @@
+# macOS is best effort: a failure or a missing hosted runner shows here but never fails CI.
+name: macOS best effort
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: macOS / Python 3.14
+    runs-on: macos-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    env:
+      UV_PYTHON: "3.14.7"
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          clean: false
+          persist-credentials: false
+          set-safe-directory: false
+          show-progress: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.4"
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.14.7
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: "1.58.0"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Check generated workflow
+        run: just workflow-check
+
+      - parallel:
+          - name: Run tests
+            run: just test
+
+          - name: Check Python lint and syntax
+            run: just lint
