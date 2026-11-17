@@ -15,5 +15,5 @@ reasoning = "max"
 # Jobs: plan, deslop, followup, base_signoff, deep_signoff. service_tier may also be set (fast/flex).
 
 [jobs.plan]
-model = "gpt-6-astra"
+model = "gpt-6.2-astra"
 reasoning = "medium"
