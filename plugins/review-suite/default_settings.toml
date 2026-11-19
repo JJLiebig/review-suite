@@ -3,11 +3,11 @@
 
 [base]
 model = "gpt-6.1-terra"
-reasoning = "xhigh"
+reasoning = "max"
 
 [deep]
-model = "gpt-6.1-terra"
-reasoning = "max"
+model = "gpt-6.2-astra"
+reasoning = "high"
 
 # Optional per-job overrides inherit omitted fields from base/deep:
 # [jobs.deslop]
@@ -16,4 +16,8 @@ reasoning = "max"
 
 [jobs.plan]
 model = "gpt-6.2-astra"
-reasoning = "medium"
+reasoning = "high"
+
+[jobs.deslop]
+model = "gpt-6.2-astra"
+reasoning = "high"
