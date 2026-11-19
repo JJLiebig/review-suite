@@ -3,7 +3,7 @@
 
 [base]
 model = "gpt-6.2-sol"
-reasoning = "med"
+reasoning = "medium"
 
 [deep]
 model = "gpt-6.2-astra"
