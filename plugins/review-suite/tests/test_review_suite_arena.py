@@ -25,6 +25,7 @@ from review_suite_arena import (
     build_parser,
     cmd_costs,
     cmd_grade,
+    cmd_refresh,
     cmd_dismiss_round,
     cmd_prune_state,
     cmd_resume_round,
@@ -155,6 +156,35 @@ def test_grade_records_garbage_flags_and_penalizes_placements(tmp_path: Path) ->
     }
     assert refreshed_rows["model-a"]["sample_count"] == 1
     assert refreshed_rows["model-a"]["elo"] == rows["model-a"]["elo"]
+
+
+def test_refresh_persists_recoverable_costs_for_publishing(tmp_path: Path) -> None:
+    sol, astra = "gpt-6.2-sol", "gpt-6.2-astra"
+    usage = {"input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 100}
+    runs = [
+        {"variant_id": f"{sol}-low", "model_id": sol, "usage": usage, "cost_usd": None},
+        {"variant_id": f"{astra}-low", "model_id": astra, "usage": usage, "cost_usd": 0},
+        {"variant_id": f"{sol}-medium", "model_id": sol, "usage": {"input_tokens": 200}, "cost_usd": None},
+    ]
+    record = {
+        "round_id": "round-1",
+        "repo_name": "repo",
+        "recorded_at": "2026-11-18T22:00:00Z",
+        "task_class": "base_review",
+        "rating_pool_id": "arena_base",
+        "reporting_pool": True,
+        "placement_v1": {
+            "groups": [[run["variant_id"] for run in runs]],
+            "basis": "tie_both_useful",
+        },
+        "runs": runs,
+    }
+    history = tmp_path / "runs.jsonl"
+    history.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    args = build_parser().parse_args(["refresh", "--state-dir", str(tmp_path)])
+    cmd_refresh(args)
+    repaired = json.loads(history.read_text(encoding="utf-8"))["runs"]
+    assert [run["cost_usd"] for run in repaired] == [0.00148, 0, None]
 
 
 def test_print_findings_prints_final_reviewer_output(capsys) -> None:
@@ -1098,7 +1128,7 @@ def test_record_grade_refreshes_arena_state_without_cost_work(
         lambda **kwargs: events.append(("state", kwargs)),
     )
     result = _record_grade_result(
-        roster={},
+        roster={"variants": []},
         rubric={},
         state_dir=tmp_path / "state",
         round_id="round-1",

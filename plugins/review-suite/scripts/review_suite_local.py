@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from review_suite_runtime_bootstrap import launcher_script_path
+from review_suite_core.costing import MODEL_PRICING_PER_MILLION
 from review_suite_core.arena_lifecycle import (
     ArenaRetiredError,
     arena_launch_guard,
@@ -997,7 +998,8 @@ def pick_custom_weighted_without_replacement(
 
 
 def compute_cost_usd(variant: dict[str, Any], usage: dict[str, Any]) -> float | None:
-    cost = price_usage_tokens(dict(variant.get("pricing") or {}), usage)
+    pricing = variant.get("pricing", MODEL_PRICING_PER_MILLION.get(variant.get("model")))
+    cost = price_usage_tokens(pricing or {}, usage)
     return round(cost, 6) if cost is not None else None
 
 

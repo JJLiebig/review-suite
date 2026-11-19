@@ -34,12 +34,13 @@ are $1 input, $0.05 cached input, $1.25 cache write, and $5 output per million
 tokens. Estimates use these standard short-context rates; long-context and
 speed-tier pricing can differ.
 
-GPT-6.2 Astra is staged as `gpt-6.2-astra`, with low/medium in base reviews
-and low/medium/high/xhigh/max in deep reviews. GPT-6.2 Sol is staged as
-`gpt-6.2-sol`, with low/medium in base reviews and medium/high/xhigh/max in
-deep reviews. Both model IDs and their reasoning levels still need release
-confirmation. Pricing is deliberately omitted until published; estimates remain
-unknown rather than reusing earlier rates.
+GPT-6.2 Astra runs at low/medium in base reviews and low/medium/high/xhigh/max
+in deep reviews. GPT-6.2 Sol runs at low/medium in base reviews and
+medium/high/xhigh/max in deep reviews. Arena uses the cost ledger's model rates
+when a variant has no pricing override. After updating Review Suite on the
+publisher machine, run `review_suite_arena.py refresh` to fill missing costs in
+`runs.jsonl` from saved model IDs and token usage. The daemon publishes the
+updated history on its next cycle.
 
 DeepSeek V4.1 Flash 1017 uses separate `deepseek-v4.1-flash-1017-*` variants
 at low/high/max effort (low is base-only). The earlier variants are disabled;

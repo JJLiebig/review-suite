@@ -103,6 +103,8 @@ def test_prelaunch_usage_does_not_inherit_another_models_price() -> None:
 @pytest.mark.parametrize(
     "model,expected",
     [
+        ("gpt-6.2-astra", 0.001108),
+        ("gpt-6.2-sol", 0.000277),
         ("gpt-6.1-terra", 0.0001385),
         ("gpt-6.1-sol", 0.000277),
         ("gpt-6-sol", 0.000279),
