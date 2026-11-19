@@ -55,6 +55,7 @@ from review_suite_local import (
     build_reroll_slot_payload,
     compact_benchmark_record,
     compact_round_files,
+    compute_cost_usd,
     collect_round_results,
     default_roster_path,
     default_rubric_path,
@@ -92,6 +93,7 @@ from review_suite_local import (
     print_reviewer_output_section,
     reviewer_output_heading,
     usable_output_slots,
+    variant_index,
     write_json,
     write_jsonl,
     write_reports,
@@ -1788,14 +1790,31 @@ def _refresh_state_and_reports(*, state_dir: Path, roster: dict[str, object]) ->
         _refresh_state_and_reports_locked(
             state_dir=state_dir,
             roster=roster,
-            records=_read_enriched_run_records(state_dir),
+            records=_read_enriched_run_records(state_dir, roster),
         )
 
 
-def _read_enriched_run_records(state_dir: Path) -> list[dict[str, object]]:
+def _read_enriched_run_records(
+    state_dir: Path, roster: dict[str, object]
+) -> list[dict[str, object]]:
     records, changed = enrich_record_repo_names(
         state_dir, read_jsonl(state_dir / RUN_LOG_FILENAME)
     )
+    indexed = variant_index(roster)
+    for record in records:
+        for run in record.get("runs", []):
+            if run.get("cost_usd") is not None or not run.get("model_id"):
+                continue
+            variant = indexed.get(run["variant_id"])
+            # Price only a recorded model that still matches the native API route.
+            if not variant or variant.get("model") != run["model_id"]:
+                continue
+            usage = run.get("usage") or {}
+            if "input_tokens" in usage and "output_tokens" in usage:
+                cost = compute_cost_usd(variant, usage)
+                if cost is not None:
+                    run["cost_usd"] = cost
+                    changed = True
     if changed:
         write_jsonl(state_dir / RUN_LOG_FILENAME, records)
     return records
@@ -2515,7 +2534,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         state_lock(state_dir, "operational-state"),
         state_lock(state_dir, "reports"),
     ):
-        records = _read_enriched_run_records(state_dir)
+        records = _read_enriched_run_records(state_dir, roster)
         summary = aggregate_records(
             roster=roster,
             records=records,

@@ -20,6 +20,7 @@ from review_suite_core import (
     price_usage_tokens,
     run_total_tokens,
 )
+from review_suite_core.costing import MODEL_PRICING_PER_MILLION
 from review_suite_core.orchestrator_store import orchestrator_store_lock
 from review_suite_local import (
     _run_is_finalized,
@@ -52,92 +53,6 @@ FOLDER_REPO_OVERRIDES = {
     "sample-stack-allow-chat-skipped-default": "sample-stack",
 }
 DEFAULT_CODEX_SQLITE_FILENAME = "state_5.sqlite"
-MODEL_PRICING_PER_MILLION = {
-    # Claude 5.5 list rates, 2026-09-30: https://claude.com/pricing
-    # Subscription reviews default to 1h cache writes; native CLI estimates win.
-    "claude-opus-5-5": {
-        "input": 4.00, "output": 20.00, "cached_input": 0.20, "cache_write": 8.00,
-    },
-    "claude-sonnet-5-5": {
-        "input": 2.00, "output": 10.00, "cached_input": 0.20, "cache_write": 4.00,
-    },
-    # Standard API rates: https://developers.openai.com/api/docs/models/gpt-6.1-terra
-    "gpt-6.1-terra": {
-        "input": 1.00,
-        "output": 5.00,
-        "cached_input": 0.05,
-        "cache_write": 1.25,
-    },
-    # Launch rates: https://openai.com/index/introducing-gpt-6-2-astra-sol/ (6.2 Sol keeps 6.1 Sol rates).
-    "gpt-6.2-sol": {
-        "input": 2.00,
-        "output": 10.00,
-        "cached_input": 0.10,
-        "cache_write": 2.50,
-    },
-    "gpt-6.2-astra": {
-        "input": 8.00,
-        "output": 40.00,
-        "cached_input": 0.40,
-        "cache_write": 10.00,
-    },
-    # Launch rates: user screenshot, 2026-09-29; cache writes: OpenAI prompt-caching guide.
-    "gpt-6.1-sol": {
-        "input": 2.00,
-        "output": 10.00,
-        "cached_input": 0.10,
-        "cache_write": 2.50,
-    },
-    "gpt-6-sol": {
-        "input": 2.00,
-        "output": 10.00,
-        "cached_input": 0.20,
-        "cache_write": 2.50,
-    },
-    "gpt-6-luna": {
-        "input": 0.10,
-        "output": 0.50,
-        "cached_input": 0.01,
-        "cache_write": 0.125,
-    },
-    "gpt-6-astra": {
-        "input": 10.00,
-        "output": 50.00,
-        "cached_input": 1.00,
-        "cache_write": 12.50,
-    },
-    "gpt-5.6-sol": {
-        "input": 5.00,
-        "output": 30.00,
-        "cached_input": 0.50,
-        "cache_write": 6.25,
-    },
-    "gpt-5.6-terra": {
-        "input": 2.00,
-        "output": 12.00,
-        "cached_input": 0.20,
-        "cache_write": 2.50,
-    },
-    "gpt-5.6-luna": {
-        "input": 0.20,
-        "output": 1.20,
-        "cached_input": 0.02,
-        "cache_write": 0.25,
-    },
-    "gpt-5.5": {"input": 5.00, "output": 30.00, "cached_input": 0.50},
-    "gpt-5.4": {"input": 2.50, "output": 15.00, "cached_input": 0.25},
-    "gpt-5-mini": {"input": 0.75, "output": 4.50, "cached_input": 0.075},
-    "gpt-5.4-mini": {"input": 0.75, "output": 4.50, "cached_input": 0.075},
-    "gpt-5-nano": {"input": 0.15, "output": 0.60, "cached_input": 0.015},
-    "gpt-5.4-nano": {"input": 0.15, "output": 0.60, "cached_input": 0.015},
-    "gpt-5.3-codex": {"input": 2.00, "output": 10.00, "cached_input": 0.20},
-    "gpt-5.3-codex-spark": {"input": 2.00, "output": 10.00, "cached_input": 0.20},
-    "gpt-5.2-codex": {"input": 2.00, "output": 10.00, "cached_input": 0.20},
-    "gpt-5.2": {"input": 2.00, "output": 10.00, "cached_input": 0.20},
-    "gpt-4.1": {"input": 2.00, "output": 8.00, "cached_input": 0.50},
-    "o3": {"input": 2.00, "output": 8.00, "cached_input": 0.50},
-    "o4-mini": {"input": 1.10, "output": 4.40, "cached_input": 0.275},
-}
 MODEL_ALIASES = {
     "claude::claude-opus-5-5": "claude-opus-5-5",
     "claude::claude-sonnet-5-5": "claude-sonnet-5-5",
