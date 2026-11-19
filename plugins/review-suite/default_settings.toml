@@ -2,8 +2,8 @@
 # All jobs use base except final deep signoff, which uses deep.
 
 [base]
-model = "gpt-6.1-terra"
-reasoning = "max"
+model = "gpt-6.2-astra"
+reasoning = "med"
 
 [deep]
 model = "gpt-6.2-astra"
