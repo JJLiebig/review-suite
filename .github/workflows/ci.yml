@@ -31,7 +31,6 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           clean: false
-          fetch-depth: 2
           persist-credentials: false
           set-safe-directory: false
           show-progress: false
@@ -57,17 +56,3 @@ jobs:
         env:
           PYTEST_ADDOPTS: --durations=10
         run: just test
-
-      - name: Measure optimized CLI suite
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        run: uv run --locked pytest -q plugins/review-suite/tests/test_review_orchestrator_cli.py
-
-      - name: Measure baseline CLI suite
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        env:
-          RS_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        shell: bash
-        run: |
-          git worktree add --detach "$RUNNER_TEMP/review-suite-cli-before" "$RS_BASE_SHA"
-          cd "$RUNNER_TEMP/review-suite-cli-before"
-          uv run --locked pytest -q plugins/review-suite/tests/test_review_orchestrator_cli.py

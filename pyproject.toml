@@ -20,10 +20,6 @@ required-version = ">=0.12.17"
 [tool.pytest.ini_options]
 addopts = "-n auto --dist=worksteal"
 testpaths = ["plugins/review-suite/tests"]
-markers = [
-  "orchestrator_cli: CLI workflow scenarios exercised in full on Linux and macOS",
-  "windows_cli: CLI scenarios that exercise native Git, paths, or process behavior on Windows",
-]
 
 [tool.ruff]
 target-version = "py314"
