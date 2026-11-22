@@ -6614,6 +6614,47 @@ def test_validated_fixes_close_checkpoints_without_spending_or_bypassing_review(
             review.record_convergence_decision(again, decision="CONTINUE")
 
 
+def test_validated_fixes_block_legacy_github_followup_after_retry_claim(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo, state_dir, state, _ = _automatic_findings_cycle(
+        tmp_path, final_step=True, pending=True
+    )
+    clean = review.record_clean_decision(state, round_id="automatic", lane="review_base")
+    findings = review.record_github_result(clean, result="findings")
+    source_id = findings["active_findings"]["round_id"]
+    head = _commit_file(repo, "app.py", "fixed\n", "fix")
+    pending = review.mark_fix_detected(findings, head=head)
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    write_round(round_state_dir, {
+        "round_id": "legacy-followup",
+        "review_scope": {"source_round_id": source_id},
+        "status": "completed",
+        "runs": [],
+    })
+    pending["pending_action"]["round_id"] = "legacy-followup"
+    review.save_cycle(state_dir, pending)
+
+    write_round(round_state_dir, {
+        "round_id": "retry",
+        "review_scope": {"source_round_id": source_id, "cycle_key": pending["cycle_key"]},
+        "status": "sampled",
+        "runs": [],
+    })
+    pending["pending_action"]["round_id"] = "retry"
+    review.save_cycle(state_dir, pending, claim_followup=True)
+    # Another writer can still have a snapshot from before the claim was saved.
+    before = review.save_cycle(state_dir, pending)
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)
+    code, result = _run_review(monkeypatch, [
+        "--id", before["public_id"], "--fixes-validated", "Focused checks passed",
+        "--state-dir", str(state_dir),
+    ])
+    assert code == 2
+    assert "inspect the unconsumed follow-up review" in str(result["error"])
+    assert _cycle_payload(state_dir, before["public_id"]) == before
+
+
 def test_clean_followup_note_does_not_leak_to_later_review_steps(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -1089,6 +1089,7 @@ def _followup_rounds(
         if pending.get("source_round_id") == source_round_id
         else None
     )
+    prior_round_ids = state.get("prior_followup_round_ids") or []
     for directory in state_dirs:
         for path in rounds_dir(directory).glob("*.json"):
             payload = load_round(directory, path.stem)
@@ -1103,6 +1104,7 @@ def _followup_rounds(
             elif (
                 github_source
                 and path.stem != pending_round_id
+                and path.stem not in prior_round_ids
                 and _round_by_id(state, path.stem).get("source_round_id") != source_round_id
             ):
                 continue
