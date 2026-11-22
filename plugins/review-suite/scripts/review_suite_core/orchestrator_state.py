@@ -198,8 +198,9 @@ def review_ladder_summary(
         github_terminal = github_review.get("status") in {
             GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED,
         }
+        github_head = str(github_review.get("reviewed_head") or "")
         github_ready = github_terminal and bool(
-            acceptance(state, str(github_review.get("reviewed_head") or ""))
+            accepted if github_head == comparison_head else acceptance(state, github_head)
         )
         equivalent_github = github_ready and not _github_review_matches_head(state, comparison_head)
         if (comparison_head != original or equivalent_github) and (not github_terminal or github_ready):

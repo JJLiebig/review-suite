@@ -1347,11 +1347,8 @@ def _add_review_ladder_fields(
     state: dict[str, Any],
     action: dict[str, Any] | None,
     *,
-    current_head_value: str | None = None,
+    summary: dict[str, Any],
 ) -> dict[str, Any]:
-    summary = review_ladder_summary(
-        state, current_head=current_head_value or _identity_head(state)
-    )
     if summary.get(
         "review_ladder"
     ) == "invalidated" and _action_recovers_pending_github_head_change(action):
@@ -1416,13 +1413,15 @@ def _show_status(
         payload["github_review"] = github_status
     if convergence := _public_convergence(state):
         payload["convergence"] = convergence
-    action = _action_payload(state, state_dir=state_dir)
-    summary = _add_review_ladder_fields(payload, state, action)
-    from review_suite_core.patch_identity import acceptance, bound_interaction
+    live_head = _identity_head(state)
+    summary = review_ladder_summary(state, current_head=live_head)
+    action = _action_payload(state, state_dir=state_dir, summary=summary)
+    summary = _add_review_ladder_fields(payload, state, action, summary=summary)
+    if "base_interaction" not in summary:
+        from review_suite_core.patch_identity import acceptance, bound_interaction
 
-    accepted_patch = acceptance(state, _identity_head(state) or "")
-    if accepted_patch:
-        payload["base_interaction"] = bound_interaction(state, accepted_patch)
+        if accepted_patch := acceptance(state, live_head or ""):
+            payload["base_interaction"] = bound_interaction(state, accepted_patch)
     if action:
         if summary.get("review_ladder") != "invalidated":
             payload["Action"] = action
@@ -3300,7 +3299,9 @@ def _public_convergence(state: dict[str, Any]) -> dict[str, Any] | None:
     return summary
 
 
-def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any] | None:
+def _action_payload(
+    state: dict[str, Any], *, state_dir: Path, summary: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     public_id = str(state.get("public_id") or "").strip()
     action: dict[str, Any] | None
     stage = state.get("stage")
@@ -3431,7 +3432,8 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
                 "cmd": _review_command(public_id, state_dir=state_dir),
                 "note": "Run the bounded exact-head closure before handoff.",
             }
-        summary = review_ladder_summary(state, current_head=_identity_head(state))
+        if summary is None:
+            summary = review_ladder_summary(state, current_head=_identity_head(state))
         if summary.get("review_ladder") == "invalidated":
             if green_review_head_change_summary(state, summary=summary):
                 action = {"cmd": _review_command(public_id, state_dir=state_dir),
@@ -3463,8 +3465,9 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
         "review": state.get("public_id"),
         "review_brief": "available" if state.get("review_brief") else "unavailable",
     }
-    action = _action_payload(state, state_dir=state_dir)
-    summary = _add_review_ladder_fields(payload, state, action)
+    summary = review_ladder_summary(state, current_head=_identity_head(state))
+    action = _action_payload(state, state_dir=state_dir, summary=summary)
+    summary = _add_review_ladder_fields(payload, state, action, summary=summary)
     if action:
         if summary.get("review_ladder") != "invalidated":
             payload["Action"] = action
