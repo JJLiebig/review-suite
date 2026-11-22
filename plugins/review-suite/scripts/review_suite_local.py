@@ -3367,6 +3367,7 @@ def _classify_review_result(
     session_id: str | None,
     thread_id: str | None,
     rollout_error: str = "",
+    rollout_incomplete: bool = False,
 ) -> dict[str, Any]:
     output = (reviewer_output or "").strip()
     authentication_failed = (
@@ -3451,10 +3452,14 @@ def _classify_review_result(
             "grade_blocked": True,
             "grade_block_reason": "review_tooling_failure",
         }
-    if interrupted:
+    if interrupted or (rollout_incomplete and not output):
         return {
             "review_status": "interrupted",
-            "status_summary": "Review was interrupted before a usable result was captured. Do not grade this against the model.",
+            "status_summary": (
+                "Reviewer transcript could not be read and no separate verdict was captured."
+                if rollout_incomplete and not output
+                else "Review was interrupted before a usable result was captured. Do not grade this against the model."
+            ),
             "grade_blocked": True,
             "grade_block_reason": "review_interrupted",
         }
@@ -3489,6 +3494,7 @@ def classify_review_capture(
     session_id: str | None,
     thread_id: str | None,
     rollout_error: str = "",
+    rollout_incomplete: bool = False,
     timed_out: bool = False,
     transport_stalled: bool = False,
 ) -> dict[str, Any]:
@@ -3516,6 +3522,7 @@ def classify_review_capture(
         session_id=session_id,
         thread_id=thread_id,
         rollout_error=rollout_error,
+        rollout_incomplete=rollout_incomplete,
     )
 
 
@@ -3669,6 +3676,7 @@ def collect_completed_review_capture(
         session_id=session_id,
         thread_id=str(thread_id or "") or None,
         rollout_error=str(enriched.get("task_error") or ""),
+        rollout_incomplete=bool(enriched.get("rollout_incomplete")),
         timed_out=timed_out,
         transport_stalled=transport_stalled,
     )

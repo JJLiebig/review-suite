@@ -1511,6 +1511,49 @@ def test_collect_completed_review_capture_maps_unsupported_model_error(
     assert capture["grade_block_reason"] == "selected_model_not_supported"
 
 
+@pytest.mark.parametrize("final_message", ["", "No findings."])
+def test_collect_completed_review_capture_handles_an_incomplete_rollout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, final_message: str
+) -> None:
+    rollout_path = tmp_path / "interrupted.jsonl"
+    _write_jsonl(rollout_path, [_assistant_message("No findings in an earlier turn.")])
+    with rollout_path.open("a", encoding="utf-8") as handle:
+        handle.write('{"type":"turn_context')
+    thread = {
+        "id": "interrupted-review",
+        "rollout_path": str(rollout_path),
+        "source": rollout_capture.REVIEW_SUBAGENT_SOURCE,
+    }
+    monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: thread)
+    stdout_path = tmp_path / "review.stdout.txt"
+    stderr_path = tmp_path / "review.stderr.txt"
+    final_path = tmp_path / "review.final.txt"
+    stdout_path.write_text("", encoding="utf-8")
+    stderr_path.write_text("Session ID: interrupted-review\n", encoding="utf-8")
+    final_path.write_text(final_message, encoding="utf-8")
+
+    capture = review_suite_local.collect_completed_review_capture(
+        slot="alpha",
+        variant_id="gpt-5.4-xhigh",
+        variant=_minimal_roster()["variants"][0],
+        title="interrupted review",
+        command=["codex", "exec"],
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        started_at=None,
+        sqlite_path=tmp_path / "state_5.sqlite",
+        review_cwd=tmp_path,
+        final_message_path=final_path,
+    )
+
+    assert capture["reviewer_output"] == final_message
+    assert capture["grade_blocked"] is (not final_message)
+    assert capture["grade_block_reason"] == (
+        None if final_message else "review_interrupted"
+    )
+    assert rollout_capture.rollout_activity_summary(rollout_path)["last_meaningful_type"] == "message"
+
+
 def test_rollout_capture_missing_threads_table_returns_none(tmp_path: Path) -> None:
     sqlite_path = tmp_path / "state_5.sqlite"
     sqlite3.connect(sqlite_path).close()
