@@ -1494,7 +1494,7 @@ def test_id_retries_legacy_uninspected_followup_without_resetting_cycle(
 
 @pytest.mark.windows_cli
 def test_create_resume_and_id_reprint_use_one_pending_action(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, git_commands: list[list[str]]
 ) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
     review_calls = _stub_review(
@@ -1518,7 +1518,9 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
         "--state-dir",
         str(state_dir),
     ]
+    git_commands.clear()
     exit_code, payload = _run_review(monkeypatch, args)
+    assert len(git_commands) <= 13, git_commands
     public_id = str(payload["review"])
 
     assert exit_code == 0
@@ -1545,7 +1547,9 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert len(state["rounds"]) == 1
     assert len(review_calls) == 1
 
+    git_commands.clear()
     exit_code, resumed = _run_review(monkeypatch, args)
+    assert len(git_commands) <= 7, git_commands
     assert exit_code == 0
     assert resumed["review"] == public_id
     assert "stage" not in resumed
@@ -1565,9 +1569,11 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert state["rounds"][0]["output_refs"] == ["rollout://phase_review-round-1/alpha"]
     assert len(review_calls) == 1
 
+    git_commands.clear()
     exit_code, by_id = _run_review(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
+    assert len(git_commands) <= 5, git_commands
     assert exit_code == 0
     assert by_id["review"] == public_id
     assert by_id["Action"] == resumed["Action"]
@@ -1709,6 +1715,33 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert state["validation"]["note"] == "CI unavailable for this docs-only change"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 2
+
+
+def test_start_observes_head_moved_while_reviewer_runs(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "default-state"
+    _init_repo(repo)
+    _commit_file(repo, "app.py", "value = 1\n", "base")
+    _git(repo, "checkout", "-b", "feature")
+    reviewed = _commit_file(repo, "app.py", "value = 2\n", "feature")
+    _stub_review_with_terminal(monkeypatch, "clean")
+    complete_review = orchestrator_runner.run_review_step
+
+    def move_checkout(**kwargs):
+        result = complete_review(**kwargs)
+        _commit_file(repo, "app.py", "value = 3\n", "concurrent edit")
+        return result
+
+    monkeypatch.setattr(orchestrator_runner, "run_review_step", move_checkout)
+    code, payload = _run_review(
+        monkeypatch, ["--mode", "fast", "--cd", str(repo), "--base", "main"]
+    )
+    assert code == 0
+    assert payload["current_head"] == _git(repo, "rev-parse", "HEAD")
+    assert payload["current_head"] != reviewed
+    cycle = _cycle_payload(state_dir, payload["review"])
+    assert cycle["rounds"][0]["reviewed_head"] == reviewed
+    assert not payload["done"]
 
 
 def test_new_cycle_defaults_to_base_without_mode(
@@ -5040,7 +5073,7 @@ def test_github_review_rejects_cycle_before_local_green(
 
 
 def test_github_review_runs_existing_lane_with_canonical_state_dir_and_force(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, git_commands: list[list[str]]
 ) -> None:
     review_calls = _stub_review(monkeypatch)
     _stub_deslop(monkeypatch)
@@ -5091,9 +5124,11 @@ def test_github_review_runs_existing_lane_with_canonical_state_dir_and_force(
         ["review.py", "--id", public_id, "--github-review", "--github-force"],
     )
 
+    git_commands.clear()
     exit_code = review.main()
 
     assert exit_code == 23
+    assert len(git_commands) <= 4, git_commands
     assert calls == [
         [
             sys.executable,
@@ -6437,6 +6472,7 @@ def test_validated_fixes_preserve_findings_and_remaining_gates_without_review(
     mode: str,
     github: bool,
     remaining: bool,
+    git_commands: list[list[str]],
 ) -> None:
     def emit_error(message: str, **kwargs: object) -> int:
         review.emit_toon({"error": message})
@@ -6533,8 +6569,10 @@ def test_validated_fixes_preserve_findings_and_remaining_gates_without_review(
                 "reviewed_head": fix_head,
             },
         })
+    git_commands.clear()
     code, closed = close()
     assert code == 0
+    assert len(git_commands) <= 10, git_commands
     assert len(calls) == 1
     state = _cycle_payload(state_dir, public_id)
     assert state["rounds"] == before["rounds"]
@@ -7340,7 +7378,7 @@ def test_base_interaction_clean_receipt_and_new_head_reflags(monkeypatch, tmp_pa
 
 @pytest.mark.parametrize("github_head", ["original", "current"])
 def test_equivalent_patch_with_older_followup_exposes_remaining_gates(
-    monkeypatch, tmp_path, github_head
+    monkeypatch, tmp_path, github_head, git_commands
 ):
     repo, state_dir, public_id = _interaction_cycle(tmp_path)
     state = _cycle_payload(state_dir, public_id)
@@ -7365,7 +7403,9 @@ def test_equivalent_patch_with_older_followup_exposes_remaining_gates(
     assert status["reviewed_head"] == original_head
     assert status["accepted_head"] == current
     assert status["next_action"] == "github_review"
+    git_commands.clear()
     _, resumed = _run_review(monkeypatch, args)
+    assert len(git_commands) <= 19, git_commands
     assert resumed["next_action"] == "github_review"
     assert not resumed["done"]
     assert len(calls) == 1

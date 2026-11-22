@@ -10,6 +10,7 @@ from hashlib import blake2s
 from pathlib import Path
 from typing import Any
 
+from .git_reads import cached_git_read
 from .paths import normalize_cwd, utc_now_iso
 
 WORKFLOW_SCHEMA_VERSION = 1
@@ -56,13 +57,10 @@ def _git_text(review_cwd: Path, args: list[str], *, default_error: str) -> str:
 
 
 def current_head(review_cwd: Path) -> str:
-    return _git_text(
-        review_cwd,
-        ["git", "rev-parse", "HEAD"],
-        default_error="git rev-parse HEAD failed",
-    ).strip()
+    return resolve_ref(review_cwd, "HEAD")
 
 
+@cached_git_read
 def current_branch(review_cwd: Path) -> str | None:
     branch = _git_text(
         review_cwd,
@@ -74,6 +72,7 @@ def current_branch(review_cwd: Path) -> str | None:
     return branch
 
 
+@cached_git_read
 def resolve_ref(review_cwd: Path, ref: str) -> str:
     return _git_text(
         review_cwd,
@@ -147,6 +146,11 @@ def effective_base_ref(review_cwd: Path, base: str | None) -> dict[str, Any]:
 
 
 def merge_base(review_cwd: Path, left_ref: str, right_ref: str = "HEAD") -> str:
+    return _merge_base(review_cwd, left_ref, right_ref)
+
+
+@cached_git_read
+def _merge_base(review_cwd: Path, left_ref: str, right_ref: str) -> str:
     return _git_text(
         review_cwd,
         ["git", "merge-base", left_ref, right_ref],
@@ -154,6 +158,7 @@ def merge_base(review_cwd: Path, left_ref: str, right_ref: str = "HEAD") -> str:
     ).strip()
 
 
+@cached_git_read
 def is_ancestor(
     review_cwd: Path, ancestor_ref: str, descendant_ref: str = "HEAD"
 ) -> bool:
@@ -209,6 +214,7 @@ def validated_linear_review_range(
     }
 
 
+@cached_git_read
 def has_committed_diff(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") -> bool:
     proc = subprocess.run(
         ["git", "diff", "--quiet", f"{start_ref}..{end_ref}"],
@@ -279,11 +285,14 @@ def diff_artifact(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") -> st
     )
 
 
-def worktree_status_entries(review_cwd: Path) -> list[dict[str, str]]:
+@cached_git_read
+def worktree_status_entries(
+    review_cwd: Path, *, untracked_files: str = "all",
+) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     fields = _git_text(
         review_cwd,
-        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        ["git", "status", "--porcelain=v1", "-z", f"--untracked-files={untracked_files}"],
         default_error="git status --porcelain failed",
     ).split("\0")
     idx = 0
@@ -316,7 +325,10 @@ def meaningful_worktree_status_entries(review_cwd: Path) -> list[dict[str, str]]
 
 
 def has_worktree_changes(review_cwd: Path) -> bool:
-    return bool(meaningful_worktree_status_entries(review_cwd))
+    return any(
+        not _is_review_suite_scratch_path(item["path"])
+        for item in worktree_status_entries(review_cwd, untracked_files="normal")
+    )
 
 
 def branch_diff_paths(
@@ -328,6 +340,7 @@ def branch_diff_paths(
     return diff_paths_between(review_cwd, resolved_merge_base, "HEAD")
 
 
+@cached_git_read
 def diff_paths_between(review_cwd: Path, left_ref: str, right_ref: str) -> set[str]:
     return {
         line.strip()
@@ -361,6 +374,7 @@ def merge_base_drift_scope(
     current_merge_base: str,
     reviewed_head: str,
     current_head: str = "HEAD",
+    include_interaction: bool = True,
 ) -> dict[str, Any]:
     base_changed_paths = diff_paths_between(
         review_cwd, recorded_merge_base, current_merge_base
@@ -374,15 +388,19 @@ def merge_base_drift_scope(
     branch_paths = recorded_branch_paths | current_branch_paths
     overlapping_paths = sorted(base_changed_paths & branch_paths)
     from .patch_identity import patch_identity, interaction
-    return {
+    scope = {
         "base_changed_paths": sorted(base_changed_paths),
         "recorded_branch_paths": sorted(recorded_branch_paths),
         "current_branch_paths": sorted(current_branch_paths),
         "overlapping_paths": overlapping_paths,
-        "interaction": interaction(review_cwd, recorded_merge_base, current_merge_base, reviewed_head),
         "patch_equivalent": patch_identity(review_cwd, recorded_merge_base, reviewed_head)
         == patch_identity(review_cwd, current_merge_base, current_head),
     }
+    if include_interaction:
+        scope["interaction"] = interaction(
+            review_cwd, recorded_merge_base, current_merge_base, reviewed_head
+        )
+    return scope
 
 
 
@@ -735,11 +753,7 @@ def _parse_numstat_row(line: str) -> dict[str, Any] | None:
 def diff_stats(
     review_cwd: Path, start_ref: str, end_ref: str = "HEAD"
 ) -> dict[str, Any]:
-    commit_count_text = _git_text(
-        review_cwd,
-        ["git", "rev-list", "--count", f"{start_ref}..{end_ref}"],
-        default_error=f"git rev-list --count {start_ref}..{end_ref} failed",
-    ).strip()
+    commit_count = commit_distance(review_cwd, start_ref, end_ref)
     rows = [
         row
         for row in (
@@ -762,7 +776,7 @@ def diff_stats(
         rows, key=lambda item: (-int(item["lines_changed"]), str(item["path"]))
     )[:TOP_PATH_LIMIT]
     return {
-        "commits_since_anchor": int(commit_count_text or 0),
+        "commits_since_anchor": commit_count,
         "files_changed": len(rows),
         "lines_changed": sum(int(row["lines_changed"]) for row in rows),
         "top_paths": top_paths,
@@ -1041,6 +1055,7 @@ def add_stage_full_review_lane(
     return enriched
 
 
+@cached_git_read
 def commit_distance(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") -> int:
     count_text = _git_text(
         review_cwd,
@@ -1323,7 +1338,7 @@ def inspect_workflow_status(
     base_drift_patch_equivalent = False
     if recorded_merge_base and anchor_base:
         try:
-            current_merge_base = merge_base(review_cwd, anchor_base, "HEAD")
+            current_merge_base = merge_base(review_cwd, anchor_base, head)
         except ValueError:
             payload.update(
                 stage_decision(
@@ -1343,6 +1358,7 @@ def inspect_workflow_status(
                 recorded_merge_base=recorded_merge_base,
                 current_merge_base=current_merge_base,
                 reviewed_head=reviewed_head,
+                current_head=head,
             )
             payload["base_drift_changed_path_count"] = len(
                 drift_scope["base_changed_paths"]
@@ -1395,7 +1411,7 @@ def inspect_workflow_status(
         )
         return finalize()
     if reviewed_head == head:
-        if has_worktree_changes(review_cwd):
+        if meaningful_worktree_status_entries(review_cwd):
             if anchor_base:
                 dirty_scope = dirty_worktree_scope(
                     review_cwd,
@@ -1457,7 +1473,7 @@ def inspect_workflow_status(
             }
         )
         return finalize()
-    delta = diff_stats(review_cwd, reviewed_head, "HEAD")
+    delta = diff_stats(review_cwd, reviewed_head, head)
     payload.update(delta)
     payload["top_paths"] = [
         f"{item['path']} (+{item['added']}/-{item['deleted']})"

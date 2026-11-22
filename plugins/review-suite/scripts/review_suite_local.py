@@ -54,7 +54,6 @@ from review_suite_core import (
     inspect_workflow_status,
     is_deep_reasoning_effort,
     launch_captured_child_process,
-    meaningful_worktree_status_entries,
     merge_base,
     normalize_cwd,
     normalize_service_tier,
@@ -274,8 +273,8 @@ def _base_review_scope(*, review_cwd: Path, base: str) -> tuple[dict[str, Any], 
     base_info = effective_base_ref(review_cwd, base)
     effective_base = str(base_info["base"])
     requested_base = str(base_info["requested_base"])
-    merge_base_head = merge_base(review_cwd, effective_base, "HEAD")
     reviewed_head = current_head(review_cwd)
+    merge_base_head = merge_base(review_cwd, effective_base, reviewed_head)
     if requested_base != effective_base:
         target_label = f"base `{effective_base}` (requested `{requested_base}`)"
     else:
@@ -3207,12 +3206,12 @@ def ensure_clean_git_worktree(
     review_cwd: Path, *, review_scope: dict[str, Any] | None = None
 ) -> None:
     try:
-        dirty_entries = meaningful_worktree_status_entries(review_cwd)
+        dirty = has_worktree_changes(review_cwd)
     except ValueError as exc:
         raise ValueError(
             f"review-suite requires a git repo with committed changes ready for review: {exc}"
         ) from exc
-    if not dirty_entries:
+    if not dirty:
         return
     raise ValueError(
         "review-suite requires a clean worktree. Commit intended review changes or stash unrelated worktree changes, then rerun."

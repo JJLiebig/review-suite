@@ -25,6 +25,7 @@ from review_suite_local import (
 
 from .axi_output import format_command, write_text
 from .config import lens_model_config, override_model_config
+from .git_reads import refresh_git_reads
 from .lens_runtime import (
     DEFAULT_PROGRESS_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -32,7 +33,6 @@ from .lens_runtime import (
 )
 from .orchestrator_state import (
     STAGE_CREATED,
-    STAGE_DECISION_PENDING,
     STAGE_FOLLOWUP_PENDING,
     STAGE_RETRY_REQUESTED,
     STAGE_RUNNING,
@@ -60,8 +60,8 @@ from .workflow_state import (
     EFFECTIVE_BASE_METADATA_KEYS,
     current_branch,
     current_head,
-    dirty_worktree_scope,
     has_committed_diff,
+    has_worktree_changes,
     is_ancestor,
     merge_base,
 )
@@ -196,7 +196,6 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     expected_head = _identity_text(state, "head")
     expected_merge_base = _identity_text(state, "merge_base")
     expected_branch = dict(state.get("identity") or {}).get("branch")
-    dirty = dirty_worktree_scope(cwd, "HEAD")["dirty_paths"]
     if current_branch(cwd) != expected_branch:
         _print_step_output(
             label="closure",
@@ -204,7 +203,7 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
             body=f"expected {expected_branch or 'detached HEAD'}",
         )
         return OrchestratorRunnerResult(state, ran_step=False, step="blocked")
-    if dirty:
+    if has_worktree_changes(cwd):
         _print_step_output(
             label="closure", status="blocked", body="clean worktree required"
         )
@@ -367,17 +366,17 @@ def _identity_cwd(state: dict[str, Any]) -> Path:
 def _review_scope(state: dict[str, Any], cwd: Path) -> dict[str, object]:
     base = _identity_text(state, "base")
     try:
-        reviewed_head = current_head(cwd)
+        live_head = current_head(cwd)
     except ValueError:
-        reviewed_head = _identity_text(state, "head")
+        live_head = None
     try:
-        merge_base_head = merge_base(cwd, base, "HEAD")
+        merge_base_head = merge_base(cwd, base, live_head or "HEAD")
     except ValueError:
         merge_base_head = _identity_text(state, "merge_base")
     return {
         "base": base,
         "merge_base": merge_base_head,
-        "reviewed_head": reviewed_head,
+        "reviewed_head": live_head if live_head is not None else _identity_text(state, "head"),
         "target_label": f"base `{base}`",
     }
 
@@ -482,23 +481,18 @@ def _review_instructions(state: dict[str, Any], context: dict[str, Any]) -> str 
 
 
 def _require_committed_fix_interdiff(
-    *, cwd: Path, since_head: str, base: str, merge_base_head: str, review_label: str
+    *, cwd: Path, since_head: str, review_label: str
 ) -> None:
     has_fix_diff = has_committed_diff(cwd, since_head, "HEAD")
-    dirty_scope = dirty_worktree_scope(cwd, base, merge_base_ref=merge_base_head)
-    dirty_paths = [
-        str(path)
-        for path in list(dirty_scope.get("dirty_paths") or [])
-        if str(path).strip()
-    ]
+    dirty = has_worktree_changes(cwd)
     if has_fix_diff:
-        if dirty_paths:
+        if dirty:
             raise ValueError(
                 f"{review_label} found committed interdiff changes plus uncommitted worktree changes. "
                 "Commit the remaining fix changes or stash unrelated worktree changes, then rerun the emitted review.py --id command."
             )
         return
-    if dirty_paths:
+    if dirty:
         raise ValueError(
             f"{review_label} found no committed interdiff after reviewed head {since_head}, "
             "but the worktree has uncommitted changes. Commit the fix changes, then rerun the emitted review.py --id command."
@@ -509,17 +503,13 @@ def _require_committed_fix_interdiff(
     )
 
 
-def _validate_fix_interdiff(
-    *, cwd: Path, scope: dict[str, object], context: dict[str, Any]
-) -> None:
+def _validate_fix_interdiff(*, cwd: Path, context: dict[str, Any]) -> None:
     since_head = str(context.get("findings_reviewed_head") or "").strip()
     if not since_head:
         return
     _require_committed_fix_interdiff(
         cwd=cwd,
         since_head=since_head,
-        base=str(scope.get("base") or ""),
-        merge_base_head=str(scope.get("merge_base") or ""),
         review_label="post-findings review",
     )
 
@@ -789,7 +779,7 @@ def _run_profile_review_once(
     cwd = _identity_cwd(state)
     scope = _review_scope(state, cwd)
     fix_context = _fix_verification_context(state)
-    _validate_fix_interdiff(cwd=cwd, scope=scope, context=fix_context)
+    _validate_fix_interdiff(cwd=cwd, context=fix_context)
     custom_instructions = _review_instructions(state, fix_context)
     post_findings_rerun = bool(fix_context)
     step_position, step_total = _review_step_position(state, step_index)
@@ -883,7 +873,7 @@ def _run_profile_arena_once(
     cwd = _identity_cwd(state)
     scope = _review_scope(state, cwd)
     fix_context = _fix_verification_context(state)
-    _validate_fix_interdiff(cwd=cwd, scope=scope, context=fix_context)
+    _validate_fix_interdiff(cwd=cwd, context=fix_context)
     custom_instructions = _review_instructions(state, fix_context)
     post_findings_rerun = bool(fix_context)
     step_position, step_total = _review_step_position(state, step_index)
@@ -1314,14 +1304,12 @@ def _run_followup_review_once(
     head = current_head(cwd)
     base = _identity_text(state, "base")
     try:
-        merge_base_head = merge_base(cwd, base, "HEAD")
+        merge_base_head = merge_base(cwd, base, head)
     except ValueError:
         merge_base_head = _identity_text(state, "merge_base")
     _require_committed_fix_interdiff(
         cwd=cwd,
         since_head=since_head,
-        base=base,
-        merge_base_head=merge_base_head,
         review_label="follow-up review",
     )
     review_scope, linear_range = _followup_review_scope(
@@ -1443,22 +1431,24 @@ def run_one_expensive_step(
 
     resolved_state_dir = state_dir or default_state_dir()
     if deslop_should_run(state):
-        return _run_deslop_once(state)
-    if state.get("stage") == STAGE_RUNNING:
-        return _collect_running_review_once(state, state_dir=resolved_state_dir)
-    if (
+        result = _run_deslop_once(state)
+    elif state.get("stage") == STAGE_RUNNING:
+        result = _collect_running_review_once(state, state_dir=resolved_state_dir)
+    elif (
         state.get("stage") == STAGE_RETRY_REQUESTED
         and dict(state.get("pending_action") or {}).get("kind") == "arena-blocked"
     ):
-        return _recover_blocked_arena_once(state, state_dir=resolved_state_dir)
-    if _review_should_run(state):
-        return _run_profile_step_once(
+        result = _recover_blocked_arena_once(state, state_dir=resolved_state_dir)
+    elif _review_should_run(state):
+        result = _run_profile_step_once(
             state,
             state_dir=resolved_state_dir,
             persist_state=persist_state,
         )
-    if state.get("stage") == STAGE_FOLLOWUP_PENDING:
-        return _run_followup_review_once(state, state_dir=resolved_state_dir)
-    if state.get("stage") == STAGE_DECISION_PENDING:
+    elif state.get("stage") == STAGE_FOLLOWUP_PENDING:
+        result = _run_followup_review_once(state, state_dir=resolved_state_dir)
+    else:
         return OrchestratorRunnerResult(state, ran_step=False)
-    return OrchestratorRunnerResult(state, ran_step=False)
+    if result.ran_step:
+        refresh_git_reads()
+    return result

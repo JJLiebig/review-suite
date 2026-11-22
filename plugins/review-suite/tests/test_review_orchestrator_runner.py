@@ -45,7 +45,7 @@ def clean_worktree(monkeypatch: pytest.MonkeyPatch) -> None:
         orchestrator_runner, "current_branch", lambda cwd: "feature/orchestrator"
     )
     monkeypatch.setattr(
-        orchestrator_runner, "dirty_worktree_scope", lambda *_: {"dirty_paths": []}
+        orchestrator_runner, "has_worktree_changes", lambda _: False
     )
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-1")
     monkeypatch.setattr(
@@ -344,7 +344,7 @@ def test_runner_retries_cleanup_on_current_head_and_blocks_wrong_branch_or_dirty
     green["deslop"]["status"] = "failed"
     runner = orchestrator_runner
     monkeypatch.setattr(runner, "current_branch", lambda cwd: "feature/orchestrator")
-    monkeypatch.setattr(runner, "dirty_worktree_scope", lambda *_: {"dirty_paths": []})
+    monkeypatch.setattr(runner, "has_worktree_changes", lambda _: False)
     monkeypatch.setattr(runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(runner, "merge_base", lambda cwd, base, head: "different-base")
     calls: list[object] = []
@@ -377,7 +377,7 @@ def test_runner_retries_cleanup_on_current_head_and_blocks_wrong_branch_or_dirty
     assert "expected feature/orchestrator" in capsys.readouterr().out
     monkeypatch.setattr(runner, "current_branch", lambda cwd: "feature/orchestrator")
     monkeypatch.setattr(
-        runner, "dirty_worktree_scope", lambda *_: {"dirty_paths": ["dirty.py"]}
+        runner, "has_worktree_changes", lambda _: True
     )
     assert runner.run_one_expensive_step(green).step == "blocked"
     assert "clean worktree required" in capsys.readouterr().out
@@ -610,8 +610,8 @@ def test_runner_arena_findings_fix_advances_with_findings_context(
     )
     monkeypatch.setattr(
         orchestrator_runner,
-        "dirty_worktree_scope",
-        lambda cwd, base, merge_base_ref=None: {"dirty_paths": []},
+        "has_worktree_changes",
+        lambda _: False,
     )
     state = _cycle(
         tmp_path,
@@ -703,8 +703,8 @@ def test_runner_preserves_direct_arena_fix_context_after_blocked_dismissal(
     )
     monkeypatch.setattr(
         orchestrator_runner,
-        "dirty_worktree_scope",
-        lambda cwd, base, merge_base_ref=None: {"dirty_paths": []},
+        "has_worktree_changes",
+        lambda _: False,
     )
     state = _cycle(
         tmp_path,
@@ -1371,7 +1371,7 @@ def test_followup_launch_is_atomic_with_supersession_and_recovers_interruption(
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda *args: True)
     monkeypatch.setattr(orchestrator_runner, "is_ancestor", lambda *args: True)
-    monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda *args, **kwargs: {"dirty_paths": []})
+    monkeypatch.setattr(orchestrator_runner, "has_worktree_changes", lambda _: False)
     state = _cycle(tmp_path, mode="deep", deslop_enabled=False, step_names=("broad-discovery", "base-signoff"))
     source = record_findings_decision(
         mark_review_step_pending(state, round_id="old-round", lane="review_base", step_index=0,
@@ -1475,8 +1475,8 @@ def test_runner_runs_real_followup_once_from_followup_pending(
     )
     monkeypatch.setattr(
         orchestrator_runner,
-        "dirty_worktree_scope",
-        lambda cwd, base, merge_base_ref=None: {"dirty_paths": []},
+        "has_worktree_changes",
+        lambda _: False,
     )
     state = _cycle(
         tmp_path,
@@ -1581,8 +1581,8 @@ def test_runner_runs_rewritten_followup_against_changed_patch_scope(
     )
     monkeypatch.setattr(
         orchestrator_runner,
-        "dirty_worktree_scope",
-        lambda cwd, base, merge_base_ref=None: {"dirty_paths": []},
+        "has_worktree_changes",
+        lambda _: False,
     )
     state = _cycle(
         tmp_path,
@@ -1646,8 +1646,8 @@ def test_runner_discovery_findings_fix_advances_with_findings_context(
     )
     monkeypatch.setattr(
         orchestrator_runner,
-        "dirty_worktree_scope",
-        lambda cwd, base, merge_base_ref=None: {"dirty_paths": []},
+        "has_worktree_changes",
+        lambda _: False,
     )
     state = _cycle(
         tmp_path,
@@ -1718,8 +1718,8 @@ def test_runner_rejects_direct_fix_rerun_without_committed_interdiff(
     )
     monkeypatch.setattr(
         orchestrator_runner,
-        "dirty_worktree_scope",
-        lambda cwd, base, merge_base_ref=None: {"dirty_paths": []},
+        "has_worktree_changes",
+        lambda _: False,
     )
     state = _cycle(
         tmp_path,
@@ -1765,11 +1765,8 @@ def test_runner_rejects_followup_with_committed_and_related_dirty_changes(
     )
     monkeypatch.setattr(
         orchestrator_runner,
-        "dirty_worktree_scope",
-        lambda cwd, base, merge_base_ref=None: {
-            "dirty_paths": ["app.txt"],
-            "related_dirty_paths": ["app.txt"],
-        },
+        "has_worktree_changes",
+        lambda _: True,
     )
     state = _cycle(
         tmp_path,

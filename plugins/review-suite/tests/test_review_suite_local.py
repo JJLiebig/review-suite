@@ -1368,23 +1368,17 @@ def test_load_operational_state_seeds_cooldown_failure_history(
 
 
 def test_ensure_clean_git_worktree_ignores_untracked_review_suite_scratch(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        "review_suite_local.meaningful_worktree_status_entries", lambda review_cwd: []
-    )
-
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    scratch = tmp_path / ".review-suite" / "notes"
+    scratch.mkdir(parents=True)
+    (scratch / "fix.md").write_text("notes", encoding="utf-8")
     ensure_clean_git_worktree(tmp_path)
 
-
-def test_ensure_clean_git_worktree_still_blocks_other_untracked_files(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(
-        "review_suite_local.meaningful_worktree_status_entries",
-        lambda review_cwd: [{"code": "??", "path": "todo.txt"}],
-    )
-
+    outside = tmp_path / "notes" / "drafts"
+    outside.mkdir(parents=True)
+    (outside / "todo.txt").write_text("pending", encoding="utf-8")
     with pytest.raises(ValueError, match="clean worktree"):
         ensure_clean_git_worktree(tmp_path)
 
@@ -1394,8 +1388,8 @@ def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_base_review(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        "review_suite_local.meaningful_worktree_status_entries",
-        lambda review_cwd: [{"code": " M", "path": "docs/notes.md"}],
+        "review_suite_local.has_worktree_changes",
+        lambda _: True,
     )
     with pytest.raises(ValueError, match="clean worktree"):
         ensure_clean_git_worktree(
@@ -1408,8 +1402,8 @@ def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_flagged_comm
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        "review_suite_local.meaningful_worktree_status_entries",
-        lambda review_cwd: [{"code": " M", "path": "docs/notes.md"}],
+        "review_suite_local.has_worktree_changes",
+        lambda _: True,
     )
     with pytest.raises(ValueError, match="clean worktree"):
         ensure_clean_git_worktree(
