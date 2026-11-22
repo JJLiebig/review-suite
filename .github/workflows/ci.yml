@@ -59,6 +59,3 @@ jobs:
             --durations=10
             ${{ runner.os == 'Windows' && '-m "not orchestrator_cli or windows_cli"' || '' }}
         run: just test
-
-      - name: Measure Git calls in one CLI scenario
-        run: uv run --locked python .github/measure-git-test.py
