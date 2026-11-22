@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -2319,6 +2320,7 @@ def test_id_json_accepts_identical_patch_with_shifted_lines_and_preserves_receip
 
     with monkeypatch.context() as context:
         context.setattr(subprocess, "Popen", count_git)
+        context.setattr(tempfile, "tempdir", str(tmp_path / "missing-temp-dir"))
         review._show_status(state, state_dir=tmp_path / "state", as_json=True)
     result = json.loads(capsys.readouterr().out)
     assert git_commands.count("cat-file") == 1
@@ -2383,18 +2385,14 @@ def test_interaction_batches_hunks_across_shared_paths(tmp_path, monkeypatch):
     new_base = _commit_file(repo, "unrelated.txt", "new unrelated line\n" * 4096, "unrelated edit")
 
     git_calls = []
-    patch_sizes = []
-    run = subprocess.run
+    popen = subprocess.Popen
 
     def count_git(command, *args, **kwargs):
-        result = run(command, *args, **kwargs)
         if command[0] == "git":
             git_calls.append(command)
-            if "--unified=0" in command:
-                patch_sizes.append(len(result.stdout))
-        return result
+        return popen(command, *args, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", count_git)
+    monkeypatch.setattr(subprocess, "Popen", count_git)
     result = interaction(repo, base, new_base, head)
 
     assert result == {
@@ -2404,7 +2402,9 @@ def test_interaction_batches_hunks_across_shared_paths(tmp_path, monkeypatch):
         "line_overlap_paths": ["café.txt", "last.txt"],
     }
     assert len(git_calls) <= 7
-    assert patch_sizes and max(patch_sizes) < 16_000
+    patch_calls = [command for command in git_calls if "--unified=0" in command]
+    assert patch_calls
+    assert all(set(command[command.index("--") + 1:]) == set(branch_contents) for command in patch_calls)
 
 
 @pytest.mark.parametrize("kind", ["binary", "delete", "rename", "mode"])

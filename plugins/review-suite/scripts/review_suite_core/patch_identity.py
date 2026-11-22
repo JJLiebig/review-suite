@@ -7,9 +7,10 @@ import hashlib
 import json
 import re
 import subprocess
-from contextlib import contextmanager
+from contextlib import ExitStack, closing, contextmanager
+from itertools import groupby
+from operator import itemgetter
 from pathlib import Path
-from tempfile import TemporaryFile
 from typing import Any, BinaryIO, Iterator
 
 VERSION = 1
@@ -52,7 +53,31 @@ def alignment_boundary(lines: list[bytes], start: int, count: int) -> bytes | No
     return None
 
 
-def _read_old_file(repo: Path, revision: str, output: BinaryIO) -> bytes | None:
+@contextmanager
+def _git_stream(
+    repo: Path, *args: str, requests: bool = False
+) -> Iterator[subprocess.Popen[bytes]]:
+    with subprocess.Popen(
+        ["git", *args],
+        cwd=repo,
+        stdin=subprocess.PIPE if requests else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    ) as process:
+        yield process
+        if process.stdin is not None:
+            process.stdin.close()
+        if returncode := process.wait():
+            raise ValueError(f"Git stream exited with status {returncode}")
+
+
+def _read_old_file(
+    repo: Path, revision: str, request: BinaryIO, output: BinaryIO
+) -> bytes | None:
+    # Git flushes each reply in --batch mode. Alternate requests and replies so
+    # neither pipe needs to hold more than one file's data.
+    request.write(f"{revision}\n".encode("utf-8"))
+    request.flush()
     header = output.readline()
     if header.endswith((b" missing\n", b" ambiguous\n")):
         return None
@@ -68,32 +93,14 @@ def _read_old_file(repo: Path, revision: str, output: BinaryIO) -> bytes | None:
         return None
 
 
-@contextmanager
-def _read_old_files(
-    repo: Path, base: str, paths: list[str]
-) -> Iterator[Iterator[bytes | None]]:
-    if not paths:
-        yield iter(())
-        return
-    revisions = [f"{base}:{path}" for path in paths]
-    # Give Git the requests without competing pipes for input and output. Read
-    # one response at a time so only the current file is needed for alignment.
-    with TemporaryFile() as requests, TemporaryFile() as errors:
-        for revision in revisions:
-            requests.write(f"{revision}\n".encode("utf-8"))
-        requests.seek(0)
-        with subprocess.Popen(
-            ["git", "cat-file", "--batch"],
-            cwd=repo,
-            stdin=requests,
-            stdout=subprocess.PIPE,
-            stderr=errors,
-        ) as process:
-            assert process.stdout is not None
-            yield (_read_old_file(repo, revision, process.stdout) for revision in revisions)
-            if process.wait():
-                errors.seek(0)
-                raise ValueError(errors.read().decode("utf-8", "replace"))
+def _patch_sections(patch: bytes) -> Iterator[bytes]:
+    start = None
+    for header in re.finditer(rb"^diff --git ", patch, re.MULTILINE):
+        if start is not None:
+            yield patch[start:header.start()]
+        start = header.end()
+    if start is not None:
+        yield patch[start:]
 
 
 def patch_identity(repo: Path, base: str, head: str) -> dict[str, Any]:
@@ -111,43 +118,45 @@ def patch_identity(repo: Path, base: str, head: str) -> dict[str, Any]:
         head,
     )
     raw = git(repo, "diff", "--raw", "--no-abbrev", "--no-renames", "-z", base, head)
-    canonical = [
-        b" ".join(item.split(b" ")[:2])
-        for item in raw.split(b"\0")
-        if item.startswith(b":")
-    ]
+    digest = hashlib.sha256()
+
+    def add_part(part: bytes) -> None:
+        digest.update(len(part).to_bytes(8, "big"))
+        digest.update(part)
+
+    for item in raw.split(b"\0"):
+        if item.startswith(b":"):
+            add_part(b" ".join(item.split(b" ")[:2]))
 
     ambiguous = False
-    sections = []
-    for section in re.split(rb"(?m)^diff --git ", patch)[1:]:
-        lines = section.splitlines(keepends=True)
-        binary = b"GIT binary patch\n" in lines
-        # A repeated deletion or insertion boundary cannot identify where an edit belongs.
-        # Retain blob identities in that case, so base movement cannot silently relocate it.
-        raw_path = next(
-            (line[6:].rstrip(b"\n") for line in lines if line.startswith(b"--- a/")),
-            None,
-        )
-        if not binary and any(line.startswith(b'--- "') for line in lines):
-            ambiguous = True
-        old_path = None
-        if raw_path and not raw_path.startswith(b'"'):
-            try:
-                old_path = raw_path.decode("utf-8")
-            except UnicodeError:
+    with ExitStack() as resources:
+        batch = None
+        for section in _patch_sections(patch):
+            lines = section.splitlines(keepends=True)
+            binary = b"GIT binary patch\n" in lines
+            # A repeated deletion or insertion boundary cannot identify where an edit belongs.
+            # Retain blob identities in that case, so base movement cannot silently relocate it.
+            old_path = next(
+                (line[6:].rstrip(b"\n") for line in lines if line.startswith(b"--- a/")),
+                None,
+            )
+            if not binary and any(line.startswith(b'--- "') for line in lines):
                 ambiguous = True
-        sections.append((lines, binary, old_path))
-
-    old_paths = [path for _, _, path in sections if path]
-    with _read_old_files(repo, base, old_paths) as old_files:
-        for lines, binary, old_path in sections:
             old_lines = []
-            if old_path:
-                old_file = next(old_files)
-                if old_file is None:
+            if old_path and not old_path.startswith(b'"'):
+                try:
+                    revision = f"{base}:{old_path.decode('utf-8')}"
+                except UnicodeError:
                     ambiguous = True
                 else:
-                    old_lines = old_file.splitlines(keepends=True)
+                    if batch is None:
+                        batch = resources.enter_context(_git_stream(repo, "cat-file", "--batch", requests=True))
+                    assert batch.stdin is not None and batch.stdout is not None
+                    old_file = _read_old_file(repo, revision, batch.stdin, batch.stdout)
+                    if old_file is None:
+                        ambiguous = True
+                    else:
+                        old_lines = old_file.splitlines(keepends=True)
             normalized = []
             for line in lines:
                 if line.startswith(b"index ") and not binary:
@@ -178,17 +187,14 @@ def patch_identity(repo: Path, base: str, head: str) -> dict[str, Any]:
                         + b" @@\n"
                     )
                 normalized.append(line)
-            canonical.append(b"".join(normalized))
+            add_part(b"".join(normalized))
     if ambiguous:
-        canonical.append(
+        add_part(
             git(repo, "diff", "--raw", "--no-abbrev", "--no-renames", base, head)
         )
-    digest = hashlib.sha256(
-        b"".join(len(part).to_bytes(8, "big") + part for part in canonical)
-    ).hexdigest()
     return {
         "version": VERSION,
-        "digest": digest,
+        "digest": digest.hexdigest(),
         "alignment": "unknown" if ambiguous else "unique",
     }
 
@@ -245,54 +251,76 @@ def _path_batches(paths: set[bytes]) -> Iterator[dict[bytes, str]]:
         yield batch
 
 
-def _patches_by_path(
-    repo: Path, left: str, right: str, paths: set[bytes]
-) -> dict[bytes, bytes]:
-    patches: dict[bytes, list[bytes]] = {}
-    for batch in _path_batches(paths):
-        patch = git(
-            repo,
-            "--literal-pathspecs",
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-renames",
-            "--no-color",
-            "--no-prefix",
-            "--unified=0",
-            left,
-            right,
-            "--",
-            *batch.values(),
-        )
-        for section in re.split(rb"(?m)^diff --git ", patch)[1:]:
-            headers = re.search(rb"^--- (.+)\n\+\+\+ (.+)\n(?=@@ )", section, re.MULTILINE)
-            if headers is None:
-                continue
-            matches = set()
-            for header in headers.groups():
-                path = header.removesuffix(b"\t")
+def _patch_lines(
+    repo: Path, left: str, right: str, batch: dict[bytes, str], *, include_edits: bool = False
+) -> Iterator[tuple[set[bytes], bytes]]:
+    with _git_stream(
+        repo,
+        "--literal-pathspecs",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--no-color",
+        "--no-prefix",
+        "--unified=0",
+        left,
+        right,
+        "--",
+        *batch.values(),
+    ) as process:
+        assert process.stdout is not None
+        paths: set[bytes] = set()
+        in_hunk = False
+        for line in process.stdout:
+            if line.startswith((b"diff --git ", b"Submodule ")):
+                paths = set()
+                in_hunk = False
+            elif line.startswith(b"@@ "):
+                in_hunk = True
+                if paths:
+                    yield paths, line
+            elif in_hunk:
+                if paths and include_edits:
+                    yield paths, line
+            elif line.startswith((b"--- ", b"+++ ")):
+                path = line[4:].removesuffix(b"\n").removesuffix(b"\t")
                 if path.startswith(b'"'):
                     path = codecs.escape_decode(path[1:-1])[0]
                 # An inline submodule diff reports paths under the selected gitlink.
                 while path and path != b"/dev/null":
                     if path in batch:
-                        matches.add(path)
+                        paths.add(path)
                     path = path.rpartition(b"/")[0]
-            for path in matches:
-                patches.setdefault(path, []).append(section[headers.end():])
-    return {path: b"".join(sections) for path, sections in patches.items()}
 
 
-def _has_moved_lines(patch: bytes) -> bool:
-    removed = set()
-    added = set()
-    for line in patch.splitlines():
-        if line.startswith(b"-") and not line.startswith(b"---"):
-            removed.add(line[1:])
-        if line.startswith(b"+") and not line.startswith(b"+++"):
-            added.add(line[1:])
-    return bool(removed & added)
+def _has_moved_lines(lines: Iterator[bytes]) -> bool:
+    removed: set[bytes] = set()
+    added: set[bytes] = set()
+    for line in lines:
+        for edit in line.splitlines():
+            if edit.startswith(b"-") and not edit.startswith(b"---"):
+                own, other = removed, added
+            elif edit.startswith(b"+") and not edit.startswith(b"+++"):
+                own, other = added, removed
+            else:
+                continue
+            content = edit[1:]
+            if content in other:
+                return True
+            own.add(content)
+    return False
+
+
+def _base_moved_lines(repo: Path, left: str, right: str, paths: set[bytes]) -> bool:
+    for batch in _path_batches(paths):
+        with closing(_patch_lines(repo, left, right, batch, include_edits=True)) as lines:
+            # Equivalent patches preserve file types and existence. Each shared
+            # path's edits are contiguous, including hunks from an inline submodule.
+            for _, file_lines in groupby(lines, key=itemgetter(0)):
+                if _has_moved_lines(line for _, line in file_lines):
+                    return True
+    return False
 
 
 def acceptance(state: dict[str, Any], current_head: str) -> dict[str, Any] | None:
@@ -312,27 +340,35 @@ def acceptance(state: dict[str, Any], current_head: str) -> dict[str, Any] | Non
             # Identical edit bytes cannot prove location across a base-side move.
             branch_paths = _changed_paths(repo, reviewed_base, reviewed_head)
             drift_paths = _changed_paths(repo, reviewed_base, base, "--no-renames")
-            patches = _patches_by_path(repo, reviewed_base, base, branch_paths & drift_paths)
-            if any(_has_moved_lines(patch) for patch in patches.values()):
+            if _base_moved_lines(repo, reviewed_base, base, branch_paths & drift_paths):
                 return None
         return {**receipt, "accepted_head": current_head, "accepted_base": base}
     except OSError, ValueError:
         return None
 
 
-def _intervals(patch: bytes) -> list[tuple[int, int]]:
-    result = []
-    for match in re.finditer(rb"^@@ -(\d+)(?:,(\d+))? ", patch, re.MULTILINE):
-        start = int(match[1])
-        count = int(match[2]) if match[2] is not None else 1
-        # Insertion boundaries touch both neighboring edits.
-        result.append((start, start + count))
-    return sorted(result)
+def _intervals_by_path(
+    repo: Path, left: str, right: str, paths: set[bytes]
+) -> dict[bytes, list[tuple[int, int]]]:
+    intervals: dict[bytes, list[tuple[int, int]]] = {}
+    for batch in _path_batches(paths):
+        for edited_paths, header in _patch_lines(repo, left, right, batch):
+            match = re.match(rb"^@@ -(\d+)(?:,(\d+))? ", header)
+            if match is None:
+                continue
+            start = int(match[1])
+            count = int(match[2]) if match[2] is not None else 1
+            # Insertion boundaries touch both neighboring edits.
+            for path in edited_paths:
+                intervals.setdefault(path, []).append((start, start + count))
+    for ranges in intervals.values():
+        ranges.sort()
+    return intervals
 
 
-def _line_overlap(left: bytes, right: bytes) -> bool:
-    left_intervals = iter(_intervals(left))
-    right_intervals = iter(_intervals(right))
+def _line_overlap(left: list[tuple[int, int]], right: list[tuple[int, int]]) -> bool:
+    left_intervals = iter(left)
+    right_intervals = iter(right)
     left_interval = next(left_intervals, None)
     right_interval = next(right_intervals, None)
     while left_interval is not None and right_interval is not None:
@@ -361,13 +397,13 @@ def interaction(repo: Path, old_base: str, new_base: str, head: str) -> dict[str
         ).splitlines()
     )
 
-    base_patches = _patches_by_path(repo, old_base, new_base, overlap)
-    branch_patches = _patches_by_path(repo, old_base, head, overlap)
+    base_intervals = _intervals_by_path(repo, old_base, new_base, overlap)
+    branch_intervals = _intervals_by_path(repo, old_base, head, overlap)
     ordered_paths = sorted(overlap)
     line_overlap = [
         path.decode("utf-8", "replace")
         for path in ordered_paths
-        if _line_overlap(base_patches.get(path, b""), branch_patches.get(path, b""))
+        if _line_overlap(base_intervals.get(path, []), branch_intervals.get(path, []))
     ]
     return {
         "check": bool(overlap or structural),
