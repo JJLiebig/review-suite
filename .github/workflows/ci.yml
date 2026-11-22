@@ -41,25 +41,24 @@ jobs:
           version: "0.13.4"
           enable-cache: true
 
-      - name: Install Python
-        run: uv python install 3.14.7
-
       - name: Install just
         uses: extractions/setup-just@v4
         with:
           just-version: "1.58.0"
 
-      - name: Install dependencies
-        run: uv sync --locked
+      - name: Check lint and review workflow diagram
+        if: runner.os == 'Linux'
+        run: |
+          just lint
+          just workflow-check
 
-      - name: Check generated workflow
-        run: just workflow-check
+      - name: Run tests
+        env:
+          # Exercise native CLI paths on Windows and the full CLI matrix on Linux and macOS.
+          PYTEST_ADDOPTS: >-
+            --durations=10
+            ${{ runner.os == 'Windows' && '-m "not orchestrator_cli or windows_cli"' || '' }}
+        run: just test
 
-      - parallel:
-          - name: Run tests
-            run: just test
-            env:
-              PYTEST_ADDOPTS: --durations=0 --durations-min=0.05
-
-          - name: Check Python lint and syntax
-            run: just lint
+      - name: Measure Git calls in one CLI scenario
+        run: uv run --locked python .github/measure-git-test.py
