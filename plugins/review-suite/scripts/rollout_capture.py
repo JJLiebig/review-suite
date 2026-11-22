@@ -12,7 +12,7 @@ DEFAULT_CODEX_HOME = Path.home() / ".codex"
 DEFAULT_SQLITE_STATE_PATH = DEFAULT_CODEX_HOME / "state_5.sqlite"
 REVIEW_SUBAGENT_SOURCE = json.dumps({"subagent": "review"}, separators=(",", ":"))
 
-_JSONL_CACHE: dict[tuple[str, int, int], list[dict[str, Any]]] = {}
+_JSONL_CACHE: dict[tuple[str, int, int], tuple[list[dict[str, Any]], bool]] = {}
 _ROLLOUT_SUMMARY_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _ROLLOUT_PARENT_CACHE: dict[tuple[str, int, int], str | None] = {}
 _THREAD_LOOKUP_CACHE: dict[
@@ -25,18 +25,24 @@ def _path_cache_key(path: Path) -> tuple[str, int, int]:
     return (str(path), stat.st_mtime_ns, stat.st_size)
 
 
-def iter_jsonl(path: Path) -> list[dict[str, Any]]:
+def _read_rollout_records(path: Path) -> tuple[list[dict[str, Any]], bool]:
     key = _path_cache_key(path)
     cached = _JSONL_CACHE.get(key)
     if cached is not None:
         return cached
     rows: list[dict[str, Any]] = []
+    incomplete = False
     with path.open("r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
-            if line.strip():
+            if not line.strip():
+                continue
+            try:
                 rows.append(json.loads(line))
-    _JSONL_CACHE[key] = rows
-    return rows
+            except json.JSONDecodeError:
+                incomplete = True
+    result = rows, incomplete
+    _JSONL_CACHE[key] = result
+    return result
 
 
 def _token_usage_dict(value: dict[str, Any] | None) -> dict[str, int] | None:
@@ -48,7 +54,11 @@ def read_rollout_summary(path: Path) -> dict[str, Any]:
     cached = _ROLLOUT_SUMMARY_CACHE.get(key)
     if cached is not None:
         return cached
-    rows = iter_jsonl(path)
+    rows, incomplete = _read_rollout_records(path)
+    if incomplete:
+        # A missing record can hide a turn boundary. Only use readable records
+        # to track activity, not to recover a verdict.
+        return {"rollout_incomplete": True}
     last_turn_context_index = 0
     for index, row in enumerate(rows):
         if row.get("type") == "turn_context":
@@ -223,7 +233,7 @@ def _is_meaningful_activity(row: dict[str, Any]) -> bool:
 
 
 def rollout_activity_summary(path: Path) -> dict[str, Any]:
-    rows = iter_jsonl(path)
+    rows, _ = _read_rollout_records(path)
     last_event_at: datetime | None = None
     last_meaningful_at: datetime | None = None
     last_meaningful_type: str | None = None
@@ -389,4 +399,5 @@ def enrich_thread_record(thread_row: dict[str, Any]) -> dict[str, Any]:
     enriched["usage"] = summary.get("usage") or {}
     enriched["reviewer_output"] = summary.get("reviewer_output") or ""
     enriched["task_error"] = summary.get("task_error") or ""
+    enriched["rollout_incomplete"] = bool(summary.get("rollout_incomplete"))
     return enriched
