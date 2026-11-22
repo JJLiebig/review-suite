@@ -31,6 +31,7 @@ from review_suite_core import (
     normalize_cwd,
     OPENCODE_MODEL_PREFIX,
     parse_model_label,
+    resolve_cd_path,
     resolve_ref,
     resolve_repo_root,
     SUPPORTED_REASONING_EFFORTS,
@@ -57,7 +58,9 @@ from review_suite_core.cycle_status import (
     _validation_summary,
     add_status_arguments,
     cycle_status_fields,
+    load_status_cycle,
     public_cycle_status,
+    recorded_acceptance,
     recorded_cycle_status,
 )
 from review_suite_core.orchestrator_runner import run_one_expensive_step
@@ -873,7 +876,10 @@ def _reject_id_creation_args(args: argparse.Namespace, state: dict[str, Any]) ->
     requested_cwd = ""
     if args.cd is not None:
         if args.show_status:
-            requested = Path(args.cd).expanduser().resolve(strict=False)
+            scheme, _, tail = bound_cwd.partition(":")
+            distro, _, _ = tail.partition(":")
+            known_distros = (distro,) if scheme.lower() == "wsl" and distro else ()
+            requested = resolve_cd_path(args.cd, wsl_distributions=known_distros).resolve(strict=False)
             bound = cwd_path_from_normalized(bound_cwd, discover_wsl=False).resolve(strict=False)
             requested_cwd = bound_cwd if requested.is_relative_to(bound) else str(requested)
         else:
@@ -1338,6 +1344,7 @@ def _show_recorded_status(state: dict[str, Any], *, state_dir: Path, as_json: bo
         write_text(json.dumps(public_cycle_status(payload, state), sort_keys=True))
     else:
         action = _action_payload(state, state_dir=state_dir, summary=payload, recorded=True)
+        payload["next_action"] = _next_action_label(payload, action)
         if action and payload["review_ladder"] != "invalidated":
             payload["Action"] = action
         emit_toon(payload)
@@ -2000,11 +2007,19 @@ def _resume_progress(
         from review_suite_core.patch_identity import acceptance, record_acceptance
         live = _current_cycle_identity_if_compatible(state)
         accepted = acceptance(state, live["head"]) if live else None
-        if accepted and (live["head"] != dict(state.get("identity") or {}).get("head")
-                         or live["merge_base"] != dict(state.get("identity") or {}).get("merge_base")):
-            updated = _with_current_identity(state, head=live["head"],
-                                             merge_base_head=live["merge_base"], base_drift=live.get("base_drift"))
-            return record_acceptance(updated, accepted)
+        if accepted:
+            identity = state["identity"]
+            if (live["head"], live["merge_base"]) != (identity.get("head"), identity.get("merge_base")):
+                state = _with_current_identity(
+                    state, head=live["head"], merge_base_head=live["merge_base"],
+                    base_drift=live.get("base_drift"),
+                )
+                return record_acceptance(state, accepted)
+            if recorded_acceptance(state) != accepted or (
+                state.get("accepted_review") and "accepted_review_scope" not in state
+            ):
+                return record_acceptance(state, accepted)
+            return state
         identity = _github_pending_head_change_identity(state)
         if not identity:
             return state
@@ -3660,7 +3675,7 @@ def main() -> int:
         arena_configuration = _configure_repo_arena(args)
         if arena_configuration is not None:
             return arena_configuration
-        state_dir = Path(default_state_dir(read_only=True) if args.show_status else default_state_dir()).resolve(strict=False)
+        state_dir = Path(default_state_dir()).resolve(strict=False) if not args.show_status else None
         has_validation_status = _has_validation_status(args)
         has_restart_brief = args.restart_brief is not None
         if args.fixes_validated is not None:
@@ -3891,7 +3906,10 @@ def main() -> int:
         if args.id:
             try:
                 if args.show_status:
-                    state = load_cycle_by_public_id(state_dir, str(args.id))
+                    state_dir, state = load_status_cycle(
+                        str(args.id),
+                        locate=lambda: Path(default_state_dir(read_only=True)).resolve(strict=False),
+                    )
                 else:
                     state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
             except UnknownReviewIdError:

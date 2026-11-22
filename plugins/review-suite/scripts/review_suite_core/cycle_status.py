@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 from argparse import ArgumentError, ArgumentParser
+from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
 
 from typing import Any
 
 from .round_store import load_round, unique_round_state_dirs
+from .cycle_store import UnknownReviewIdError, load_cycle_by_public_id
+from .state_locations import read_state_dir
 
 
 STAGE_REVIEW_GREEN = "review-green"
@@ -879,8 +882,18 @@ def recorded_cycle_status(state: dict[str, Any], *, state_dir: Path) -> dict[str
     elif summary["review_ladder"] == HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER:
         payload["status"] = HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER
 
-    if "base_interaction" not in summary and (accepted := recorded_acceptance(state)):
-        payload["base_interaction"] = bound_interaction(state, accepted, recorded=True)
+    if "base_interaction" not in summary:
+        if accepted := recorded_acceptance(state):
+            payload["base_interaction"] = bound_interaction(state, accepted, recorded=True)
+        elif not state.get("review_patch"):
+            identity = state.get("identity") or {}
+            review_heads = state.get("review_heads") or {}
+            head = identity.get("head")
+            reviewed = review_heads.get("last_reviewed_head") or review_heads.get("last_followup_head") or head
+            base = identity.get("merge_base")
+            # An unfinished cycle may only have its original head/base observation.
+            if head and head == reviewed and base and base != head and identity.get("cwd"):
+                payload["base_interaction"] = {**_no_base_drift(), "status": "not_required"}
     return payload
 
 
@@ -895,11 +908,22 @@ def add_status_arguments(parser: ArgumentParser) -> None:
     )
 
 
+def load_status_cycle(
+    public_id: str, *, locate: Callable[[], Path] = read_state_dir,
+) -> tuple[Path, dict[str, Any]]:
+    state_dir = locate()
+    try:
+        return state_dir, load_cycle_by_public_id(state_dir, public_id)
+    except UnknownReviewIdError:
+        # A writer may have moved legacy state after the first lookup picked it.
+        moved = locate()
+        if moved == state_dir:
+            raise
+        return moved, load_cycle_by_public_id(moved, public_id)
+
+
 def try_json_status(argv: list[str]) -> int | None:
     """Serve the polling command without loading the orchestration CLI."""
-    from .cycle_store import load_cycle_by_public_id
-    from .state_locations import read_state_dir
-
     parser = ArgumentParser(add_help=False, allow_abbrev=False, exit_on_error=False)
     add_status_arguments(parser)
     try:
@@ -911,8 +935,7 @@ def try_json_status(argv: list[str]) -> int | None:
     try:
         if not args.id:
             raise ValueError("--show-status requires --id")
-        state_dir = read_state_dir()
-        state = load_cycle_by_public_id(state_dir, args.id)
+        state_dir, state = load_status_cycle(args.id)
         payload = recorded_cycle_status(state, state_dir=state_dir)
     except (OSError, ValueError) as exc:
         status = "usage_error" if isinstance(exc, ValueError) else "error"

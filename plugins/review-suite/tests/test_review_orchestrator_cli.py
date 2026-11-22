@@ -4744,7 +4744,9 @@ def test_show_status_json_by_id(
     repo = tmp_path / "repo"
     state_dir = tmp_path / "default-state"
     _init_repo(repo)
-    head = _commit_file(repo, "app.txt", "base\n", "base")
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/status-json")
+    head = _commit_file(repo, "app.txt", "feature\n", "feature")
     _start_fast_review(monkeypatch, repo, "--id", "rvw_caller0001")
     before = _cycle_payload(state_dir, "rvw_caller0001")
     capsys.readouterr()
@@ -4767,6 +4769,7 @@ def test_show_status_json_by_id(
         "base": "main",
     }
     assert {"steps", "rounds", "round_history", "review_ladder"} <= set(payload)
+    assert payload["base_interaction"]["status"] == "not_required"
     assert "Action" not in payload
     assert "superseded_by" not in payload
     assert "supersedes" not in payload
@@ -4789,7 +4792,9 @@ def test_show_status_json_by_id(
 @pytest.mark.windows_cli
 def test_installed_status_reads_moved_cycle_without_running_subprocesses(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    state_dir = tmp_path / "state"
+    home = tmp_path / "home"
+    codex = home / ".codex"
+    state_dir = codex / "state" / "review-suite"
     _init_repo(repo)
     base = _commit_file(repo, "app.py", "value = 1\n", "base")
     _git(repo, "checkout", "-b", "feature")
@@ -4821,15 +4826,15 @@ def test_installed_status_reads_moved_cycle_without_running_subprocesses(tmp_pat
     )
     # A known id resolves even with the aggregate index unavailable.
     orchestrator_store.index_path(state_dir).unlink()
+    argv = [sys.executable, str(install / "scripts" / "review.py"), "--id", saved["public_id"], "--show-status", "--json"]
+    env = os.environ | {
+        "HOME": str(home), "USERPROFILE": str(home),
+        "CODEX_HOME": str(codex), "PYTHONPATH": str(tmp_path),
+        "STATUS_LAUNCH_LOG": str(launch_log),
+    }
+    env.pop("REVIEW_SUITE_STATE_DIR", None)
     result = subprocess.run(
-        [sys.executable, str(install / "scripts" / "review.py"), "--id", saved["public_id"], "--show-status", "--json"],
-        cwd=tmp_path,
-        env=os.environ | {
-            "CODEX_HOME": str(tmp_path / "codex"),
-            "PYTHONPATH": str(tmp_path),
-            "STATUS_LAUNCH_LOG": str(launch_log),
-            "REVIEW_SUITE_STATE_DIR": str(state_dir),
-        },
+        argv, cwd=tmp_path, env=env,
         capture_output=True, text=True, encoding="utf-8", check=True,
     )
     assert launch_log.read_text(encoding="utf-8").splitlines() == ["python"]
@@ -4840,6 +4845,17 @@ def test_installed_status_reads_moved_cycle_without_running_subprocesses(tmp_pat
     assert payload["reviewed_head"] == payload["accepted_head"] == payload["current_head"] == head
     assert payload["base_interaction"]["status"] == "not_required"
     assert orchestrator_store.load_cycle_by_key(state_dir, saved["cycle_key"]) == saved
+    assert not (home / ".agents").exists()
+
+    if os.name == "nt":
+        mounted = f"/mnt/{repo.drive[0].lower()}/{repo.relative_to(repo.anchor).as_posix()}"
+        launch_log.write_text("", encoding="utf-8")
+        from_mount = subprocess.run(
+            [*argv, "--cd", mounted], cwd=tmp_path, env=env,
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        )
+        assert from_mount.stdout == result.stdout
+        assert launch_log.read_text(encoding="utf-8").splitlines() == ["python"]
 
 
 @pytest.mark.parametrize(
@@ -7495,6 +7511,18 @@ def test_base_interaction_not_required_without_base_drift(monkeypatch, tmp_path)
     assert code == 0
     assert status["base_interaction"]["status"] == "not_required"
     assert calls == []
+
+    args = ["--id", state["public_id"], "--state-dir", str(state_dir)]
+    _git(repo, "commit", "--allow-empty", "-m", "equivalent head")
+    carried_head = _git(repo, "rev-parse", "HEAD")
+    _run_review(monkeypatch, [*args, "--check-base-interaction"])
+    _, carried = _run_review(monkeypatch, [*args, "--show-status"])
+    assert carried["accepted_head"] == carried_head != head
+    _git(repo, "reset", "--hard", head)
+    _run_review(monkeypatch, args)
+    _, restored = _run_review(monkeypatch, [*args, "--show-status"])
+    assert restored["accepted_head"] == head
+    assert restored["done"]
 
 
 @pytest.mark.parametrize("verdict", ["clean", "findings"])
