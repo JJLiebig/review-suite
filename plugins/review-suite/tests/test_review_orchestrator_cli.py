@@ -19,6 +19,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import review_orchestrator as review
 import review_suite_arena
+import review_suite_local
 from review_suite_core import orchestrator_runner, orchestrator_store
 from review_suite_core.orchestrator_state import mark_followup_review_pending, mark_review_step_pending
 from review_suite_local import write_round
@@ -1710,6 +1711,32 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert state["validation"]["note"] == "CI unavailable for this docs-only change"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 2
+
+
+def test_start_rechecks_worktree_at_dispatch(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "app.py", "value = 1\n", "base")
+    _git(repo, "checkout", "-b", "feature")
+    _commit_file(repo, "app.py", "value = 2\n", "feature")
+    write_round = review_suite_arena.write_round
+
+    def edit_during_round_setup(state_dir, payload):
+        write_round(state_dir, payload)
+        (repo / "app.py").write_text("value = 3\n", encoding="utf-8")
+
+    def unexpected_launch(**kwargs):
+        pytest.fail("Reviewer launched after the worktree became dirty")
+
+    monkeypatch.setattr(review_suite_arena, "write_round", edit_during_round_setup)
+    monkeypatch.setattr(review_suite_local, "_launch_reviewer_process", unexpected_launch)
+    errors = _capture_errors(monkeypatch)
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", "--mode", "fast", "--cd", str(repo), "--base", "main"]
+    )
+
+    assert review.main() == 2
+    assert "requires a clean worktree" in errors[0]
 
 
 def test_start_observes_head_moved_while_reviewer_runs(monkeypatch, tmp_path):

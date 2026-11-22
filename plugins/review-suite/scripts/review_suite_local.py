@@ -23,6 +23,7 @@ from typing import Any, Callable
 
 from review_suite_runtime_bootstrap import launcher_script_path
 from review_suite_core.costing import MODEL_PRICING_PER_MILLION
+from review_suite_core.git_reads import with_git_reads
 from review_suite_core.round_store import (
     load_round as load_round,
     round_path,
@@ -3202,9 +3203,11 @@ def normalize_grade_basis(value: str, rubric: dict[str, Any]) -> str:
     return basis
 
 
+@with_git_reads
 def ensure_clean_git_worktree(
     review_cwd: Path, *, review_scope: dict[str, Any] | None = None
 ) -> None:
+    """Check the live worktree at the point a review requires it."""
     try:
         dirty = has_worktree_changes(review_cwd)
     except ValueError as exc:
