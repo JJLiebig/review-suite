@@ -2305,12 +2305,24 @@ def _equivalent_review_repo(tmp_path):
     return repo, state, reviewed, new_base
 
 
-def test_id_json_accepts_identical_patch_with_shifted_lines_and_preserves_receipt(tmp_path, capsys):
+def test_id_json_accepts_identical_patch_with_shifted_lines_and_preserves_receipt(tmp_path, capsys, monkeypatch):
     from review_suite_core.orchestrator_state import review_ladder_summary
     repo, state, reviewed, new_base = _equivalent_review_repo(tmp_path)
     head = _git(repo, "rev-parse", "HEAD")
-    review._show_status(state, state_dir=tmp_path / "state", as_json=True)
+    git_commands = []
+    run = subprocess.run
+
+    def count_git(command, *args, **kwargs):
+        if command[0] == "git":
+            git_commands.append(command[1])
+        return run(command, *args, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(subprocess, "run", count_git)
+        review._show_status(state, state_dir=tmp_path / "state", as_json=True)
     result = json.loads(capsys.readouterr().out)
+    assert git_commands.count("cat-file") == 1
+    assert "show" not in git_commands
     assert result["done"] is False
     assert result["accepted_head"] == head
     state["validation"]["head"] = head
@@ -2342,6 +2354,50 @@ def test_equal_patch_never_completes_ineligible_review(tmp_path, blocker):
     else:
         state["stage"] = blocker
     assert not review_ladder_summary(state, current_head=_git(repo, "rev-parse", "HEAD"))["done"]
+
+
+def test_interaction_batches_hunks_across_shared_paths(tmp_path, monkeypatch):
+    from review_suite_core.patch_identity import interaction
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    content = "".join(f"line {i}\n" for i in range(20))
+    branch_contents = {
+        "plain space.txt": content.replace("line 17\n", "branch late edit\n"),
+        "café.txt": content.replace("line 3\n", "line 3\nbranch insertion\n"),
+        "last.txt": content.replace("line 11\n", "branch replacement\n"),
+    }
+    for path in branch_contents:
+        (repo / path).write_text(content, encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "original files")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-b", "feature")
+    for path, changed in branch_contents.items():
+        head = _commit_file(repo, path, changed, "branch edit")
+    _git(repo, "checkout", "main")
+    changed = content.replace("line 3\n", "base early edit\n").replace("line 11\n", "base late edit\n")
+    for path in branch_contents:
+        new_base = _commit_file(repo, path, changed, "base edits")
+
+    git_calls = []
+    run = subprocess.run
+
+    def count_git(command, *args, **kwargs):
+        if command[0] == "git":
+            git_calls.append(command)
+        return run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", count_git)
+    result = interaction(repo, base, new_base, head)
+
+    assert result == {
+        "check": True,
+        "reason": "shared_paths",
+        "paths": sorted(branch_contents),
+        "line_overlap_paths": ["café.txt", "last.txt"],
+    }
+    assert len(git_calls) <= 7
 
 
 @pytest.mark.parametrize("kind", ["binary", "delete", "rename", "mode"])
@@ -2416,7 +2472,7 @@ def test_targeted_followup_handles_changed_patch_with_equal_head_trees(tmp_path,
 
 @pytest.mark.parametrize("move_block", [False, True])
 def test_moved_replacement_requires_targeted_review(tmp_path, move_block):
-    from review_suite_core.patch_identity import acceptance, reviewed_receipt
+    from review_suite_core.patch_identity import acceptance, patch_identity, reviewed_receipt
     repo = tmp_path / "repo"
     _init_repo(repo)
     before = "def first():\n    prepare()\n    unique_call()\n    finish()\n\n\n\ndef second():\n    prepare()\n    finish()\n"
@@ -2439,7 +2495,9 @@ def test_moved_replacement_requires_targeted_review(tmp_path, move_block):
         state["review_patch"] = reviewed_receipt(state)
         _git(repo, "checkout", "main")
         moved = "def first():\n    return 1\n\n\n\ndef second():\n    prepare()\n    unique_call()\n    finish()\n"
-    _commit_file(repo, "app.py", moved, "move call between functions")
+    moved_base = _commit_file(repo, "app.py", moved, "move call between functions")
     _git(repo, "checkout", "-b", "rebased-feature")
     new_head = _commit_file(repo, "app.py", moved.replace("unique_call", "reviewed_call"), "same bytes at different semantic location")
+    if move_block:
+        assert patch_identity(repo, moved_base, new_head) == state["review_patch"]["patch"]
     assert acceptance(state, new_head) is None

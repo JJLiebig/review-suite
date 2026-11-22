@@ -7412,7 +7412,25 @@ def test_base_interaction_not_required_without_base_drift(monkeypatch, tmp_path)
         merge_base=base, requested_mode="fast", effective_mode="fast", selection="auto", effective_selection="stable")
     state = review.record_clean_decision(state, round_id="original", lane="review_base", reviewed_head=head)
     state["stage"] = "review-green"
+    state["validation"].update(full_suite="passed", ci="passed", head=head)
     state = orchestrator_store.save_cycle(state_dir, state)
+    assert state["review_patch"]["reviewed_head"] == head
+    git_commands = []
+    run = subprocess.run
+
+    def count_git(command, *args, **kwargs):
+        if command[0] == "git":
+            git_commands.append(command[1])
+        return run(command, *args, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(subprocess, "run", count_git)
+        code, status = _run_review(context, ["--id", state["public_id"], "--state-dir", str(state_dir), "--show-status"])
+    assert code == 0
+    assert status["done"] is True
+    assert status["base_interaction"]["status"] == "not_required"
+    assert not {"diff", "show", "cat-file"}.intersection(git_commands)
+
     calls = _stub_interaction(monkeypatch)
     code, status = _run_review(monkeypatch, ["--id", state["public_id"], "--state-dir", str(state_dir), "--check-base-interaction"])
     assert code == 0

@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import re
 import subprocess
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 VERSION = 1
 
 
-def git(repo: Path, *args: str) -> bytes:
-    result = subprocess.run(["git", *args], cwd=repo, capture_output=True, check=False)
+def git(repo: Path, *args: str, input: bytes | None = None) -> bytes:
+    result = subprocess.run(
+        ["git", *args], cwd=repo, input=input, capture_output=True, check=False
+    )
     if result.returncode:
         raise ValueError(result.stderr.decode("utf-8", "replace"))
     return result.stdout
@@ -48,6 +52,31 @@ def alignment_boundary(lines: list[bytes], start: int, count: int) -> bytes | No
     return None
 
 
+def _read_old_files(repo: Path, base: str, paths: set[str]) -> dict[str, bytes]:
+    if not paths:
+        return {}
+    revisions = {path: f"{base}:{path}" for path in paths}
+    requests = "".join(f"{revision}\n" for revision in revisions.values())
+    output = BytesIO(git(repo, "cat-file", "--batch", input=requests.encode("utf-8")))
+    files = {}
+    for path, revision in revisions.items():
+        header = output.readline()
+        if header.endswith((b" missing\n", b" ambiguous\n")):
+            continue
+        _, kind, size = header.split()
+        content = output.read(int(size))
+        output.read(1)  # Batch output adds one newline after each object's bytes.
+        if kind == b"blob":
+            files[path] = content
+        else:
+            # A gitlink can resolve to a commit already present in this repository.
+            try:
+                files[path] = git(repo, "show", revision)
+            except ValueError:
+                pass
+    return files
+
+
 def patch_identity(repo: Path, base: str, head: str) -> dict[str, Any]:
     # Byte output avoids platform newline conversion and preserves whitespace.
     patch = git(
@@ -69,28 +98,36 @@ def patch_identity(repo: Path, base: str, head: str) -> dict[str, Any]:
         if item.startswith(b":")
     ]
 
-    binary = False
     ambiguous = False
+    sections = []
     for section in re.split(rb"(?m)^diff --git ", patch)[1:]:
         lines = section.splitlines(keepends=True)
         binary = b"GIT binary patch\n" in lines
-        normalized = []
         # A repeated deletion or insertion boundary cannot identify where an edit belongs.
         # Retain blob identities in that case, so base movement cannot silently relocate it.
-        old_path = next(
+        raw_path = next(
             (line[6:].rstrip(b"\n") for line in lines if line.startswith(b"--- a/")),
             None,
         )
-        old_lines = []
         if not binary and any(line.startswith(b'--- "') for line in lines):
             ambiguous = True
-        if old_path and not old_path.startswith(b'"'):
+        old_path = None
+        if raw_path and not raw_path.startswith(b'"'):
             try:
-                old_lines = git(
-                    repo, "show", f"{base}:{old_path.decode('utf-8')}"
-                ).splitlines(keepends=True)
-            except UnicodeError, ValueError:
+                old_path = raw_path.decode("utf-8")
+            except UnicodeError:
                 ambiguous = True
+        sections.append((lines, binary, old_path))
+
+    old_files = _read_old_files(repo, base, {path for _, _, path in sections if path})
+    for lines, binary, old_path in sections:
+        old_lines = []
+        if old_path:
+            if old_path in old_files:
+                old_lines = old_files[old_path].splitlines(keepends=True)
+            else:
+                ambiguous = True
+        normalized = []
         for line in lines:
             if line.startswith(b"index ") and not binary:
                 continue
@@ -165,6 +202,54 @@ def reviewed_receipt(state: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _changed_paths(repo: Path, left: str, right: str, *options: str) -> set[bytes]:
+    paths = git(repo, "diff", *options, "--name-only", "-z", left, right)
+    return set(paths.split(b"\0")) - {b""}
+
+
+def _patches_by_path(
+    repo: Path, left: str, right: str, paths: set[bytes]
+) -> dict[bytes, bytes]:
+    if not paths:
+        return {}
+    patch = git(
+        repo,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--no-color",
+        "--no-prefix",
+        "--submodule=short",
+        "--unified=0",
+        left,
+        right,
+    )
+    patches = {}
+    for section in re.split(rb"(?m)^diff --git ", patch)[1:]:
+        names, _, body = section.partition(b"\n")
+        # With no prefixes or renames, Git prints the same name twice. The
+        # midpoint works for names containing spaces and for C-quoted names.
+        path = names[: len(names) // 2]
+        if path.startswith(b'"'):
+            path = codecs.escape_decode(path[1:-1])[0]
+        if path in paths:
+            # A file type change can emit separate deletion and addition sections.
+            patches[path] = patches.get(path, b"") + body
+    return patches
+
+
+def _has_moved_lines(patch: bytes) -> bool:
+    removed = set()
+    added = set()
+    for line in patch.splitlines():
+        if line.startswith(b"-") and not line.startswith(b"---"):
+            removed.add(line[1:])
+        if line.startswith(b"+") and not line.startswith(b"+++"):
+            added.add(line[1:])
+    return bool(removed & added)
+
+
 def acceptance(state: dict[str, Any], current_head: str) -> dict[str, Any] | None:
     try:
         receipt = reviewed_receipt(state)
@@ -172,54 +257,53 @@ def acceptance(state: dict[str, Any], current_head: str) -> dict[str, Any] | Non
             return None
         repo = Path(receipt["repo"])
         base = git(repo, "merge-base", receipt["base"], current_head).decode().strip()
-        patch = patch_identity(repo, base, current_head)
-        if patch != receipt["patch"]:
-            return None
-        # Identical edit bytes cannot prove location across a base-side move.
-        changed_paths = git(
-            repo,
-            "diff",
-            "--name-only",
-            "-z",
-            receipt["reviewed_base"],
-            receipt["reviewed_head"],
-        ).split(b"\0")
-        for raw_path in filter(None, changed_paths):
-            drift = git(
-                repo,
-                "diff",
-                "--no-renames",
-                "--unified=0",
-                receipt["reviewed_base"],
-                base,
-                "--",
-                raw_path.decode("utf-8", "surrogateescape"),
-            )
-            removed = {
-                line[1:]
-                for line in drift.splitlines()
-                if line.startswith(b"-") and not line.startswith(b"---")
-            }
-            added = {
-                line[1:]
-                for line in drift.splitlines()
-                if line.startswith(b"+") and not line.startswith(b"+++")
-            }
-            if removed & added:
+        reviewed_base = receipt["reviewed_base"]
+        reviewed_head = receipt["reviewed_head"]
+        # The stored receipt already describes this exact pair of commits.
+        if (base, current_head) != (reviewed_base, reviewed_head):
+            if patch_identity(repo, base, current_head) != receipt["patch"]:
+                return None
+        if base != reviewed_base:
+            # Identical edit bytes cannot prove location across a base-side move.
+            branch_paths = _changed_paths(repo, reviewed_base, reviewed_head)
+            drift_paths = _changed_paths(repo, reviewed_base, base, "--no-renames")
+            patches = _patches_by_path(repo, reviewed_base, base, branch_paths & drift_paths)
+            if any(_has_moved_lines(patch) for patch in patches.values()):
                 return None
         return {**receipt, "accepted_head": current_head, "accepted_base": base}
     except OSError, ValueError:
         return None
 
 
+def _intervals(patch: bytes) -> list[tuple[int, int]]:
+    result = []
+    for match in re.finditer(rb"^@@ -(\d+)(?:,(\d+))? ", patch, re.MULTILINE):
+        start = int(match[1])
+        count = int(match[2]) if match[2] is not None else 1
+        # Insertion boundaries touch both neighboring edits.
+        result.append((start, start + count))
+    return sorted(result)
+
+
+def _line_overlap(left: bytes, right: bytes) -> bool:
+    left_intervals = iter(_intervals(left))
+    right_intervals = iter(_intervals(right))
+    left_interval = next(left_intervals, None)
+    right_interval = next(right_intervals, None)
+    while left_interval is not None and right_interval is not None:
+        if left_interval[1] < right_interval[0]:
+            left_interval = next(left_intervals, None)
+        elif right_interval[1] < left_interval[0]:
+            right_interval = next(right_intervals, None)
+        else:
+            return True
+    return False
+
+
 def interaction(repo: Path, old_base: str, new_base: str, head: str) -> dict[str, Any]:
-    drift = git(
-        repo, "diff", "--no-renames", "--name-only", "-z", old_base, new_base
-    ).split(b"\0")
-    branch = git(
-        repo, "diff", "--no-renames", "--name-only", "-z", old_base, head
-    ).split(b"\0")
-    overlap = sorted(set(drift) & set(branch) - {b""})
+    drift = _changed_paths(repo, old_base, new_base, "--no-renames")
+    branch = _changed_paths(repo, old_base, head, "--no-renames")
+    overlap = drift & branch
     raw = git(repo, "diff", "--no-renames", "--numstat", old_base, new_base)
     branch_summary = git(repo, "diff", "--no-renames", "--summary", old_base, head)
     structural = b"-\t-\t" in raw or any(
@@ -232,35 +316,14 @@ def interaction(repo: Path, old_base: str, new_base: str, head: str) -> dict[str
         ).splitlines()
     )
 
-    def intervals(left: str, right: str, path: str) -> list[tuple[int, int]]:
-        patch = git(
-            repo,
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--unified=0",
-            left,
-            right,
-            "--",
-            path,
-        )
-        result = []
-        for match in re.finditer(rb"^@@ -(\d+)(?:,(\d+))? ", patch, re.MULTILINE):
-            start = int(match[1])
-            count = int(match[2]) if match[2] is not None else 1
-            # Insertion boundaries touch both neighboring edits.
-            result.append((start, start + count))
-        return result
-
-    line_overlap = []
-    for raw_path in overlap:
-        path = raw_path.decode("utf-8", "replace")
-        if any(
-            a <= d and c <= b
-            for a, b in intervals(old_base, new_base, path)
-            for c, d in intervals(old_base, head, path)
-        ):
-            line_overlap.append(path)
+    base_patches = _patches_by_path(repo, old_base, new_base, overlap)
+    branch_patches = _patches_by_path(repo, old_base, head, overlap)
+    ordered_paths = sorted(overlap)
+    line_overlap = [
+        path.decode("utf-8", "replace")
+        for path in ordered_paths
+        if _line_overlap(base_patches.get(path, b""), branch_patches.get(path, b""))
+    ]
     return {
         "check": bool(overlap or structural),
         "line_overlap_paths": line_overlap,
@@ -269,7 +332,7 @@ def interaction(repo: Path, old_base: str, new_base: str, head: str) -> dict[str
         else "shared_paths"
         if overlap
         else "inspect_dependencies",
-        "paths": [p.decode("utf-8", "replace") for p in overlap],
+        "paths": [p.decode("utf-8", "replace") for p in ordered_paths],
     }
 
 
