@@ -6,8 +6,35 @@ from hashlib import blake2s
 from pathlib import Path
 from typing import Any
 
+from .cycle_status import (
+    CONVERGENCE_DECISIONS as CONVERGENCE_DECISIONS,
+    DEFAULT_ACCEPTED_FINDINGS_LIMIT as DEFAULT_ACCEPTED_FINDINGS_LIMIT,
+    _compact as _compact,
+    _effective_findings_heads as _effective_findings_heads,
+    CHANGED_SINCE_REVIEW_PATH_LIMIT as CHANGED_SINCE_REVIEW_PATH_LIMIT,
+    CONVERGENCE_DEFAULTS as CONVERGENCE_DEFAULTS,
+    DECISION_CLEAN as DECISION_CLEAN,
+    DECISION_COMMANDS as DECISION_COMMANDS,
+    DECISION_FINDINGS as DECISION_FINDINGS,
+    DESLOP_STATUS_CLOSED as DESLOP_STATUS_CLOSED,
+    DESLOP_STATUS_DONE as DESLOP_STATUS_DONE,
+    GITHUB_RESULT_CLEAN as GITHUB_RESULT_CLEAN,
+    GITHUB_RESULT_WAIVED as GITHUB_RESULT_WAIVED,
+    HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER as HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
+    HEAD_CHANGED_AFTER_GREEN_REVIEW_NOTE as HEAD_CHANGED_AFTER_GREEN_REVIEW_NOTE,
+    STAGE_LOCAL_GREEN_HANDOFF as STAGE_LOCAL_GREEN_HANDOFF,
+    STAGE_REVIEW_GREEN as STAGE_REVIEW_GREEN,
+    VALIDATION_READY_STATUSES as VALIDATION_READY_STATUSES,
+    _convergence as _convergence,
+    _effective_mode as _effective_mode,
+    _optional_text as _optional_text,
+    convergence_summary as convergence_summary,
+    green_review_head_change_summary as green_review_head_change_summary,
+    review_ladder_summary as review_ladder_summary,
+    validation_blockers as validation_blockers,
+)
 from .orchestrator_profiles import SUPPORTED_MODES, SUPPORTED_SELECTIONS
-from .paths import cwd_path_from_normalized, normalize_cwd
+from .paths import normalize_cwd
 
 
 ORCHESTRATOR_STATE_SCHEMA_VERSION = 1
@@ -17,33 +44,18 @@ STAGE_RUNNING = "running"
 STAGE_DECISION_PENDING = "decision-pending"
 STAGE_FIX_PENDING = "fix-pending"
 STAGE_FOLLOWUP_PENDING = "followup-pending"
-STAGE_REVIEW_GREEN = "review-green"
-STAGE_LOCAL_GREEN_HANDOFF = "local-green-handoff"
 STAGE_BLOCKED = "blocked"
 STAGE_CRASHED = "crashed"
 STAGE_RETRY_REQUESTED = "retry-requested"
 STAGE_DISMISSED = "dismissed"
 STAGE_ABORTED = "aborted"
 
-DECISION_CLEAN = "clean"
-DECISION_FINDINGS = "findings"
-DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
 
-CONVERGENCE_DECISIONS = {"CONTINUE", "REPLAN", "RESLICE"}
 CONTRACT_CONFLICTS = set(
     "goal acceptance scope stop-condition owner authorized-behavior unit-boundary".split()
 )
-DEFAULT_ACCEPTED_FINDINGS_LIMIT = 3
-CONVERGENCE_DEFAULTS = {
-    "status": "ACTIVE",
-    "accepted_findings_heads": [],
-    "continue_used": False,
-    "decisions": [],
-}
 
-GITHUB_RESULT_CLEAN = "clean"
 GITHUB_RESULT_FINDINGS = "findings"
-GITHUB_RESULT_WAIVED = "waived"
 GITHUB_RESULT_COMMANDS = {
     GITHUB_RESULT_CLEAN,
     GITHUB_RESULT_FINDINGS,
@@ -51,9 +63,7 @@ GITHUB_RESULT_COMMANDS = {
 }
 
 DESLOP_STATUS_TRACKED = "tracked"
-DESLOP_STATUS_DONE = "done"
 DESLOP_STATUS_FAILED = "failed"
-DESLOP_STATUS_CLOSED = "closed"
 DESLOP_STATUS_SKIPPED = "skipped"
 CONFORMANCE_VERDICTS = {"CONFORMS", "MATERIALLY_DRIFTED", "NOT_APPLICABLE"}
 NO_WORK_STAGES = {
@@ -73,14 +83,6 @@ FIX_REVIEW_POLICY = (
     "or extra confidence. Commit/amend fixes before recording completion or repeating review."
 )
 VALIDATION_STATUSES = {"unknown", *CLI_VALIDATION_STATUSES}
-VALIDATION_READY_STATUSES = {"passed", "waived"}
-HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER = "head_changed_after_review"
-HEAD_CHANGED_AFTER_GREEN_REVIEW_NOTE = (
-    "The PR patch changed. Continue the same review id to review only what changed "
-    "and check concrete interactions with base changes. Keep required current-head checks."
-)
-
-CHANGED_SINCE_REVIEW_PATH_LIMIT = 20
 
 
 def _required_text(value: Any, *, field: str) -> str:
@@ -88,268 +90,6 @@ def _required_text(value: Any, *, field: str) -> str:
     if not text:
         raise ValueError(f"{field} is required")
     return text
-
-
-def _optional_text(value: Any) -> str | None:
-    text = str(value or "").strip()
-    return text or None
-
-
-def _base_drift_equivalent_head(state: dict[str, Any], head: str) -> str:
-    # Historical receipts always name the commit actually inspected.
-    return head
-
-
-def _review_ladder_heads(state: dict[str, Any]) -> list[str]:
-    review_heads = dict(state.get("review_heads") or {})
-    heads = [str(review_heads[key]) for key in ("last_followup_head", "last_reviewed_head") if review_heads.get(key)]
-    if not heads:
-        head = str(review_heads.get("head") or dict(state.get("identity") or {}).get("head") or "")
-        if head:
-            heads.append(head)
-    return heads
-
-
-def _review_ladder_head(state: dict[str, Any], *, current_head: str = "") -> str:
-    heads = _review_ladder_heads(state)
-    if current_head:
-        for head in heads:
-            if head == current_head:
-                return head
-    return heads[0] if heads else ""
-
-
-def _github_review_required(state: dict[str, Any]) -> bool:
-    github_status = str(
-        dict(state.get("github_review") or {}).get("status") or "unknown"
-    ).strip()
-    return not (_effective_mode(state) == "fast" and github_status == "unknown")
-
-
-def _github_review_matches_head(state: dict[str, Any], comparison_head: str) -> bool:
-    github_review = dict(state.get("github_review") or {})
-    if str(github_review.get("status") or "").strip() not in {
-        GITHUB_RESULT_CLEAN,
-        GITHUB_RESULT_WAIVED,
-    }:
-        return False
-    reviewed_head = _base_drift_equivalent_head(
-        state, str(github_review.get("reviewed_head") or "").strip()
-    )
-    return bool(reviewed_head and comparison_head and reviewed_head == comparison_head)
-
-
-def _validation_ready(state: dict[str, Any]) -> bool:
-    return not validation_blockers(state)
-
-
-def validation_blockers(state: dict[str, Any]) -> list[str]:
-    validation = dict(state.get("validation") or {})
-    note = _optional_text(validation.get("note"))
-    blockers: list[str] = []
-    identity = dict(state.get("identity") or {})
-    checked_head = validation.get("head") or dict(state.get("review_patch") or {}).get("reviewed_head") or identity.get("head")
-    live_head = identity.get("head")
-    if state.get("review_patch") and identity.get("cwd"):
-        from .patch_identity import git
-        try:
-            live_head = git(cwd_path_from_normalized(identity["cwd"]), "rev-parse", "HEAD").decode().strip()
-        except (OSError, ValueError):
-            pass
-    for key in ("full_suite", "ci"):
-        value = str(validation.get(key) or "unknown").strip() or "unknown"
-        if live_head and checked_head and live_head != checked_head:
-            value = "pending"
-        if value not in VALIDATION_READY_STATUSES:
-            blockers.append(f"{key}:{value}")
-        elif value == "waived" and not note:
-            blockers.append(f"{key}:waived_without_note")
-    return blockers
-
-
-def _deslop_closed_or_untracked(state: dict[str, Any]) -> bool:
-    deslop = dict(state.get("deslop") or {})
-    return (
-        not bool(deslop.get("tracked"))
-        or str(deslop.get("status") or "").strip() == DESLOP_STATUS_CLOSED
-    )
-
-
-def review_ladder_summary(
-    state: dict[str, Any], *, current_head: str | None = None
-) -> dict[str, Any]:
-    stage = str(state.get("stage") or "").strip()
-    original_head = str(dict(state.get("review_heads") or {}).get("last_reviewed_head") or dict(state.get("identity") or {}).get("head") or "")
-    summary: dict[str, Any] = {"done": False, "review_ladder": "pending", "reviewed_head": original_head}
-    if current_head:
-        summary["current_head"] = current_head
-    if stage not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
-        return summary
-
-    comparison_head = str(current_head or "").strip()
-    from .patch_identity import acceptance, bound_interaction
-    accepted = acceptance(state, comparison_head) if comparison_head else None
-    if accepted and convergence_summary(state).get("status") == "ACTIVE" and not state.get("active_findings"):
-        original = accepted["reviewed_head"]
-        # Patch acceptance binds local signoff independently of unfinished external gates.
-        # Keep every historical receipt on the commit that was actually inspected.
-        github_required = _github_review_required(state)
-        github_review = dict(state.get("github_review") or {})
-        github_terminal = github_review.get("status") in {
-            GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED,
-        }
-        github_head = str(github_review.get("reviewed_head") or "")
-        github_ready = github_terminal and bool(
-            accepted if github_head == comparison_head else acceptance(state, github_head)
-        )
-        equivalent_github = github_ready and not _github_review_matches_head(state, comparison_head)
-        if (comparison_head != original or equivalent_github) and (not github_terminal or github_ready):
-            base_interaction = bound_interaction(state, accepted)
-            ready = (
-                (not github_required or github_ready)
-                and _deslop_closed_or_untracked(state)
-                and not validation_blockers(state)
-                and not base_interaction["check"]
-            )
-            return {**summary, "done": ready, "review_ladder": "complete" if ready else "pending",
-                    "reviewed_head": original, "current_head": comparison_head,
-                    "accepted_head": comparison_head, "acceptance": accepted,
-                    "required_checks": "current_head_required",
-                    "validation_head": dict(state.get("validation") or {}).get("head") or original,
-                    "base_interaction": base_interaction}
-    if comparison_head == original_head and state.get("review_patch") and not accepted:
-        from .patch_identity import git
-        receipt = dict(state["review_patch"])
-        try:
-            live_base = git(Path(receipt["repo"]), "merge-base", receipt["base"], comparison_head).decode().strip()
-            if live_base != receipt["reviewed_base"]:
-                return {**summary, "review_ladder": "invalidated"}
-        except (OSError, ValueError):
-            return summary
-    reviewed_head = _review_ladder_head(state, current_head=comparison_head)
-    comparison_head = comparison_head or reviewed_head
-    if reviewed_head and comparison_head and reviewed_head != comparison_head:
-        summary.update(
-            {
-                "review_ladder": "invalidated",
-                "reviewed_head": reviewed_head,
-                "current_head": comparison_head,
-            }
-        )
-        return summary
-
-    github_review = dict(state.get("github_review") or {})
-    github_status = str(github_review.get("status") or "").strip()
-    github_head = _base_drift_equivalent_head(
-        state, str(github_review.get("reviewed_head") or "").strip()
-    )
-    if (
-        github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}
-        and github_head
-        and comparison_head
-        and github_head != comparison_head
-    ):
-        summary.update(
-            {
-                "review_ladder": "invalidated",
-                "reviewed_head": github_head,
-                "current_head": comparison_head,
-            }
-        )
-        return summary
-
-    github_required = _github_review_required(state)
-    if not github_required and _deslop_closed_or_untracked(state):
-        summary.update({"done": True, "review_ladder": "complete", "accepted_head": comparison_head})
-        return summary
-
-    github_ready = _github_review_matches_head(state, comparison_head)
-    if github_ready and _validation_ready(state) and _deslop_closed_or_untracked(state):
-        summary.update({"done": True, "review_ladder": "complete", "accepted_head": comparison_head})
-    return summary
-
-
-def _changed_since_review_paths(
-    state: dict[str, Any],
-    *,
-    reviewed_head: str,
-    current_head: str,
-) -> list[str] | None:
-    from .workflow_state import diff_paths_between
-
-    cwd = str(dict(state.get("identity") or {}).get("cwd") or "").strip()
-    if not cwd:
-        return None
-    try:
-        return sorted(
-            diff_paths_between(
-                cwd_path_from_normalized(cwd), reviewed_head, current_head
-            )
-        )
-    except OSError, ValueError:
-        return None
-
-
-def green_review_head_change_summary(
-    state: dict[str, Any],
-    *,
-    current_head: str | None = None,
-    summary: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    base_summary = dict(
-        summary or review_ladder_summary(state, current_head=current_head)
-    )
-    if base_summary.get("review_ladder") != "invalidated":
-        return None
-    if str(state.get("stage") or "").strip() not in {
-        STAGE_REVIEW_GREEN,
-        STAGE_LOCAL_GREEN_HANDOFF,
-    }:
-        return None
-    if not _deslop_closed_or_untracked(state):
-        return None
-
-    reviewed_head = str(base_summary.get("reviewed_head") or "").strip()
-    current_head_value = str(
-        base_summary.get("current_head") or current_head or ""
-    ).strip()
-    if (
-        not reviewed_head
-        or not current_head_value
-        or reviewed_head == current_head_value
-    ):
-        return None
-
-    github_review = dict(state.get("github_review") or {})
-    github_status = str(github_review.get("status") or "unknown").strip() or "unknown"
-    github_reviewed_head = _base_drift_equivalent_head(
-        state, str(github_review.get("reviewed_head") or "").strip()
-    )
-    github_ready = (
-        github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}
-        and github_reviewed_head == reviewed_head
-    )
-    github_optional = _effective_mode(state) == "fast" and github_status == "unknown"
-    if not (github_ready or github_optional):
-        return None
-
-    changed_summary = {
-        **base_summary,
-        "done": False,
-        "review_ladder": HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
-        "head_changed_after_review": True,
-        "note": HEAD_CHANGED_AFTER_GREEN_REVIEW_NOTE,
-    }
-    paths = _changed_since_review_paths(
-        state, reviewed_head=reviewed_head, current_head=current_head_value
-    )
-    if paths is not None:
-        changed_summary["changed_since_review"] = paths[
-            :CHANGED_SINCE_REVIEW_PATH_LIMIT
-        ]
-        if len(paths) > CHANGED_SINCE_REVIEW_PATH_LIMIT:
-            changed_summary["changed_since_review_count"] = len(paths)
-    return changed_summary
 
 
 def _normalize_mode(mode: str, *, field: str) -> str:
@@ -522,12 +262,6 @@ def _copy_state(state: dict[str, Any]) -> dict[str, Any]:
     return deepcopy(state)
 
 
-def _compact(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value for key, value in payload.items() if value not in (None, "", [], {})
-    }
-
-
 def _state_head(state: dict[str, Any]) -> str:
     return _required_text(
         dict(state.get("identity") or {}).get("head"), field="state.identity.head"
@@ -624,45 +358,6 @@ def _set_stage(
 ) -> None:
     state["stage"] = stage
     state["pending_action"] = _compact(deepcopy(pending_action or {})) or None
-
-
-def _convergence(state: dict[str, Any]) -> dict[str, Any]:
-    return state.setdefault("convergence", deepcopy(CONVERGENCE_DEFAULTS))
-
-
-def convergence_summary(state: dict[str, Any]) -> dict[str, Any]:
-    convergence = dict(state.get("convergence") or {})
-    return _compact(
-        {
-            "status": convergence.get("status") or "ACTIVE",
-            "reason": convergence.get("reason"),
-            "conflict": convergence.get("conflict"),
-            "decision": convergence.get("decision"),
-            "accepted_findings_heads": len(_effective_findings_heads(state)),
-            "accepted_findings_limit": DEFAULT_ACCEPTED_FINDINGS_LIMIT,
-            "recommendations": sorted(
-                CONVERGENCE_DECISIONS
-                - ({"CONTINUE"} if convergence.get("continue_used") else set())
-            ),
-        }
-    )
-
-
-def _effective_findings_heads(state: dict[str, Any]) -> list[dict[str, Any]]:
-    corrected = {
-        item["accepted_findings_index"]
-        for item in (
-            state.get("decision_corrections", [])
-            + state.get("finding_dispositions", [])
-        )
-    }
-    return [
-        item
-        for index, item in enumerate(
-            dict(state.get("convergence") or {}).get("accepted_findings_heads") or []
-        )
-        if index not in corrected
-    ]
 
 
 def _require_convergence_decision_inplace(
@@ -892,11 +587,6 @@ def _review_step_max_review_rounds(
     if rounds == 0:
         raise ValueError("review_plan.steps[].max_review_rounds must be > 0")
     return rounds
-
-
-def _effective_mode(state: dict[str, Any]) -> str:
-    mode = dict(state.get("mode") or {})
-    return str(mode.get("effective") or mode.get("requested") or "").strip()
 
 
 def _findings_use_followup(state: dict[str, Any]) -> bool:
@@ -1809,6 +1499,9 @@ def mark_followup_review_pending(
 
 
 def _archive_review_patch(state: dict[str, Any]) -> None:
+    state.pop("accepted_review", None)
+    state.pop("accepted_review_scope", None)
+    state.pop("accepted_review_github_head", None)
     if receipt := state.pop("review_patch", None):
         state.setdefault("review_patch_history", []).append(receipt)
 

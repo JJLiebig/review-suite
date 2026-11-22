@@ -17,10 +17,8 @@ from review_suite_core.orchestrator_profiles import (
     SUPPORTED_MODES,
     load_orchestrator_profiles,
 )
-from review_suite_core.orchestrator_state import (
-    _github_review_required,
-    deslop_should_run,
-)
+from review_suite_core.cycle_status import _github_review_required
+from review_suite_core.orchestrator_state import deslop_should_run
 
 
 def model_label(model: str, effort: str, tier: str | None = None) -> str:

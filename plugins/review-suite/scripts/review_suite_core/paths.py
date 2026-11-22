@@ -195,7 +195,7 @@ def _native_wsl_key(cwd: str) -> str | None:
     return _canonical_wsl_key(distro, normalized)
 
 
-def cwd_path_from_normalized(normalized_cwd: str) -> Path:
+def cwd_path_from_normalized(normalized_cwd: str, *, discover_wsl: bool = True) -> Path:
     value = str(normalized_cwd or "").strip()
     if value.lower().startswith("wsl:"):
         _scheme, rest = value.split(":", 1)
@@ -208,7 +208,7 @@ def cwd_path_from_normalized(normalized_cwd: str) -> Path:
                 matching_distro = next(
                     (
                         item
-                        for item in _list_wsl_distributions()
+                        for item in (_list_wsl_distributions() if discover_wsl else ())
                         if item.lower() == distro.lower()
                     ),
                     distro,

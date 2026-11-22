@@ -15,7 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import review_suite_core.workflow_state as workflow_state_module
-import review
+import review_orchestrator as review
 import review_suite_core.review_branch_status as review_state
 from review_suite_local import write_round
 

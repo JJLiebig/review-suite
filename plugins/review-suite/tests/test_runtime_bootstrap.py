@@ -16,7 +16,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-import review
+import review_orchestrator as review
 import review_suite_arena
 import review_suite_runtime_bootstrap as runtime_bootstrap
 from review_suite_local import _review_status_command

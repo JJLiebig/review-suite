@@ -14,7 +14,7 @@ from operator import itemgetter
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 
-VERSION = 1
+from .cycle_status import PATCH_RECEIPT_VERSION as VERSION, _no_base_drift, bound_interaction as bound_interaction
 PATHSPEC_BUDGET = 24_000  # Leave room for Git options under Windows' command-line limit.
 HUNK_BATCH_BUDGET = 32_000  # Limit retained interval data when many shared lines change.
 
@@ -468,32 +468,30 @@ def delta_prompt(old_base: str, old_head: str, new_base: str, new_head: str) -> 
     )
 
 
-def bound_interaction(
-    state: dict[str, Any], accepted: dict[str, Any]
-) -> dict[str, Any]:
-    result = ({"check": False, "reason": "no_base_drift", "paths": [], "line_overlap_paths": []}
-              if accepted["reviewed_base"] == accepted["accepted_base"] else interaction(
-                  Path(accepted["repo"]), accepted["reviewed_base"],
-                  accepted["accepted_base"], accepted["reviewed_head"]))
-    binding = {
-        "head": accepted["accepted_head"],
-        "base": accepted["accepted_base"],
-        "patch": accepted["patch"],
+def _interaction_scope(accepted: dict[str, Any]) -> dict[str, Any]:
+    if accepted["reviewed_base"] == accepted["accepted_base"]:
+        return _no_base_drift()
+    return interaction(
+        Path(accepted["repo"]), accepted["reviewed_base"],
+        accepted["accepted_base"], accepted["reviewed_head"],
+    )
+
+
+def record_acceptance(state: dict[str, Any], accepted: dict[str, Any]) -> dict[str, Any]:
+    if state.get("accepted_review") == accepted and "accepted_review_scope" in state:
+        return state
+    github_head = (state.get("github_review") or {}).get("reviewed_head")
+    github_acceptance = (
+        acceptance(state, github_head)
+        if github_head and github_head not in {accepted["reviewed_head"], accepted["accepted_head"]}
+        else None
+    )
+    return {
+        **state,
+        "accepted_review": accepted,
+        "accepted_review_scope": _interaction_scope(accepted),
+        "accepted_review_github_head": github_head if github_acceptance else None,
     }
-    receipt = dict(state.get("base_interaction_receipt") or {})
-    if receipt.get("binding") == binding:
-        result.update(check=False, status=receipt["status"])
-        if receipt["status"] == "overridden":
-            result["override"] = {
-                "reason": receipt["reason"],
-                "head": binding["head"],
-                "base": binding["base"],
-            }
-        else:
-            result["receipt"] = receipt
-    else:
-        result["status"] = "outstanding" if result["check"] else "not_required"
-    return result
 
 
 def interaction_prompt(accepted: dict[str, Any], scope: dict[str, Any]) -> str:
