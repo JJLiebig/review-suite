@@ -4808,7 +4808,7 @@ def test_installed_status_reads_moved_cycle_without_running_subprocesses(tmp_pat
     moved = _commit_file(repo, "app.py", "value = 3\n", "unreviewed follow-up")
     assert moved != head
 
-    install = tmp_path / "install"
+    install = home / ".agents" / "skills" / "review-suite" / "plugins" / "review-suite"
     shutil.copytree(SCRIPT_DIR, install / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(SCRIPT_DIR.parent / ".codex-plugin", install / ".codex-plugin")
     launch_log = tmp_path / "launches.txt"
@@ -4845,17 +4845,20 @@ def test_installed_status_reads_moved_cycle_without_running_subprocesses(tmp_pat
     assert payload["reviewed_head"] == payload["accepted_head"] == payload["current_head"] == head
     assert payload["base_interaction"]["status"] == "not_required"
     assert orchestrator_store.load_cycle_by_key(state_dir, saved["cycle_key"]) == saved
-    assert not (home / ".agents").exists()
+    assert not (home / ".agents" / "state").exists()
 
-    if os.name == "nt":
-        mounted = f"/mnt/{repo.drive[0].lower()}/{repo.relative_to(repo.anchor).as_posix()}"
-        launch_log.write_text("", encoding="utf-8")
-        from_mount = subprocess.run(
-            [*argv, "--cd", mounted], cwd=tmp_path, env=env,
-            capture_output=True, text=True, encoding="utf-8", check=True,
-        )
-        assert from_mount.stdout == result.stdout
-        assert launch_log.read_text(encoding="utf-8").splitlines() == ["python"]
+    requested_cwd = (
+        f"/mnt/{repo.drive[0].lower()}/{repo.relative_to(repo.anchor).as_posix()}"
+        if os.name == "nt" else str(repo)
+    )
+    launch_log.write_text("", encoding="utf-8")
+    from_cd = subprocess.run(
+        [*argv, "--cd", requested_cwd], cwd=tmp_path, env=env,
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert from_cd.returncode == 0, from_cd.stdout + from_cd.stderr
+    assert from_cd.stdout == result.stdout
+    assert launch_log.read_text(encoding="utf-8").splitlines() == ["python"]
 
 
 @pytest.mark.parametrize(

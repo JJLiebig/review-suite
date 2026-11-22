@@ -91,7 +91,7 @@ def test_install_first_run_moves_history_links_old_path_and_migrates_settings(
     ]
     first = subprocess.run(command, capture_output=True, text=True, timeout=40)
     assert first.returncode == 0, first.stdout + first.stderr
-    assert target.is_dir()
+    assert target.is_dir(), first.stdout + first.stderr
     assert legacy.is_junction() or legacy.is_symlink()
     assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
     assert (target / "names-backup-123/original.json").read_bytes() == b"backup"
