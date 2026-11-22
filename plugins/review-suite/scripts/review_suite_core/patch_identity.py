@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import subprocess
+from bisect import bisect_right
 from contextlib import ExitStack, closing, contextmanager
 from itertools import groupby
 from operator import itemgetter
@@ -15,6 +16,7 @@ from typing import Any, BinaryIO, Iterator
 
 VERSION = 1
 PATHSPEC_BUDGET = 24_000  # Leave room for Git options under Windows' command-line limit.
+HUNK_BATCH_BUDGET = 32_000  # Limit retained interval data when many shared lines change.
 
 
 def git(repo: Path, *args: str) -> bytes:
@@ -234,19 +236,25 @@ def _changed_paths(repo: Path, left: str, right: str, *options: str) -> set[byte
     return set(paths.split(b"\0")) - {b""}
 
 
-def _path_batches(paths: set[bytes]) -> Iterator[dict[bytes, str]]:
+def _path_batches(
+    paths: set[bytes], hunk_estimates: dict[bytes, int] | None = None
+) -> Iterator[dict[bytes, str]]:
     batch: dict[bytes, str] = {}
     size = 0
+    hunks = 0
     for raw_path in sorted(paths):
         path = raw_path.decode("utf-8", "surrogateescape")
         quoted = subprocess.list2cmdline([path]).encode("utf-8", "surrogateescape")
         cost = len(quoted) + 1
-        if batch and size + cost > PATHSPEC_BUDGET:
+        hunk_cost = hunk_estimates.get(raw_path, 0) if hunk_estimates else 0
+        if batch and (size + cost > PATHSPEC_BUDGET or hunks + hunk_cost > HUNK_BATCH_BUDGET):
             yield batch
             batch = {}
             size = 0
+            hunks = 0
         batch[raw_path] = path
         size += cost
+        hunks += hunk_cost
     if batch:
         yield batch
 
@@ -347,73 +355,103 @@ def acceptance(state: dict[str, Any], current_head: str) -> dict[str, Any] | Non
         return None
 
 
-def _intervals_by_path(
-    repo: Path, left: str, right: str, paths: set[bytes]
-) -> dict[bytes, list[tuple[int, int]]]:
-    intervals: dict[bytes, list[tuple[int, int]]] = {}
-    for batch in _path_batches(paths):
-        for edited_paths, header in _patch_lines(repo, left, right, batch):
+def _hunk_intervals(
+    repo: Path, left: str, right: str, batch: dict[bytes, str]
+) -> Iterator[tuple[set[bytes], int, int]]:
+    with closing(_patch_lines(repo, left, right, batch)) as lines:
+        for edited_paths, header in lines:
             match = re.match(rb"^@@ -(\d+)(?:,(\d+))? ", header)
             if match is None:
                 continue
             start = int(match[1])
             count = int(match[2]) if match[2] is not None else 1
             # Insertion boundaries touch both neighboring edits.
-            for path in edited_paths:
-                intervals.setdefault(path, []).append((start, start + count))
+            yield edited_paths, start, start + count
+
+
+def _intervals_by_path(
+    repo: Path, left: str, right: str, batch: dict[bytes, str]
+) -> dict[bytes, list[tuple[int, int]]]:
+    intervals: dict[bytes, list[tuple[int, int]]] = {}
+    for edited_paths, start, end in _hunk_intervals(repo, left, right, batch):
+        for path in edited_paths:
+            intervals.setdefault(path, []).append((start, end))
     for ranges in intervals.values():
         ranges.sort()
+        # Keep the furthest end so a binary search also works for nested ranges.
+        max_end = 0
+        for index, (start, end) in enumerate(ranges):
+            max_end = max(max_end, end)
+            if max_end != end:
+                ranges[index] = (start, max_end)
     return intervals
 
 
-def _line_overlap(left: list[tuple[int, int]], right: list[tuple[int, int]]) -> bool:
-    left_intervals = iter(left)
-    right_intervals = iter(right)
-    left_interval = next(left_intervals, None)
-    right_interval = next(right_intervals, None)
-    while left_interval is not None and right_interval is not None:
-        if left_interval[1] < right_interval[0]:
-            left_interval = next(left_intervals, None)
-        elif right_interval[1] < left_interval[0]:
-            right_interval = next(right_intervals, None)
-        else:
-            return True
-    return False
+def _line_overlap_paths(
+    repo: Path, old_base: str, new_base: str, head: str, batch: dict[bytes, str]
+) -> set[bytes]:
+    overlaps = set()
+    branch_intervals = _intervals_by_path(repo, old_base, head, batch)
+    if not branch_intervals:
+        return overlaps
+    with closing(_hunk_intervals(repo, old_base, new_base, batch)) as base_intervals:
+        for paths, start, end in base_intervals:
+            for path in paths:
+                if ranges := branch_intervals.get(path):
+                    index = bisect_right(ranges, end, key=itemgetter(0))
+                    if index and ranges[index - 1][1] >= start:
+                        overlaps.add(path)
+                        del branch_intervals[path]
+            if not branch_intervals:
+                break
+    return overlaps
+
+
+def _hunk_estimates(repo: Path, left: str, right: str, batch: dict[bytes, str]) -> dict[bytes, int]:
+    numstat = git(
+        repo, "--literal-pathspecs", "diff", "--no-renames", "--no-ext-diff", "--no-textconv",
+        "--numstat", "-z", left, right, "--", *batch.values(),
+    )
+    estimates = {}
+    for entry in filter(None, numstat.split(b"\0")):
+        added, deleted, path = entry.split(b"\t", 2)
+        if added != b"-":
+            # Each text hunk adds or removes at least one line.
+            cost = int(added) + int(deleted)
+            while path:
+                if path in batch:
+                    estimates[path] = estimates.get(path, 0) + cost
+                path = path.rpartition(b"/")[0]
+    return estimates
 
 
 def interaction(repo: Path, old_base: str, new_base: str, head: str) -> dict[str, Any]:
     drift = _changed_paths(repo, old_base, new_base, "--no-renames")
     branch = _changed_paths(repo, old_base, head, "--no-renames")
     overlap = drift & branch
-    raw = git(repo, "diff", "--no-renames", "--numstat", old_base, new_base)
+    base_stats = git(repo, "diff", "--no-renames", "--numstat", "--summary", old_base, new_base)
     branch_summary = git(repo, "diff", "--no-renames", "--summary", old_base, head)
-    structural = b"-\t-\t" in raw or any(
+    structural = b"-\t-\t" in base_stats or any(
         line.lstrip().startswith(
             (b"delete mode", b"create mode", b"old mode", b"new mode")
         )
-        for line in (
-            git(repo, "diff", "--no-renames", "--summary", old_base, new_base)
-            + branch_summary
-        ).splitlines()
+        for line in (base_stats + branch_summary).splitlines()
     )
 
-    base_intervals = _intervals_by_path(repo, old_base, new_base, overlap)
-    branch_intervals = _intervals_by_path(repo, old_base, head, overlap)
-    ordered_paths = sorted(overlap)
-    line_overlap = [
-        path.decode("utf-8", "replace")
-        for path in ordered_paths
-        if _line_overlap(base_intervals.get(path, []), branch_intervals.get(path, []))
-    ]
+    line_overlap = set()
+    for batch in _path_batches(overlap):
+        estimates = _hunk_estimates(repo, old_base, head, batch) if len(batch) > 1 else None
+        for bounded_batch in _path_batches(set(batch), estimates):
+            line_overlap.update(_line_overlap_paths(repo, old_base, new_base, head, bounded_batch))
     return {
         "check": bool(overlap or structural),
-        "line_overlap_paths": line_overlap,
+        "line_overlap_paths": [p.decode("utf-8", "replace") for p in sorted(line_overlap)],
         "reason": "structural_or_unknown"
         if structural
         else "shared_paths"
         if overlap
         else "inspect_dependencies",
-        "paths": [p.decode("utf-8", "replace") for p in ordered_paths],
+        "paths": [p.decode("utf-8", "replace") for p in sorted(overlap)],
     }
 
 

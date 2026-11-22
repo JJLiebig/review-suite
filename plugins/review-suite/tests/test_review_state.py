@@ -2358,8 +2358,12 @@ def test_equal_patch_never_completes_ineligible_review(tmp_path, blocker):
     assert not review_ladder_summary(state, current_head=_git(repo, "rev-parse", "HEAD"))["done"]
 
 
-def test_interaction_batches_hunks_across_shared_paths(tmp_path, monkeypatch):
-    from review_suite_core.patch_identity import interaction
+@pytest.mark.parametrize(("hunk_budget", "patch_call_count"), [(None, 2), (3, 4)])
+def test_interaction_batches_hunks_across_shared_paths(tmp_path, monkeypatch, hunk_budget, patch_call_count):
+    from review_suite_core import patch_identity
+
+    if hunk_budget is not None:
+        monkeypatch.setattr(patch_identity, "HUNK_BATCH_BUDGET", hunk_budget)
 
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -2393,7 +2397,7 @@ def test_interaction_batches_hunks_across_shared_paths(tmp_path, monkeypatch):
         return popen(command, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", count_git)
-    result = interaction(repo, base, new_base, head)
+    result = patch_identity.interaction(repo, base, new_base, head)
 
     assert result == {
         "check": True,
@@ -2401,10 +2405,10 @@ def test_interaction_batches_hunks_across_shared_paths(tmp_path, monkeypatch):
         "paths": sorted(branch_contents),
         "line_overlap_paths": ["café.txt", "last.txt"],
     }
-    assert len(git_calls) <= 7
     patch_calls = [command for command in git_calls if "--unified=0" in command]
-    assert patch_calls
-    assert all(set(command[command.index("--") + 1:]) == set(branch_contents) for command in patch_calls)
+    assert len(git_calls) <= 5 + patch_call_count
+    assert len(patch_calls) == patch_call_count
+    assert set().union(*(command[command.index("--") + 1:] for command in patch_calls)) == set(branch_contents)
 
 
 @pytest.mark.parametrize("kind", ["binary", "delete", "rename", "mode"])
