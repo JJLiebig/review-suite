@@ -1,0 +1,4131 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from copy import deepcopy
+from hashlib import sha256
+from pathlib import Path
+from typing import Any
+
+from review_suite_runtime_bootstrap import launcher_script_path
+
+from review_suite_core import (
+    AxiArgumentParser,
+    CLAUDE_MODEL_PREFIX,
+    current_branch,
+    current_head,
+    cwd_path_from_normalized,
+    EFFECTIVE_BASE_METADATA_KEYS,
+    effective_base_ref,
+    emit_error,
+    emit_toon,
+    format_command,
+    has_worktree_changes,
+    is_ancestor,
+    merge_base,
+    merge_base_drift_scope,
+    normalize_cwd,
+    OPENCODE_MODEL_PREFIX,
+    parse_model_label,
+    resolve_cd_path,
+    resolve_ref,
+    resolve_repo_root,
+    SUPPORTED_REASONING_EFFORTS,
+    write_text,
+)
+from review_suite_core.config import (
+    LensModelConfig,
+    default_state_dir,
+    load_config,
+    override_model_config,
+)
+from review_suite_core.orchestrator_profiles import (
+    MODE_STRICTNESS_ORDER,
+    RESTART_TARGET_MODES,
+    SUPPORTED_MODES,
+    resolve_orchestrator_profile,
+)
+from review_suite_core.review_backend import split_review_backend_model
+from review_suite_core.review_branch_status import cmd_status as cmd_branch_status
+from review_suite_core.cycle_status import (
+    _mode_label,
+    _public_convergence,
+    _short_sha,
+    _validation_summary,
+    add_status_arguments,
+    cycle_status_fields,
+    load_status_cycle,
+    public_cycle_status,
+    recorded_acceptance,
+    recorded_cycle_status,
+)
+from review_suite_core.orchestrator_runner import run_one_expensive_step
+from review_suite_core.orchestrator_state import (
+    DECISION_CLEAN,
+    DECISION_FINDINGS,
+    FIX_REVIEW_POLICY,
+    FIXES_VALIDATED_NOTE,
+    CONVERGENCE_DECISIONS,
+    CONTRACT_CONFLICTS,
+    GITHUB_RESULT_CLEAN,
+    GITHUB_RESULT_FINDINGS,
+    GITHUB_RESULT_WAIVED,
+    GITHUB_RESULT_COMMANDS,
+    CLI_VALIDATION_STATUSES,
+    STAGE_BLOCKED,
+    STAGE_CRASHED,
+    STAGE_CREATED,
+    STAGE_DECISION_PENDING,
+    STAGE_FIX_PENDING,
+    STAGE_FOLLOWUP_PENDING,
+    STAGE_RUNNING,
+    STAGE_LOCAL_GREEN_HANDOFF,
+    STAGE_RETRY_REQUESTED,
+    STAGE_REVIEW_GREEN,
+    STAGE_ABORTED,
+    DESLOP_STATUS_DONE,
+    DESLOP_STATUS_CLOSED,
+    DESLOP_STATUS_SKIPPED,
+    create_cycle,
+    deslop_is_ready,
+    mark_deslop_closed,
+    mark_fix_detected,
+    mark_latest_profile_step_rerun_needed,
+    record_clean_decision,
+    record_findings_decision,
+    record_fixes_validated,
+    record_followup_clean,
+    record_followup_findings,
+    record_github_result,
+    record_validation_statuses,
+    validation_blockers,
+    review_ladder_summary,
+    green_review_head_change_summary,
+    HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
+    mark_review_step_retry,
+    abort_cycle,
+    convergence_summary,
+    correct_inferred_followup_decision,
+    reject_automatic_findings,
+    record_contract_conflict,
+    record_contract_replan,
+    record_convergence_decision,
+)
+from review_suite_core.orchestrator_store import (
+    CALLER_PUBLIC_ID_RE,
+    create_cycle_with_public_id,
+    cycles_dir,
+    load_cycle_by_key,
+    load_cycle_by_public_id,
+    orchestrator_store_lock,
+    reserve_cycle_successor,
+    save_cycle,
+    UnknownReviewIdError,
+)
+from review_suite_local import (
+    PUBLIC_REVIEWER_LABELS,
+    grade_rank_placeholders,
+    latest_rerolled_round_payload,
+    load_round,
+    payload_has_blocked_runs,
+    rounds_dir,
+    print_reviewer_output_section,
+    round_has_live_reviewer_process,
+    round_needs_caller_grade,
+    terminal_review_command,
+    unique_round_state_dirs,
+)
+
+
+FOLLOWUP_LANE = "review-followup"
+ARENA_REROLL_SLOTS = set(PUBLIC_REVIEWER_LABELS)
+DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
+NO_DECISION_PENDING_MESSAGE = "no decision is pending for this review cycle"
+BASE_DRIFT_PATH_SAMPLE_LIMIT = 20
+CONTINUATION_REDIRECT_STAGES = {
+    STAGE_CREATED,
+    STAGE_RUNNING,
+    STAGE_DECISION_PENDING,
+    STAGE_FIX_PENDING,
+    STAGE_FOLLOWUP_PENDING,
+    STAGE_RETRY_REQUESTED,
+    STAGE_BLOCKED,
+    STAGE_CRASHED,
+    "decision-required",
+}
+REPO_NO_ARENA_CONFIG = "review-suite.no-arena"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = AxiArgumentParser(description="Run the review-suite orchestrator shell.")
+    add_status_arguments(parser)
+    interaction_action = parser.add_mutually_exclusive_group()
+    interaction_action.add_argument("--check-base-interaction", action="store_true")
+    interaction_action.add_argument("--accept-base-interaction", action="store_true")
+    parser.add_argument("--mode", choices=SUPPORTED_MODES)
+    parser.add_argument(
+        "--model",
+        help="Override the review model for this cycle. provider/model values select the OpenCode backend automatically.",
+    )
+    parser.add_argument(
+        "--reasoning",
+        choices=tuple(sorted(SUPPORTED_REASONING_EFFORTS)),
+        help="Override the review reasoning effort for this cycle.",
+    )
+    parser.add_argument("--restart-mode", choices=RESTART_TARGET_MODES)
+    parser.add_argument(
+        "--restart-brief",
+        help="Replace a mistaken frozen review brief and start a fresh same-mode cycle.",
+    )
+    parser.add_argument(
+        "--contract-conflict",
+        choices=tuple(sorted(CONTRACT_CONFLICTS)),
+        help="Report a frozen-contract conflict; pair with --restart-brief and --reason for an approved contract replan.",
+    )
+    parser.add_argument(
+        "--convergence-decision",
+        choices=tuple(sorted(decision.lower() for decision in CONVERGENCE_DECISIONS)),
+    )
+    parser.add_argument(
+        "--reason",
+        help="Reason for restart, closure dismissal, or decision correction/disagreement",
+    )
+    parser.add_argument("--cd")
+    parser.add_argument(
+        "--no-arena",
+        action="store_true",
+        help="Skip Arena when creating this review cycle.",
+    )
+    arena_preference = parser.add_mutually_exclusive_group()
+    arena_preference.add_argument(
+        "--set-no-arena",
+        action="store_true",
+        help="Disable Arena for future reviews in this repository.",
+    )
+    arena_preference.add_argument(
+        "--clear-no-arena",
+        action="store_true",
+        help="Return this repository to the global Arena setting.",
+    )
+    parser.add_argument("--base", help="Override the detected default branch ref.")
+    parser.add_argument(
+        "--review-brief",
+        help="Optional Markdown goal and constraints, frozen for this review cycle.",
+    )
+    parser.add_argument("--decision", choices=(DECISION_CLEAN, DECISION_FINDINGS))
+    parser.add_argument(
+        "--fixes-validated",
+        metavar="NOTE",
+        help="Close eligible fixes without repeat review; explain eligibility and validation passed.",
+    )
+    parser.add_argument("--github-review", action="store_true")
+    parser.add_argument("--github-force", action="store_true")
+    parser.add_argument(
+        "--github-result", choices=tuple(sorted(GITHUB_RESULT_COMMANDS))
+    )
+    parser.add_argument("--github-note")
+    parser.add_argument("--focused-validation", choices=CLI_VALIDATION_STATUSES)
+    parser.add_argument("--full-suite", choices=CLI_VALIDATION_STATUSES)
+    parser.add_argument("--ci", choices=CLI_VALIDATION_STATUSES)
+    parser.add_argument("--validation-note")
+    parser.add_argument("--deslop-done", action="store_true")
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Inspect branch routing when no review id exists.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print the full branch routing snapshot for --status.",
+    )
+    parser.add_argument(
+        "--skip-deslop",
+        "--no-deslop",
+        dest="skip_deslop",
+        action="store_true",
+        help="Skip cleanup before final signoff when creating a review cycle.",
+    )
+    parser.add_argument(
+        "--show-findings",
+        action="store_true",
+        help="Print stored reviewer output for --id without running review.",
+    )
+    parser.add_argument("--wsl", action="store_true")
+    return parser
+
+
+def _help_command() -> str:
+    return format_command([sys.executable, str(_launcher_script_path()), "--help"])
+
+
+def _launcher_script_path(name: str = "review.py") -> Path:
+    return launcher_script_path(Path(__file__).with_name("review.py"), name)
+
+
+class NoDecisionPendingError(ValueError):
+    def __init__(self, state: dict[str, Any]) -> None:
+        super().__init__(NO_DECISION_PENDING_MESSAGE)
+        self.state = state
+
+
+class SuccessorAdvanceBusyError(RuntimeError):
+    def __init__(self, state: dict[str, Any]) -> None:
+        super().__init__("successor review is already advancing")
+        self.state = state
+
+
+def _runtime_uses_wsl(state: dict[str, Any]) -> bool:
+    return bool(
+        dict(state.get("runtime") or {}).get("allow_unsafe_windows_wsl_fallback")
+    )
+
+
+def _review_command(public_id: str, *extra: str, state_dir: Path | None = None) -> str:
+    command = [sys.executable, str(_launcher_script_path()), "--id", public_id, *extra]
+    return format_command(command)
+
+
+def _github_review_action_command(public_id: str, *, state_dir: Path) -> str:
+    return _review_command(public_id, "--github-review", state_dir=state_dir)
+
+
+def _github_result_command(
+    public_id: str, result: str, *extra: str, state_dir: Path
+) -> str:
+    return _review_command(
+        public_id, "--github-result", result, *extra, state_dir=state_dir
+    )
+
+
+def _deslop_done_command(public_id: str, *, state_dir: Path) -> str:
+    return _review_command(public_id, "--deslop-done", state_dir=state_dir)
+
+
+def _arena_grade_command(
+    state: dict[str, Any],
+    *,
+    state_dir: Path,
+) -> str | None:
+    pending_payload = _pending_grade_payload(state, state_dir=state_dir)
+    if pending_payload is None:
+        return None
+    round_id = str(pending_payload.get("round_id") or "").strip()
+    branch = str(dict(state.get("identity") or {}).get("branch") or "").strip()
+    task_id = (
+        str(pending_payload.get("task_id_hint") or "").strip()
+        or branch
+        or str(state.get("public_id") or "").strip()
+    )
+    rating_pool_id = str(pending_payload.get("rating_pool_id") or "").strip()
+    grade_state_dir = Path(str(pending_payload.get("_round_state_dir") or state_dir))
+    command = [
+        sys.executable,
+        str(_launcher_script_path("review_suite_arena.py")),
+        "grade",
+        "--round-id",
+        round_id,
+        "--task-id",
+        task_id,
+        "--rating-pool-id",
+        rating_pool_id or "RATING_POOL_ID",
+    ]
+    for rank_group in grade_rank_placeholders(pending_payload):
+        command.extend(["--rank", rank_group])
+    command.extend(["--basis", "BASIS", "--state-dir", str(grade_state_dir)])
+    return format_command(command)
+
+
+def _arena_reroll_argv(
+    state: dict[str, Any], *, state_dir: Path, round_id: str, slot: str
+) -> list[str]:
+    identity = dict(state.get("identity") or {})
+    command = [
+        sys.executable,
+        str(_launcher_script_path("review_suite_arena.py")),
+        "reroll-slot",
+        "--round-id",
+        round_id,
+        "--slot",
+        slot,
+        "--state-dir",
+        str(state_dir),
+        "--sqlite-path",
+        str(Path.home() / ".codex" / "state_5.sqlite"),
+    ]
+    cwd = str(identity.get("cwd") or "").strip()
+    if cwd:
+        command.extend(["--cd", str(cwd_path_from_normalized(cwd))])
+    base = str(identity.get("base") or "").strip()
+    if base:
+        command.extend(["--base", base])
+    if _runtime_uses_wsl(state):
+        command.append("--wsl")
+    return command
+
+
+def _arena_dismiss_argv(*, state_dir: Path, round_id: str) -> list[str]:
+    return [
+        sys.executable,
+        str(_launcher_script_path("review_suite_arena.py")),
+        "dismiss-round",
+        "--round-id",
+        round_id,
+        "--state-dir",
+        str(state_dir),
+        "--reason",
+        "orchestrator_arena_blocked",
+    ]
+
+
+def _arena_resume_argv(*, state_dir: Path, round_id: str) -> list[str]:
+    return [
+        sys.executable,
+        str(_launcher_script_path("review_suite_arena.py")),
+        "resume-round",
+        "--round-id",
+        round_id,
+        "--state-dir",
+        str(state_dir),
+        "--sqlite-path",
+        str(Path.home() / ".codex" / "state_5.sqlite"),
+    ]
+
+
+def _arena_run_round_argv(
+    state: dict[str, Any], payload: dict[str, Any], *, state_dir: Path, round_id: str
+) -> list[str]:
+    identity = dict(state.get("identity") or {})
+    review_scope = dict(payload.get("review_scope") or {})
+    base = str(review_scope.get("base") or identity.get("base") or "").strip()
+    command = [
+        sys.executable,
+        str(_launcher_script_path("review_suite_arena.py")),
+        "run-round",
+        "--round-id",
+        round_id,
+        "--base",
+        base or "main",
+        "--state-dir",
+        str(state_dir),
+        "--sqlite-path",
+        str(Path.home() / ".codex" / "state_5.sqlite"),
+    ]
+    cwd = str(identity.get("cwd") or payload.get("review_cwd") or "").strip()
+    if cwd:
+        command.extend(["--cd", str(cwd_path_from_normalized(cwd))])
+    if _runtime_uses_wsl(state):
+        command.append("--wsl")
+    return command
+
+
+def _round_blocked_slots(payload: dict[str, Any]) -> list[str]:
+    slots: list[str] = []
+    for run in list(payload.get("runs") or []):
+        if not isinstance(run, dict):
+            continue
+        if (
+            bool(run.get("blocked"))
+            or bool(run.get("grade_blocked"))
+            or (run.get("reviewer_output") and payload_has_blocked_runs({"runs": [run]}))
+        ):
+            slot = str(run.get("slot") or "").strip()
+            if slot:
+                slots.append(slot)
+    return slots
+
+
+def _round_is_arena_recovery(
+    pending: dict[str, Any], round_record: dict[str, Any], payload: dict[str, Any]
+) -> bool:
+    profile_step = dict(round_record.get("profile_step") or {})
+    return bool(
+        pending.get("arena_round")
+        or round_record.get("arena_round")
+        or profile_step.get("arena_round")
+        or payload.get("arena_round")
+    )
+
+
+def _round_requires_arena_grade(
+    pending: dict[str, Any], round_record: dict[str, Any], payload: dict[str, Any]
+) -> bool:
+    return _round_is_arena_recovery(pending, round_record, payload) and bool(
+        pending.get("grading_required")
+        or round_record.get("grading_required")
+        or payload.get("grading_required")
+    )
+
+
+def _recovery_note_subject(
+    pending: dict[str, Any], round_record: dict[str, Any], payload: dict[str, Any]
+) -> str:
+    return (
+        "Arena"
+        if _round_is_arena_recovery(pending, round_record, payload)
+        else "Review"
+    )
+
+
+def _arena_recovery_plan(
+    state: dict[str, Any], *, state_dir: Path
+) -> dict[str, Any] | None:
+    pending = dict(state.get("pending_action") or {})
+    if (
+        state.get("stage") != STAGE_RETRY_REQUESTED
+        or str(pending.get("kind") or "") != "arena-blocked"
+    ):
+        return None
+    round_id = str(pending.get("round_id") or "").strip()
+    if not round_id:
+        return {"operation": "none", "note": "Arena recovery is missing round id."}
+    round_record = _round_by_id(state, round_id)
+    pending_state_dir = str(pending.get("round_state_dir") or "").strip()
+    extra_state_dirs = [Path(pending_state_dir)] if pending_state_dir else None
+    payload = _load_output_round_payload(
+        state_dir, round_record, extra_state_dirs=extra_state_dirs
+    )
+    round_id, payload, round_state_dir = latest_rerolled_round_payload(
+        round_id=round_id,
+        payload=payload,
+        search_dirs=_round_state_dir_candidates(
+            state_dir, round_record, extra_state_dirs=extra_state_dirs
+        ),
+    )
+    subject = _recovery_note_subject(pending, round_record, payload)
+    status = str(payload.get("status") or "").strip()
+    if status == "dismissed":
+        return {
+            "operation": "none",
+            "note": f"{subject} round dismissed; rerun this review id.",
+        }
+    if status == "sampled":
+        return {
+            "operation": "run",
+            "round_id": round_id,
+            "payload": payload,
+            "round_state_dir": round_state_dir,
+            "note": f"{subject} replacement round is sampled; rerun this review id to continue backend recovery.",
+        }
+    if status == "running":
+        return {
+            "operation": "resume",
+            "round_id": round_id,
+            "round_state_dir": round_state_dir,
+            "note": f"{subject} replacement round is running; rerun this review id to continue backend recovery.",
+        }
+    if status and status not in {"completed", "dismissed"}:
+        return {
+            "operation": "dismiss",
+            "round_id": round_id,
+            "round_state_dir": round_state_dir,
+            "note": f"{subject} replacement round is {status}; rerun this review id to continue backend recovery.",
+        }
+    slots = _round_blocked_slots(payload)
+    if slots:
+        if not _round_is_arena_recovery(pending, round_record, payload):
+            return {
+                "operation": "none",
+                "note": f"{subject} round blocked; rerun this review id to retry the review step.",
+            }
+        rerollable_slots = [slot for slot in slots if slot in ARENA_REROLL_SLOTS]
+        if len(rerollable_slots) != len(slots):
+            return {
+                "operation": "dismiss",
+                "round_id": round_id,
+                "round_state_dir": round_state_dir,
+                "note": f"Blocked {subject.lower()} slot(s) cannot be rerolled safely; rerun this review id to continue backend recovery.",
+            }
+        return {
+            "operation": "reroll",
+            "round_id": round_id,
+            "round_state_dir": round_state_dir,
+            "slot": rerollable_slots[0],
+            "note": f"Blocked {subject.lower()} slot {rerollable_slots[0]} can be rerolled; rerun this review id to continue backend recovery.",
+        }
+    return {
+        "operation": "none",
+        "note": f"{subject} recovery is ready; rerun this review id.",
+    }
+
+
+def _arena_recovery_action(
+    state: dict[str, Any], *, state_dir: Path, public_id: str
+) -> dict[str, Any] | None:
+    plan = _arena_recovery_plan(state, state_dir=state_dir)
+    if plan is None:
+        return None
+    return {
+        "cmd": _review_command(public_id, state_dir=state_dir),
+        "note": str(
+            plan.get("note") or "Arena recovery is ready; rerun this review id."
+        ),
+    }
+
+
+def _arena_recovery_backend_argv(
+    state: dict[str, Any], *, state_dir: Path
+) -> list[str] | None:
+    plan = _arena_recovery_plan(state, state_dir=state_dir)
+    if plan is None:
+        return None
+    operation = str(plan.get("operation") or "")
+    round_id = str(plan.get("round_id") or "").strip()
+    round_state_dir = plan.get("round_state_dir")
+    if operation == "run":
+        payload = dict(plan.get("payload") or {})
+        return _arena_run_round_argv(
+            state, payload, state_dir=round_state_dir, round_id=round_id
+        )
+    if operation == "resume":
+        return _arena_resume_argv(state_dir=round_state_dir, round_id=round_id)
+    if operation == "dismiss":
+        return _arena_dismiss_argv(state_dir=round_state_dir, round_id=round_id)
+    if operation == "reroll":
+        return _arena_reroll_argv(
+            state,
+            state_dir=round_state_dir,
+            round_id=round_id,
+            slot=str(plan.get("slot") or ""),
+        )
+    return None
+
+
+def _run_arena_recovery_backend_once(state: dict[str, Any], *, state_dir: Path) -> bool:
+    command = _arena_recovery_backend_argv(state, state_dir=state_dir)
+    if command is None:
+        return False
+    proc = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    stderr = str(proc.stderr or "")
+    if stderr:
+        sys.stderr.write(stderr)
+    if proc.returncode != 0:
+        details = stderr.strip() or str(proc.stdout or "").strip()
+        suffix = f": {details}" if details else ""
+        raise ValueError(
+            f"arena backend recovery command failed with exit code {proc.returncode}: {format_command(command)}{suffix}"
+        )
+    return True
+
+
+def _blocked_decision_recovery_state(
+    state: dict[str, Any], *, state_dir: Path
+) -> dict[str, Any]:
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "") != "decision":
+        return state
+    round_id = str(pending.get("round_id") or "").strip()
+    if not round_id:
+        return state
+    round_record = _round_by_id(state, round_id)
+    payload = _load_output_round_payload(state_dir, round_record)
+    if not (
+        bool(round_record.get("review_blocked"))
+        or bool(payload.get("review_blocked"))
+        or _round_blocked_slots(payload)
+    ):
+        return state
+    if round_record.get("lane") == FOLLOWUP_LANE:
+        active = dict(state.get("active_findings") or {})
+        if active.get("followup_round_id") != round_id:
+            raise ValueError("blocked follow-up does not match active findings")
+        return mark_fix_detected(state, head=str(active["fix_head"]))
+    profile_step = dict(round_record.get("profile_step") or {})
+    step_index = profile_step.get("index")
+    if step_index is None:
+        step_index = pending.get("step_index")
+    step_name = str(
+        profile_step.get("name") or pending.get("step") or "review-recovery"
+    )
+    fix_verification = pending.get("fix_verification")
+    fix_context = (
+        fix_verification
+        if isinstance(fix_verification, dict) and fix_verification
+        else None
+    )
+    if not _round_is_arena_recovery(pending, round_record, payload):
+        return mark_review_step_retry(
+            state,
+            step_index=int(step_index if step_index is not None else 0),
+            step_name=step_name,
+            post_findings_rerun=bool(pending.get("post_findings_rerun")),
+            fix_verification=fix_context,
+        )
+    recovery_state = dict(state)
+    recovery_state["stage"] = STAGE_RETRY_REQUESTED
+    action = {
+        "kind": "arena-blocked",
+        "round_id": round_id,
+        "lane": str(pending.get("lane") or round_record.get("lane") or "review_base"),
+        "step_index": int(step_index if step_index is not None else 0),
+        "step": step_name,
+    }
+    if _round_is_arena_recovery(pending, round_record, payload):
+        action["arena_round"] = True
+    if _round_requires_arena_grade(pending, round_record, payload):
+        action["grading_required"] = True
+    if bool(pending.get("post_findings_rerun")):
+        action["post_findings_rerun"] = True
+    if fix_context:
+        action["fix_verification"] = deepcopy(fix_context)
+    recovery_state["pending_action"] = action
+    return recovery_state
+
+
+def _blocked_decision_action(
+    state: dict[str, Any], *, state_dir: Path, public_id: str
+) -> dict[str, Any] | None:
+    recovery_state = _blocked_decision_recovery_state(state, state_dir=state_dir)
+    if recovery_state is state:
+        return None
+    pending = dict(recovery_state.get("pending_action") or {})
+    if str(pending.get("kind") or "") == "run-followup":
+        return {
+            "cmd": _review_command(public_id, state_dir=state_dir),
+            "note": "Follow-up blocked before inspection; rerun this review id to retry it.",
+        }
+    if str(pending.get("kind") or "") == "run-review-step":
+        step = str(pending.get("step") or "review").strip() or "review"
+        return {
+            "cmd": _review_command(public_id, state_dir=state_dir),
+            "note": f"Review round blocked; rerun this review id to retry {step}.",
+        }
+    return _arena_recovery_action(
+        recovery_state, state_dir=state_dir, public_id=public_id
+    )
+
+
+def _pending_grade_payload(
+    state: dict[str, Any], *, state_dir: Path
+) -> dict[str, Any] | None:
+    pending = dict(state.get("pending_action") or {})
+    round_id = str(pending.get("round_id") or "").strip()
+    if str(pending.get("kind") or "") != "decision" or not round_id:
+        return None
+    round_record = _round_record_by_id(state, round_id)
+    if not bool(round_record.get("grading_required")):
+        return None
+    payload = _load_output_round_payload(state_dir, round_record)
+    if not bool(round_record.get("arena_round") or payload.get("arena_round")):
+        return None
+    if not round_needs_caller_grade(payload):
+        return None
+    return payload
+
+
+def _configured_selection(config: dict[str, Any]) -> str:
+    return str(((config.get("orchestrator") or {}).get("selection") or "auto")).strip()
+
+
+def _git_config(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo), "config", "--local", *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
+def _repo_has_no_arena(repo: Path) -> bool:
+    proc = _git_config(repo, "--type=bool", "--get", REPO_NO_ARENA_CONFIG)
+    if proc.returncode == 1:
+        return False
+    if proc.returncode != 0:
+        raise ValueError(
+            (
+                proc.stderr or proc.stdout or "could not read repository Arena setting"
+            ).strip()
+        )
+    return proc.stdout.strip() == "true"
+
+
+def _set_repo_no_arena(repo: Path, *, disabled: bool) -> None:
+    if disabled:
+        proc = _git_config(repo, REPO_NO_ARENA_CONFIG, "true")
+    else:
+        current = _git_config(repo, "--get-all", REPO_NO_ARENA_CONFIG)
+        if current.returncode == 1:
+            return
+        if current.returncode != 0:
+            raise ValueError(
+                (
+                    current.stderr
+                    or current.stdout
+                    or "could not read repository Arena setting"
+                ).strip()
+            )
+        proc = _git_config(repo, "--unset-all", REPO_NO_ARENA_CONFIG)
+    if proc.returncode != 0:
+        raise ValueError(
+            (
+                proc.stderr
+                or proc.stdout
+                or "could not update repository Arena setting"
+            ).strip()
+        )
+
+
+def _configure_repo_arena(args: argparse.Namespace) -> int | None:
+    if not (args.set_no_arena or args.clear_no_arena):
+        return None
+    allowed = {"cd", "set_no_arena", "clear_no_arena"}
+    conflicts = [
+        name
+        for name, value in vars(args).items()
+        if name not in allowed and value not in (None, False)
+    ]
+    if conflicts:
+        raise ValueError(
+            "repository Arena configuration cannot be combined with "
+            + ", ".join(f"--{name.replace('_', '-')}" for name in conflicts)
+        )
+    repo = resolve_repo_root(args.cd)
+    disabled = bool(args.set_no_arena)
+    _set_repo_no_arena(repo, disabled=disabled)
+    emit_toon(
+        {
+            "status": "configured",
+            "cwd": normalize_cwd(str(repo)),
+            "arena": "disabled" if disabled else "global-default",
+        }
+    )
+    return 0
+
+
+def _path_key(path: Path) -> str:
+    key = str(path.resolve(strict=False))
+    return key.lower() if sys.platform == "win32" else key
+
+
+def _append_unique_path(paths: list[Path], path: Path | None) -> None:
+    if path is None:
+        return
+    key = _path_key(path)
+    if all(_path_key(item) != key for item in paths):
+        paths.append(path)
+
+
+def _cycle_candidates(initial_state_dir: Path) -> list[Path]:
+    candidates: list[Path] = []
+    default_dir = Path(default_state_dir())
+    _append_unique_path(candidates, initial_state_dir)
+    _append_unique_path(candidates, default_dir)
+    return candidates
+
+
+def _load_cycle_and_state_dir(
+    initial_state_dir: Path, public_id: str
+) -> tuple[Path, dict[str, Any]]:
+    for candidate in _cycle_candidates(initial_state_dir):
+        try:
+            return candidate, load_cycle_by_public_id(candidate, public_id)
+        except ValueError:
+            continue
+    raise UnknownReviewIdError(f"unknown review cycle id: {public_id}")
+
+
+def _has_id_action(args: argparse.Namespace) -> bool:
+    return bool(
+        args.check_base_interaction
+        or args.accept_base_interaction
+        or args.fixes_validated is not None
+        or args.restart_mode
+        or args.restart_brief is not None
+        or args.contract_conflict
+        or args.convergence_decision
+        or args.reason
+        or args.decision
+        or args.github_review
+        or args.github_force
+        or args.github_result
+        or args.github_note
+        or _has_validation_status(args)
+        or args.deslop_done
+        or args.show_findings
+        or args.show_status
+    )
+
+
+def _starts_review(args: argparse.Namespace) -> bool:
+    return bool(args.skip_deslop or args.no_arena) or any(
+        getattr(args, name) is not None
+        for name in ("mode", "cd", "base", "review_brief", "model", "reasoning")
+    )
+
+
+def _reject_id_creation_args(args: argparse.Namespace, state: dict[str, Any]) -> None:
+    """Allow a repeated start command for an existing id; reject changed context."""
+    mode = dict(state.get("mode") or {})
+    identity = dict(state.get("identity") or {})
+    if not _starts_review(args):
+        return
+    bound_cwd = str(identity.get("cwd") or "").strip()
+    requested_cwd = ""
+    if args.cd is not None:
+        if args.show_status:
+            scheme, _, tail = bound_cwd.partition(":")
+            distro, _, _ = tail.partition(":")
+            known_distros = (distro,) if scheme.lower() == "wsl" and distro else ()
+            requested = resolve_cd_path(args.cd, wsl_distributions=known_distros).resolve(strict=False)
+            bound = cwd_path_from_normalized(bound_cwd, discover_wsl=False).resolve(strict=False)
+            requested_cwd = bound_cwd if requested.is_relative_to(bound) else str(requested)
+        else:
+            requested_cwd = normalize_cwd(str(resolve_repo_root(args.cd)))
+    if bound_cwd and requested_cwd and requested_cwd != bound_cwd:
+        raise ValueError(
+            f"review id {state.get('public_id')} belongs to {bound_cwd}, "
+            f"not {requested_cwd}; use a new id for this worktree"
+        )
+    _reject_review_brief_replacement(state, args.review_brief)
+    bases = {identity.get("base"), identity.get("requested_base")}
+    has_model_override = args.model is not None or args.reasoning is not None
+    sent = [
+        name
+        for name, changed in (
+            ("mode", args.mode not in (None, mode.get("requested"))),
+            ("base", args.base is not None and args.base not in bases),
+            (
+                "model/--reasoning",
+                has_model_override
+                and _requested_model_override(args)
+                != dict(state.get("model_override") or {}),
+            ),
+            (
+                "no-arena",
+                args.no_arena and state.get("arena_disabled") != "cli",
+            ),
+            (
+                "skip-deslop",
+                args.skip_deslop and not _cycle_cli_skips_deslop(state),
+            ),
+        )
+        if changed
+    ]
+    if not sent:
+        return
+    context = []
+    locked_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
+    if locked_mode:
+        context.append(f"mode {locked_mode}")
+    cwd = str(identity.get("cwd") or "").strip()
+    if cwd:
+        context.append(cwd)
+    suffix = f"; this id is locked to {' at '.join(context)}" if context else ""
+    raise ValueError(
+        f"--id already selects review context; remove --{', --'.join(sent)}{suffix}"
+    )
+
+
+def _reject_review_brief_replacement(
+    state: dict[str, Any], review_brief: str | None
+) -> None:
+    if review_brief is not None and review_brief != state.get("review_brief"):
+        public_id = str(state.get("public_id") or "<id>").strip()
+        raise ValueError(
+            "review brief is frozen for this cycle; use "
+            f"--id {public_id} --restart-brief <MARKDOWN> --reason <WHY> to replace it"
+        )
+
+
+def _restart_reason(args: argparse.Namespace, *, option: str = "--restart-mode") -> str:
+    reason = str(args.reason or "").strip()
+    if not reason or reason == "REASON":
+        raise ValueError(f"--reason is required for {option}")
+    return reason
+
+
+def _mode_rank(mode: str) -> int:
+    if mode not in MODE_STRICTNESS_ORDER:
+        allowed = ", ".join(MODE_STRICTNESS_ORDER)
+        raise ValueError(
+            f"review cycle mode {mode} cannot be restarted; supported modes: {allowed}"
+        )
+    return MODE_STRICTNESS_ORDER[mode]
+
+
+def _validate_restart_mode(state: dict[str, Any], target_mode: str) -> str:
+    current_mode = _current_mode(state)
+    current_rank = _mode_rank(current_mode)
+    target_rank = _mode_rank(target_mode)
+    if target_rank <= current_rank:
+        raise ValueError(
+            f"--restart-mode must increase strictness from {current_mode}; requested {target_mode}"
+        )
+    return current_mode
+
+
+def _current_mode(state: dict[str, Any]) -> str:
+    mode = dict(state.get("mode") or {})
+    current_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
+    _mode_rank(current_mode)
+    return current_mode
+
+
+def _normalized_branch(branch: str | None) -> str | None:
+    value = str(branch or "").strip()
+    return None if value in {"", "HEAD"} else value
+
+
+def _round_by_id(state: dict[str, Any], round_id: str) -> dict[str, Any]:
+    for item in list(state.get("rounds") or []):
+        if isinstance(item, dict) and item.get("round_id") == round_id:
+            return dict(item)
+    return {}
+
+
+def _pending_decision(state: dict[str, Any]) -> tuple[str, str]:
+    pending = dict(state.get("pending_action") or {})
+    round_id = str(pending.get("round_id") or "").strip()
+    lane = str(pending.get("lane") or "").strip()
+    if round_id and lane:
+        return round_id, lane
+    for item in reversed(list(state.get("rounds") or [])):
+        if not isinstance(item, dict) or item.get("status") != STAGE_DECISION_PENDING:
+            continue
+        round_id = str(item.get("round_id") or "").strip()
+        lane = str(item.get("lane") or "").strip()
+        if round_id and lane:
+            return round_id, lane
+    raise ValueError("no decision is pending for this review cycle")
+
+
+def _round_terminal_command(payload: dict[str, Any]) -> str | None:
+    command = str(payload.get("terminal_command") or "").strip().lower()
+    if command in DECISION_COMMANDS:
+        return command
+    commands: list[str] = []
+    for run in list(payload.get("runs") or []):
+        if not isinstance(run, dict):
+            continue
+        if bool(run.get("blocked")) or bool(run.get("grade_blocked")):
+            return None
+        status = str(run.get("review_status") or run.get("status") or "").strip()
+        if status and status != "completed":
+            return None
+        command = str(run.get("terminal_command") or "").strip().lower()
+        if command not in DECISION_COMMANDS:
+            return None
+        commands.append(command)
+    if not commands:
+        return None
+    return DECISION_FINDINGS if DECISION_FINDINGS in commands else DECISION_CLEAN
+
+
+def _auto_decision_command(state: dict[str, Any], *, state_dir: Path) -> str | None:
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "") != "decision":
+        return None
+    round_id = str(pending.get("round_id") or "").strip()
+    if not round_id or _pending_grade_payload(state, state_dir=state_dir) is not None:
+        return None
+    round_record = _round_by_id(state, round_id)
+    payload = _load_output_round_payload(state_dir, round_record)
+    if bool(round_record.get("review_blocked")) or bool(payload.get("review_blocked")):
+        return None
+    if _round_blocked_slots(round_record) or _round_blocked_slots(payload):
+        return None
+    status_values = {
+        str(round_record.get("review_status") or "").strip(),
+        str(round_record.get("status") or "").strip(),
+        str(payload.get("review_status") or "").strip(),
+        str(payload.get("status") or "").strip(),
+    }
+    if not (status_values & {"completed", "decision-pending"}):
+        return None
+    return _round_terminal_command(payload)
+
+
+def _with_fix_action(state: dict[str, Any]) -> dict[str, Any]:
+    next_state = dict(state)
+    active = dict(next_state.get("active_findings") or {})
+    next_state["pending_action"] = {
+        "kind": "fix-findings",
+        "round_id": active.get("round_id"),
+    }
+    return next_state
+
+
+def _orchestrator_review_state_dir(state_dir: Path) -> Path:
+    return state_dir / "orchestrator" / "review-rounds"
+
+
+def _round_state_dir_candidates(
+    state_dir: Path,
+    round_record: dict[str, Any],
+    *,
+    extra_state_dirs: list[Path] | None = None,
+) -> list[Path]:
+    candidates: list[Path] = []
+    candidates.extend(extra_state_dirs or [])
+    round_state_dir = str(round_record.get("round_state_dir") or "").strip()
+    if round_state_dir:
+        candidates.append(Path(round_state_dir))
+    candidates.extend([_orchestrator_review_state_dir(state_dir), state_dir])
+    return unique_round_state_dirs(candidates)
+
+
+def _task_class_for_lane(lane: str) -> str:
+    return {
+        "review_base": "base_review",
+        "review_deep": "deep_review",
+        FOLLOWUP_LANE: "base_review",
+    }.get(lane, lane)
+
+
+def _fallback_round_payload(round_record: dict[str, Any]) -> dict[str, Any]:
+    lane = str(round_record.get("lane") or "").strip()
+    payload = dict(round_record)
+    payload["task_class"] = str(payload.get("task_class") or _task_class_for_lane(lane))
+    payload["status"] = str(
+        payload.get("status") or payload.get("review_status") or "unknown"
+    )
+    runs = []
+    for raw_run in list(payload.get("runs") or []):
+        if not isinstance(raw_run, dict):
+            continue
+        run = dict(raw_run)
+        if (
+            not str(run.get("review_status") or "").strip()
+            and str(run.get("status") or "").strip()
+        ):
+            run["review_status"] = run.get("status")
+        if (
+            not str(run.get("reviewer_output") or "").strip()
+            and str(run.get("summary") or "").strip()
+        ):
+            run["reviewer_output"] = run.get("summary")
+        if (
+            not str(run.get("reviewer_output_ref") or "").strip()
+            and str(run.get("ref") or "").strip()
+        ):
+            run["reviewer_output_ref"] = run.get("ref")
+        runs.append(run)
+    payload["runs"] = runs
+    return payload
+
+
+def _round_record_by_id(state: dict[str, Any], round_id: str) -> dict[str, Any]:
+    for item in list(state.get("rounds") or []):
+        if isinstance(item, dict) and str(item.get("round_id") or "") == round_id:
+            return dict(item)
+    return {}
+
+
+def _load_output_round_payload(
+    state_dir: Path,
+    round_record: dict[str, Any],
+    *,
+    extra_state_dirs: list[Path] | None = None,
+) -> dict[str, Any]:
+    round_id = str(round_record.get("round_id") or "").strip()
+    if not round_id:
+        return _fallback_round_payload(round_record)
+    for candidate in _round_state_dir_candidates(
+        state_dir, round_record, extra_state_dirs=extra_state_dirs
+    ):
+        try:
+            payload = load_round(candidate, round_id)
+            payload.setdefault("_round_state_dir", str(candidate))
+            return payload
+        except ValueError:
+            continue
+    return _fallback_round_payload(round_record)
+
+
+def _payload_has_reviewer_output(payload: dict[str, Any]) -> bool:
+    for run in list(payload.get("runs") or []):
+        if not isinstance(run, dict):
+            continue
+        for key in ("reviewer_output", "status_summary", "summary"):
+            if str(run.get(key) or "").strip():
+                return True
+    return False
+
+
+def _output_round_candidates(state: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_round_id(round_id: str) -> None:
+        value = str(round_id or "").strip()
+        if not value or value in seen:
+            return
+        seen.add(value)
+        record = _round_record_by_id(state, value)
+        if record:
+            candidates.append(record)
+        else:
+            candidates.append({"round_id": value})
+
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "") in {"collect-review-step", "decision"}:
+        add_round_id(str(pending.get("round_id") or ""))
+    active = state.get("active_findings")
+    if isinstance(active, dict):
+        add_round_id(str(active.get("round_id") or ""))
+    for item in reversed(list(state.get("rounds") or [])):
+        if isinstance(item, dict):
+            add_round_id(str(item.get("round_id") or ""))
+    return candidates
+
+
+def _show_findings(state: dict[str, Any], *, state_dir: Path) -> int:
+    public_id = str(state.get("public_id") or "").strip()
+    closure_findings = str(
+        dict(state.get("deslop") or {}).get("findings") or ""
+    ).strip()
+    if closure_findings and _deslop_is_open(state):
+        write_text(f"review: {public_id}")
+        write_text("")
+        write_text("Output:")
+        write_text(closure_findings)
+        return 0
+    candidates = _output_round_candidates(state)
+    if not candidates:
+        write_text(f"review: {public_id}")
+        write_text("no stored reviewer output found")
+        return 0
+    selected = candidates[0]
+    payload = _load_output_round_payload(state_dir, selected)
+    for candidate in candidates:
+        candidate_payload = _load_output_round_payload(state_dir, candidate)
+        if _payload_has_reviewer_output(candidate_payload):
+            selected = candidate
+            payload = candidate_payload
+            break
+    write_text(f"review: {public_id}")
+    write_text("")
+    if not print_reviewer_output_section(
+        [run for run in list(payload.get("runs") or []) if isinstance(run, dict)]
+    ):
+        write_text("no stored reviewer output found for this round")
+    return 0
+
+
+def _cwd_label(identity: dict[str, Any]) -> str:
+    cwd = str(identity.get("cwd") or "").strip()
+    if not cwd:
+        return ""
+    try:
+        return str(cwd_path_from_normalized(cwd))
+    except ValueError:
+        return cwd
+
+
+def _live_worktree_status(identity: dict[str, Any]) -> dict[str, Any] | str:
+    cwd = str(identity.get("cwd") or "").strip()
+    if not cwd:
+        return "unknown"
+    try:
+        review_cwd = cwd_path_from_normalized(cwd)
+        payload: dict[str, Any] = {
+            "head": _short_sha(current_head(review_cwd)),
+            "dirty": has_worktree_changes(review_cwd),
+        }
+        if branch := current_branch(review_cwd):
+            payload["branch"] = branch
+        return payload
+    except OSError, ValueError:
+        return "unavailable"
+
+
+def _review_runtime_label(state: dict[str, Any], *, state_dir: Path) -> str | None:
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "") != "collect-review-step":
+        return None
+    round_record = _round_record_by_id(
+        state, str(pending.get("round_id") or "").strip()
+    )
+    payload = _load_output_round_payload(state_dir, round_record)
+    if str(payload.get("status") or "") != "running" or not payload.get("runs"):
+        return None
+    return (
+        "active" if round_has_live_reviewer_process(payload) else "collection_pending"
+    )
+
+
+def _next_action_label(summary: dict[str, Any], action: dict[str, Any] | None) -> str:
+    if bool(summary.get("done")):
+        return "none"
+    if summary.get("review_ladder") == "invalidated":
+        return (
+            "continue"
+            if _action_recovers_pending_github_head_change(action)
+            else "rerun_review"
+        )
+    if not action:
+        if summary.get("review_ladder") == HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER:
+            return "inspect_changed_since_review"
+        return "none"
+    command = str(action.get("cmd") or "")
+    if "--github-review" in command:
+        return "github_review"
+    if "--full-suite" in command or "--ci" in command:
+        return "validation"
+    if "--deslop-done" in command:
+        return "deslop_done"
+    return "continue"
+
+
+def _action_recovers_pending_github_head_change(action: dict[str, Any] | None) -> bool:
+    note = str(dict(action or {}).get("note") or "")
+    return "before a terminal GitHub result" in note
+
+
+def _add_review_ladder_fields(
+    payload: dict[str, Any],
+    state: dict[str, Any],
+    action: dict[str, Any] | None,
+    *,
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    if summary.get(
+        "review_ladder"
+    ) == "invalidated" and _action_recovers_pending_github_head_change(action):
+        summary = {**summary, "review_ladder": "pending"}
+    else:
+        summary = green_review_head_change_summary(state, summary=summary) or summary
+    payload.update(summary)
+    payload["next_action"] = _next_action_label(summary, action)
+    if summary.get("review_ladder") == "invalidated":
+        payload["status"] = "stale"
+    elif summary.get("review_ladder") == HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER:
+        payload["status"] = HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER
+    elif bool(summary.get("done")):
+        payload["status"] = "done"
+    return summary
+
+
+def _show_status(
+    state: dict[str, Any], *, state_dir: Path, as_json: bool = False
+) -> int:
+    identity = dict(state.get("identity") or {})
+    payload = cycle_status_fields(state, state_dir=state_dir)
+    if cwd := _cwd_label(identity):
+        payload["cwd"] = cwd
+    payload["worktree"] = _live_worktree_status(identity)
+    if runtime := _review_runtime_label(state, state_dir=state_dir):
+        payload["runtime"] = runtime
+    live_head = _identity_head(state)
+    summary = review_ladder_summary(state, current_head=live_head)
+    action = _action_payload(state, state_dir=state_dir, summary=summary)
+    summary = _add_review_ladder_fields(payload, state, action, summary=summary)
+    if "base_interaction" not in summary:
+        from review_suite_core.patch_identity import acceptance, bound_interaction
+
+        if accepted_patch := acceptance(state, live_head or ""):
+            payload["base_interaction"] = bound_interaction(state, accepted_patch)
+    if action:
+        if summary.get("review_ladder") != "invalidated":
+            payload["Action"] = action
+    if as_json:
+        write_text(json.dumps(public_cycle_status(payload, state), sort_keys=True))
+        return 0
+    emit_toon(payload)
+    return 0
+
+
+def _show_recorded_status(state: dict[str, Any], *, state_dir: Path, as_json: bool) -> int:
+    payload = recorded_cycle_status(state, state_dir=state_dir)
+    if as_json:
+        write_text(json.dumps(public_cycle_status(payload, state), sort_keys=True))
+    else:
+        action = _action_payload(state, state_dir=state_dir, summary=payload, recorded=True)
+        payload["next_action"] = _next_action_label(payload, action)
+        if action and payload["review_ladder"] != "invalidated":
+            payload["Action"] = action
+        emit_toon(payload)
+    return 0
+
+
+def _identity_head(state: dict[str, Any]) -> str | None:
+    identity = dict(state.get("identity") or {})
+    cwd = str(identity.get("cwd") or "").strip()
+    if not cwd:
+        return None
+    try:
+        return current_head(cwd_path_from_normalized(cwd))
+    except OSError, ValueError:
+        return None
+
+
+def _base_drift_reviewed_head(state: dict[str, Any]) -> str | None:
+    if _deslop_is_open(state):
+        return str(dict(state.get("deslop") or {}).get("reviewed_head") or "") or None
+    active = dict(state.get("active_findings") or {})
+    reviewed_head = str(active.get("reviewed_head") or "").strip()
+    if reviewed_head:
+        return reviewed_head
+    pending = dict(state.get("pending_action") or {})
+    pending_round = _round_by_id(state, str(pending.get("round_id") or "").strip())
+    reviewed_head = str(pending_round.get("reviewed_head") or "").strip()
+    if reviewed_head:
+        return reviewed_head
+    review_heads = dict(state.get("review_heads") or {})
+    for key in ("last_reviewed_head", "head"):
+        reviewed_head = str(review_heads.get(key) or "").strip()
+        if reviewed_head:
+            return reviewed_head
+    identity = dict(state.get("identity") or {})
+    reviewed_head = str(identity.get("head") or "").strip()
+    return reviewed_head or None
+
+
+def _allowed_base_drift(
+    *,
+    review_root: Path,
+    recorded_merge_base: str,
+    current_merge_base: str,
+    reviewed_head: str,
+    current_head_value: str,
+) -> dict[str, Any] | None:
+    if (
+        not recorded_merge_base
+        or not current_merge_base
+        or recorded_merge_base == current_merge_base
+    ):
+        return None
+    drift = merge_base_drift_scope(
+        review_cwd=review_root,
+        recorded_merge_base=recorded_merge_base,
+        current_merge_base=current_merge_base,
+        reviewed_head=reviewed_head,
+    )
+    base_changed_paths = list(drift.get("base_changed_paths") or [])
+    payload = {
+        "status": "ignored_no_path_overlap",
+        "recorded_merge_base": recorded_merge_base,
+        "current_merge_base": current_merge_base,
+        "reviewed_head": reviewed_head,
+        "current_head": current_head_value,
+        "base_changed_path_count": len(base_changed_paths),
+        "base_changed_paths": base_changed_paths[:BASE_DRIFT_PATH_SAMPLE_LIMIT],
+        "overlap_paths": list(drift.get("overlapping_paths") or []),
+        "patch_equivalent": bool(drift.get("patch_equivalent")),
+    }
+    if payload["patch_equivalent"]:
+        payload["equivalent_reviewed_head"] = current_head_value
+        return payload
+    parent_head = _first_parent(review_root, current_head_value)
+    if not parent_head:
+        return payload
+    parent_drift = merge_base_drift_scope(
+        review_cwd=review_root,
+        recorded_merge_base=recorded_merge_base,
+        current_merge_base=current_merge_base,
+        reviewed_head=reviewed_head,
+        current_head=parent_head,
+    )
+    if not list(parent_drift.get("overlapping_paths") or []) and bool(
+        parent_drift.get("patch_equivalent")
+    ):
+        payload["equivalent_reviewed_head"] = parent_head
+    return payload
+
+
+def _first_parent(review_root: Path, head: str) -> str | None:
+    try:
+        return resolve_ref(review_root, f"{head}^")
+    except ValueError:
+        return None
+
+
+def _current_cycle_identity_if_compatible(
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    identity = dict(state.get("identity") or {})
+    cwd = str(identity.get("cwd") or "").strip()
+    base = str(identity.get("base") or "").strip()
+    if not cwd or not base:
+        return None
+    try:
+        review_root = cwd_path_from_normalized(cwd)
+        expected_branch = _normalized_branch(str(identity.get("branch") or ""))
+        branch = _normalized_branch(current_branch(review_root))
+        if branch != expected_branch:
+            return None
+        if has_worktree_changes(review_root):
+            return None
+        head = current_head(review_root)
+        expected_merge_base = str(identity.get("merge_base") or "").strip()
+        current_merge_base = merge_base(review_root, base, "HEAD")
+        base_drift = None
+        if expected_merge_base and current_merge_base != expected_merge_base:
+            reviewed_head = _base_drift_reviewed_head(state)
+            if not reviewed_head:
+                return None
+            base_drift = _allowed_base_drift(
+                review_root=review_root,
+                recorded_merge_base=expected_merge_base,
+                current_merge_base=current_merge_base,
+                reviewed_head=reviewed_head,
+                current_head_value=head,
+            )
+            if base_drift is None:
+                return None
+            if (
+                state.get("stage") in {STAGE_DECISION_PENDING, STAGE_FIX_PENDING}
+                and not str(base_drift.get("equivalent_reviewed_head") or "").strip()
+            ):
+                return None
+        return {
+            "head": head,
+            "merge_base": current_merge_base,
+            "base_drift": base_drift,
+        }
+    except AttributeError, OSError, ValueError:
+        return None
+
+
+def _fix_pending_head_change_identity_if_compatible(
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    active = dict(state.get("active_findings") or {})
+    reviewed_head = str(active.get("reviewed_head") or "").strip()
+    identity = dict(state.get("identity") or {})
+    cwd = str(identity.get("cwd") or "").strip()
+    base = str(identity.get("base") or "").strip()
+    if not reviewed_head or not cwd or not base:
+        return None
+    try:
+        review_root = cwd_path_from_normalized(cwd)
+        expected_branch = _normalized_branch(str(identity.get("branch") or ""))
+        if _normalized_branch(current_branch(review_root)) != expected_branch:
+            return None
+        if has_worktree_changes(review_root):
+            return None
+        head = current_head(review_root)
+        if head == reviewed_head:
+            return None
+        return {
+            "head": head,
+            "merge_base": merge_base(review_root, base, "HEAD"),
+            "base_drift": None,
+        }
+    except AttributeError, OSError, ValueError:
+        return None
+
+
+def _reviewed_tree(state: dict[str, Any], head: str | None) -> str | None:
+    try:
+        cwd = str(dict(state.get("identity") or {}).get("cwd") or "").strip()
+        if not cwd or not head:
+            return None
+        return resolve_ref(cwd_path_from_normalized(cwd), f"{head}^{{tree}}")
+    except OSError, ValueError:
+        return None
+
+
+def _is_material_fix_head(
+    state: dict[str, Any], *, head: str, reviewed_head: str
+) -> bool:
+    head_tree = _reviewed_tree(state, head)
+    reviewed_tree = _reviewed_tree(state, reviewed_head)
+    return head != reviewed_head and (
+        not head_tree or not reviewed_tree or head_tree != reviewed_tree
+    )
+
+
+def _apply_decision_to_ready_state(
+    state: dict[str, Any],
+    decision: str,
+    *,
+    state_dir: Path,
+    require_grade: bool = True,
+) -> dict[str, Any]:
+    if state.get("stage") != STAGE_DECISION_PENDING:
+        raise ValueError(NO_DECISION_PENDING_MESSAGE)
+    round_id, lane = _pending_decision(state)
+    if require_grade and _pending_grade_payload(state, state_dir=state_dir) is not None:
+        raise ValueError(
+            "grade the arena round before recording a clean/findings decision"
+        )
+    round_payload = _round_by_id(state, round_id)
+    blocked_slots = _round_blocked_slots(
+        _load_output_round_payload(state_dir, round_payload)
+    ) or _round_blocked_slots(round_payload)
+    if bool(round_payload.get("review_blocked")) or blocked_slots:
+        slot_text = (
+            f" Blocked slots: {', '.join(blocked_slots)}." if blocked_slots else ""
+        )
+        raise ValueError(
+            f"cannot record a {decision} decision for blocked review round {round_id}.{slot_text} "
+            "Rerun or recover the review round before recording a decision."
+        )
+    reviewed_head = str(round_payload.get("reviewed_head") or "").strip() or None
+    reviewed_tree = _reviewed_tree(state, reviewed_head)
+    if lane == "base-interaction" and decision == DECISION_CLEAN:
+        check = dict(state["base_interaction_pending"])
+        next_state = deepcopy(state)
+        next_state["base_interaction_receipt"] = {
+            "binding": check["binding"],
+            "status": "checked",
+            "round_id": round_id,
+            "output_refs": round_payload.get("output_refs", []),
+        }
+        next_state["stage"] = check["stage"]
+        next_state["pending_action"] = check["pending_action"]
+        next_state["review_heads"] = check["review_heads"]
+        next_state["decisions"].append(
+            {"round_id": round_id, "lane": lane, "command": decision}
+        )
+        next_state.pop("base_interaction_pending", None)
+        return next_state
+    if decision == DECISION_CLEAN:
+        if lane == FOLLOWUP_LANE:
+            next_state = record_followup_clean(
+                state, round_id=round_id, reviewed_head=reviewed_head
+            )
+        else:
+            next_state = record_clean_decision(
+                state, round_id=round_id, lane=lane, reviewed_head=reviewed_head
+            )
+        head = str(dict(state.get("identity") or {}).get("head") or "")
+        if (
+            reviewed_head
+            and head
+            and head != reviewed_head
+            and (
+                not _is_material_fix_head(state, head=head, reviewed_head=reviewed_head)
+                or _test_docs_only_interdiff(state, reviewed_head, head)
+            )
+        ):
+            next_state["review_heads"]["last_reviewed_head"] = head
+            next_state["validation"].update(
+                dict.fromkeys(("focused", "full_suite", "ci"), "unknown")
+            )
+        return next_state
+    if decision == DECISION_FINDINGS:
+        if lane == "base-interaction":
+            check = state["base_interaction_pending"]
+            next_state = _with_fix_action(record_findings_decision(
+                state, round_id=round_id, lane=lane, reviewed_head=reviewed_head,
+                reviewed_tree=reviewed_tree))
+            next_state["review_heads"] = deepcopy(check["review_heads"])
+            next_state["identity"].update(head=check["binding"]["head"], merge_base=check["binding"]["base"])
+            next_state.pop("base_interaction_pending", None)
+            return next_state
+        if lane == FOLLOWUP_LANE:
+            return _with_fix_action(
+                record_followup_findings(
+                    state,
+                    round_id=round_id,
+                    reviewed_head=reviewed_head,
+                    reviewed_tree=reviewed_tree,
+                )
+            )
+        next_state = _with_fix_action(
+            record_findings_decision(
+                state,
+                round_id=round_id,
+                lane=lane,
+                reviewed_head=reviewed_head,
+                reviewed_tree=reviewed_tree,
+            )
+        )
+        return next_state
+    raise ValueError(f"unsupported decision: {decision}")
+
+
+def _auto_record_pending_decision_fix(
+    state: dict[str, Any],
+    *,
+    current_head_value: str,
+    state_dir: Path,
+) -> dict[str, Any]:
+    round_id, lane = _pending_decision(state)
+    round_payload = _round_by_id(state, round_id)
+    if (
+        bool(round_payload.get("review_blocked"))
+        or _round_blocked_slots(round_payload)
+        or _round_blocked_slots(_load_output_round_payload(state_dir, round_payload))
+    ):
+        return state
+    reviewed_head = str(round_payload.get("reviewed_head") or "").strip()
+    if not reviewed_head or reviewed_head == current_head_value:
+        return state
+    if (
+        _auto_decision_command(state, state_dir=state_dir) == DECISION_FINDINGS
+    ):
+        return state
+    if _stored_clean_review(_load_output_round_payload(state_dir, round_payload)):
+        if not _is_material_fix_head(
+            state, head=current_head_value, reviewed_head=reviewed_head
+        ) or _test_docs_only_interdiff(state, reviewed_head, current_head_value):
+            return state
+        clean = _apply_decision_to_ready_state(
+            state, DECISION_CLEAN, state_dir=state_dir, require_grade=False
+        )
+        clean["validation"].update(
+            dict.fromkeys(("focused", "full_suite", "ci"), "unknown")
+        )
+        if clean["stage"] in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+            return mark_latest_profile_step_rerun_needed(clean, head=current_head_value)
+        return clean
+    findings = _apply_decision_to_ready_state(
+        state, DECISION_FINDINGS, state_dir=state_dir, require_grade=False
+    )
+    findings["decisions"][-1]["source"] = "head-change-inference"
+    return mark_fix_detected(findings, head=current_head_value)
+
+
+def _stored_clean_review(payload: dict[str, Any]) -> bool:
+    runs = payload.get("runs") or []
+    if not runs or payload.get("review_blocked") or _round_blocked_slots(payload):
+        return False
+    for run in runs:
+        output = str(run.get("reviewer_output") or "").strip()
+        command = str(
+            run.get("terminal_command") or terminal_review_command(output) or ""
+        )
+        if (
+            str(run.get("review_status") or run.get("status")) != "completed"
+            or command == DECISION_FINDINGS
+            or not (
+                command == DECISION_CLEAN or output.lower().startswith("no findings.")
+            )
+            or re.search(
+                r"\[P[0-3]\]|(?:full )?review comments?:|review (?:result|decision):\s*findings",
+                output,
+                re.I,
+            )
+        ):
+            return False
+    return True
+
+
+def _test_docs_only_interdiff(
+    state: dict[str, Any], reviewed_head: str, head: str
+) -> bool:
+    cwd = str(dict(state.get("identity") or {}).get("cwd") or "")
+    if not cwd:
+        return False
+    result = subprocess.run(
+        ["git", "diff", "--raw", "-z", "--no-renames", reviewed_head, head],
+        cwd=cwd_path_from_normalized(cwd),
+        capture_output=True,
+        check=False,
+    )
+    diff = result.stdout.decode("utf-8").rstrip("\0").split("\0")
+    if result.returncode or not diff or len(diff) % 2:
+        return False
+    for header, name in zip(diff[::2], diff[1::2]):
+        path = Path(name)
+        test_or_doc = (
+            "tests" in path.parts
+            and path.suffix == ".py"
+            or "docs" in path.parts
+            and path.suffix in {".md", ".rst"}
+        )
+        if not test_or_doc or any(
+            mode not in {"000000", "100644", "100755"}
+            for mode in header.lstrip(":").split()[:2]
+        ):
+            return False
+    return True
+
+
+def _correct_inferred_clean_decision(
+    state: dict[str, Any], *, state_dir: Path, reason: str
+) -> dict[str, Any]:
+    review_root, _, _, head, merge_base_head = _current_restart_identity(
+        state, require_exact=False
+    )
+    if merge_base_head != state["identity"]["merge_base"]:
+        raise ValueError("correction requires the unchanged review merge-base")
+    corrections = state.get("decision_corrections") or []
+    if (
+        corrections
+        and corrections[-1]["head"] == head
+        and not state.get("active_findings")
+        and state.get("stage") in {STAGE_CREATED, STAGE_REVIEW_GREEN}
+        and (state.get("rounds") or [{}])[-1].get("round_id")
+        == corrections[-1]["round_id"]
+    ):
+        return state
+    active = dict(state.get("active_findings") or {})
+    round_record = _round_by_id(state, str(active.get("round_id") or ""))
+    payload = _load_output_round_payload(state_dir, round_record)
+    reviewed_head = str(active.get("reviewed_head") or "")
+    if (
+        not _stored_clean_review(payload)
+        or round_record.get("review_blocked")
+        or _round_blocked_slots(round_record)
+        or _pending_grade_payload(state, state_dir=state_dir) is not None
+        or dict(payload.get("review_scope") or {}).get("reviewed_head") != reviewed_head
+        or not is_ancestor(review_root, reviewed_head, head)
+    ):
+        raise ValueError(
+            "correction requires a completed stored clean review and its test/docs-only descendant"
+        )
+    decision = (state.get("decisions") or [{}])[-1]
+    if decision.get("source") not in {None, "head-change-inference"}:
+        raise ValueError("correction cannot replace a caller findings decision")
+    for record in state.get("rounds") or []:
+        if round_has_live_reviewer_process(
+            _load_output_round_payload(state_dir, record)
+        ):
+            raise ValueError("cannot correct while a reviewer is running")
+    source_round_id = str(round_record.get("source_round_id") or "")
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    for path in rounds_dir(round_state_dir).glob("*.json"):
+        candidate = load_round(round_state_dir, path.stem)
+        if dict(candidate.get("review_scope") or {}).get(
+            "source_round_id"
+        ) == source_round_id and round_has_live_reviewer_process(candidate):
+            raise ValueError("cannot correct while a follow-up reviewer is running")
+    if not _test_docs_only_interdiff(state, reviewed_head, head):
+        raise ValueError("correction requires committed test/docs-only changes")
+    digest = sha256(
+        "\n\n".join(
+            str(run.get("reviewer_output") or "") for run in payload["runs"]
+        ).encode()
+    ).hexdigest()
+    next_state = _with_current_identity(
+        state, head=head, merge_base_head=merge_base_head
+    )
+    return correct_inferred_followup_decision(
+        next_state, head=head, reason=reason, verdict_digest=digest
+    )
+
+
+def _auto_record_structured_decision(
+    state: dict[str, Any], *, state_dir: Path
+) -> dict[str, Any]:
+    command = _auto_decision_command(state, state_dir=state_dir)
+    # Findings require caller classification, including after arena grading.
+    if command is None or command == DECISION_FINDINGS:
+        return state
+    next_state = _apply_decision_to_ready_state(state, command, state_dir=state_dir)
+    next_state["decisions"][-1]["source"] = "automatic"
+    return next_state
+
+
+def _record_caller_disagreement(
+    state: dict[str, Any], *, state_dir: Path, reason: str
+) -> dict[str, Any]:
+    if state.get("stage") == STAGE_DECISION_PENDING:
+        return _record_pending_caller_disposition(state, state_dir=state_dir, reason=reason)
+    _, _, _, head, _ = _current_restart_identity(state)
+    dispositions = state.get("finding_dispositions") or []
+    round_record = (state.get("rounds") or [{}])[-1]
+    if (
+        dispositions
+        and not state.get("active_findings")
+        and dispositions[-1]["reviewed_head"] == head
+        and dispositions[-1]["round_id"] == round_record.get("round_id")
+        and state.get("stage") in {STAGE_CREATED, STAGE_REVIEW_GREEN}
+    ):
+        return state
+    active = dict(state.get("active_findings") or {})
+    payload = _load_output_round_payload(state_dir, round_record)
+    accepted_heads = dict(state.get("convergence") or {}).get(
+        "accepted_findings_heads"
+    ) or [{}]
+    if (
+        state.get("schema_version") != 1
+        or active.get("round_id") != round_record.get("round_id")
+        or active.get("reviewed_head") != head
+        or accepted_heads[-1].get("tree") != _reviewed_tree(state, head)
+        or dict(payload.get("review_scope") or {}).get("reviewed_head") != head
+        or str(payload.get("status") or "") != "completed"
+        or _round_terminal_command(payload) != DECISION_FINDINGS
+        or round_record.get("review_blocked")
+        or payload.get("review_blocked")
+        or _round_blocked_slots(round_record)
+        or _round_blocked_slots(payload)
+        or _pending_grade_payload(state, state_dir=state_dir) is not None
+        or bool(round_record.get("grading_required"))
+        and bool(round_record.get("arena_round") or payload.get("arena_round"))
+        and round_needs_caller_grade(payload)
+        or not payload.get("runs")
+        or any(
+            str(run.get("review_status") or run.get("status") or "") != "completed"
+            or not str(run.get("reviewer_output") or "").strip()
+            for run in payload.get("runs") or []
+        )
+    ):
+        raise ValueError(
+            "caller disagreement requires the latest completed structured findings review at the exact clean head"
+        )
+    source_round_id = str(
+        round_record.get("source_round_id") or active.get("round_id") or ""
+    )
+    for record in state.get("rounds") or []:
+        if round_has_live_reviewer_process(
+            _load_output_round_payload(state_dir, record)
+        ):
+            raise ValueError("cannot reject findings while a reviewer is running")
+    for candidate_dir in _round_state_dir_candidates(state_dir, round_record):
+        for path in rounds_dir(candidate_dir).glob("*.json"):
+            candidate = load_round(candidate_dir, path.stem)
+            if (
+                dict(candidate.get("review_scope") or {}).get("source_round_id")
+                != source_round_id
+            ):
+                continue
+            if round_has_live_reviewer_process(candidate):
+                raise ValueError(
+                    "cannot reject findings while a follow-up reviewer is running"
+                )
+            if candidate.get("status") in {"completed", "running"} and not _round_by_id(
+                state, path.stem
+            ):
+                raise ValueError(
+                    "cannot reject findings before inspecting the unconsumed follow-up review"
+                )
+    digest = sha256(
+        "\n\n".join(str(run["reviewer_output"]) for run in payload["runs"]).encode()
+    ).hexdigest()
+    return reject_automatic_findings(state, reason=reason, verdict_digest=digest)
+
+
+def _record_pending_caller_disposition(
+    state: dict[str, Any], *, state_dir: Path, reason: str
+) -> dict[str, Any]:
+    """Classify completed findings before accepting a convergence head."""
+    identity = _current_cycle_identity_if_compatible(state)
+    round_id, _ = _pending_decision(state)
+    record = _round_by_id(state, round_id)
+    payload = _load_output_round_payload(state_dir, record)
+    reviewed_head = str(record.get("reviewed_head") or "")
+    if (
+        not identity
+        or not reviewed_head
+        or _auto_decision_command(state, state_dir=state_dir) != DECISION_FINDINGS
+        or dict(payload.get("review_scope") or {}).get("reviewed_head") != reviewed_head
+        or not payload.get("runs")
+        or any(
+            str(run.get("review_status") or run.get("status") or "") != "completed"
+            or not str(run.get("reviewer_output") or "").strip()
+            for run in payload["runs"]
+        )
+        or any(round_has_live_reviewer_process(_load_output_round_payload(state_dir, item))
+               for item in state.get("rounds") or [])
+    ):
+        raise ValueError("caller disposition requires completed structured findings on the clean review branch")
+    head = identity["head"]
+    if head != reviewed_head and not (
+        is_ancestor(cwd_path_from_normalized(state["identity"]["cwd"]), reviewed_head, head)
+        and _test_docs_only_interdiff(state, reviewed_head, head)
+    ):
+        raise ValueError("caller disposition requires the reviewed head or a test/docs-only descendant")
+    current = _with_current_identity(state, head=head, merge_base_head=identity["merge_base"])
+    result = _apply_decision_to_ready_state(current, DECISION_CLEAN, state_dir=state_dir)
+    result["decisions"][-1].update(
+        source="caller", reason=reason, head=head,
+        verdict_digest=sha256("\n\n".join(str(run["reviewer_output"]) for run in payload["runs"]).encode()).hexdigest(),
+    )
+    return result
+
+
+def _resume_progress(
+    state: dict[str, Any], *, state_dir: Path | None = None
+) -> dict[str, Any]:
+    stage = state.get("stage")
+    if stage == STAGE_CREATED and dict(state.get("deslop") or {}).get("status") in {
+        DESLOP_STATUS_DONE,
+        DESLOP_STATUS_CLOSED,
+    }:
+        identity = _current_cycle_identity_if_compatible(state)
+        if identity and identity["head"] != dict(state.get("identity") or {}).get(
+            "head"
+        ):
+            cleanup_head = str(
+                dict(state.get("deslop") or {}).get("reviewed_head") or ""
+            )
+            from review_suite_core.patch_identity import acceptance
+            unchanged_patch = bool(acceptance(state, identity["head"]))
+            fixes_applied = _is_material_fix_head(
+                state, head=identity["head"], reviewed_head=cleanup_head
+            ) and not unchanged_patch
+            state = _with_current_identity(
+                state,
+                head=identity["head"],
+                merge_base_head=identity["merge_base"],
+                base_drift=identity.get("base_drift"),
+            )
+            state = _with_equivalent_base_drift_review_head(
+                state, identity.get("base_drift")
+            )
+            state["validation"] = {
+                key: "unknown"
+                for key in ("focused", "full_suite", "ci", "review_green")
+            }
+            if _deslop_is_open(state) and fixes_applied:
+                return mark_deslop_closed(state, fixes_applied=True)
+            return state
+        return state
+    if stage in {STAGE_CREATED, STAGE_FOLLOWUP_PENDING}:
+        return state
+    if stage == STAGE_DECISION_PENDING:
+        if (
+            state_dir is not None
+            and _pending_grade_payload(state, state_dir=state_dir) is not None
+        ):
+            return state
+        try:
+            identity = _current_cycle_identity_if_compatible(state)
+        except OSError, ValueError:
+            return state
+        if identity:
+            head = str(identity.get("head") or "").strip()
+            base_drift = (
+                identity.get("base_drift")
+                if isinstance(identity.get("base_drift"), dict)
+                else None
+            )
+            state = _with_current_identity(
+                state,
+                head=head,
+                merge_base_head=str(identity.get("merge_base") or "").strip(),
+                base_drift=base_drift,
+            )
+            state = _with_equivalent_base_drift_review_head(state, base_drift)
+            if state_dir is None:
+                return state
+            if bool(dict(base_drift or {}).get("patch_equivalent")):
+                return state
+            return _auto_record_pending_decision_fix(
+                state, current_head_value=head, state_dir=state_dir
+            )
+        return state
+    if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        from review_suite_core.patch_identity import acceptance, record_acceptance
+        live = _current_cycle_identity_if_compatible(state)
+        accepted = acceptance(state, live["head"]) if live else None
+        if accepted:
+            identity = state["identity"]
+            if (live["head"], live["merge_base"]) != (identity.get("head"), identity.get("merge_base")):
+                state = _with_current_identity(
+                    state, head=live["head"], merge_base_head=live["merge_base"],
+                    base_drift=live.get("base_drift"),
+                )
+                return record_acceptance(state, accepted)
+            if recorded_acceptance(state) != accepted or (
+                state.get("accepted_review") and "accepted_review_scope" not in state
+            ):
+                return record_acceptance(state, accepted)
+            return state
+        identity = _github_pending_head_change_identity(state)
+        if not identity:
+            return state
+        head = str(identity.get("head") or "").strip()
+        base_drift = (
+            identity.get("base_drift")
+            if isinstance(identity.get("base_drift"), dict)
+            else None
+        )
+        next_state = _with_current_identity(
+            state,
+            head=head,
+            merge_base_head=str(identity.get("merge_base") or "").strip(),
+            base_drift=base_drift,
+        )
+        next_state = _with_equivalent_base_drift_review_head(next_state, base_drift)
+        from review_suite_core.patch_identity import reviewed_receipt
+        next_state["patch_delta"] = reviewed_receipt(state)
+        next_state["github_review"] = {"status": "unknown"}
+        return mark_latest_profile_step_rerun_needed(next_state, head=head)
+    if stage != STAGE_FIX_PENDING:
+        return state
+
+    active = dict(state.get("active_findings") or {})
+    reviewed_head = str(active.get("reviewed_head") or "").strip()
+    try:
+        identity = _current_cycle_identity_if_compatible(state)
+    except OSError, ValueError:
+        identity = None
+    if not identity:
+        identity = _fix_pending_head_change_identity_if_compatible(state)
+    head = ""
+    if identity:
+        head = str(identity.get("head") or "").strip()
+        base_drift = (
+            identity.get("base_drift")
+            if isinstance(identity.get("base_drift"), dict)
+            else None
+        )
+        state = _with_current_identity(
+            state,
+            head=head,
+            merge_base_head=str(identity.get("merge_base") or "").strip(),
+            base_drift=base_drift,
+        )
+        state = _with_equivalent_base_drift_review_head(state, base_drift)
+    base_drift = dict(base_drift or {}) if identity else {}
+    active = dict(state.get("active_findings") or {})
+    reviewed_head = str(active.get("reviewed_head") or "").strip()
+    if (
+        head
+        and reviewed_head
+        and _is_material_fix_head(state, head=head, reviewed_head=reviewed_head)
+        and not bool(base_drift.get("patch_equivalent"))
+    ):
+        return mark_fix_detected(state, head=head)
+    return _with_fix_action(state)
+
+
+def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[str, Any]:
+    state["selection"]["reason"] = resolution.selection_reason
+
+    def step_payload(step: Any) -> dict[str, Any]:
+        payload = {
+            "kind": step.kind,
+            "name": step.name,
+            "lane": step.lane,
+            "task_class": step.task_class,
+        }
+        if step.kind == "arena":
+            payload["rating_pool_id"] = step.rating_pool_id
+            if step.reporting_pool:
+                payload["reporting_pool"] = True
+            payload["variant_groups"] = [list(group) for group in step.variant_groups]
+            if step.variant_ids:
+                payload["variant_ids"] = list(step.variant_ids)
+            return payload
+        payload.update(
+            {
+                "count": step.count,
+                "model": step.model,
+                "reasoning_effort": step.reasoning_effort,
+                "service_tier": step.service_tier,
+            }
+        )
+        if step.rerun_on_findings:
+            payload["rerun_on_findings"] = True
+        if step.max_review_rounds is not None:
+            payload["max_review_rounds"] = step.max_review_rounds
+        return payload
+
+    state["review_plan"] = {
+        "steps": [step_payload(step) for step in resolution.steps],
+    }
+    return state
+
+
+def _with_current_identity(
+    state: dict[str, Any],
+    *,
+    head: str,
+    merge_base_head: str,
+    base_drift: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    next_state = dict(state)
+    from review_suite_core.patch_identity import reviewed_receipt
+    try:
+        if receipt := reviewed_receipt(state):
+            next_state["review_patch"] = receipt
+    except (OSError, ValueError):
+        pass
+    identity = dict(next_state.get("identity") or {})
+    identity["head"] = head
+    identity["merge_base"] = merge_base_head
+    next_state["identity"] = identity
+    accepted = next_state.get("accepted_review") or {}
+    if (accepted.get("accepted_head"), accepted.get("accepted_base")) != (head, merge_base_head):
+        next_state.pop("accepted_review", None)
+        next_state.pop("accepted_review_scope", None)
+        next_state.pop("accepted_review_github_head", None)
+    review_heads = dict(next_state.get("review_heads") or {})
+    review_heads["head"] = head
+    review_heads["merge_base"] = merge_base_head
+    next_state["review_heads"] = review_heads
+    if base_drift is not None:
+        next_state["base_drift"] = base_drift
+    return next_state
+
+
+def _with_equivalent_base_drift_review_head(
+    state: dict[str, Any],
+    base_drift: dict[str, Any] | None,
+) -> dict[str, Any]:
+    drift = dict(base_drift or {})
+    from review_suite_core.patch_identity import acceptance
+    accepted = acceptance(state, str(drift.get("equivalent_reviewed_head") or ""))
+    return {**state, "accepted_review": accepted} if accepted else state
+
+
+def _cycle_cli_skips_deslop(state: dict[str, Any]) -> bool:
+    deslop = dict(state.get("deslop") or {})
+    if str(deslop.get("status") or "").strip() != DESLOP_STATUS_SKIPPED:
+        return False
+    source = str(deslop.get("source") or "cli").strip()
+    return source == "cli"
+
+
+def _deslop_is_done_or_skipped(state: dict[str, Any]) -> bool:
+    deslop = dict(state.get("deslop") or {})
+    status = str(deslop.get("status") or "").strip()
+    return status == DESLOP_STATUS_DONE or (
+        not bool(deslop.get("tracked")) and status == DESLOP_STATUS_SKIPPED
+    )
+
+
+def _green_cycle_needs_current_head_signoff(
+    state: dict[str, Any], *, head: str
+) -> bool:
+    if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        return False
+    github_status = _github_review_status(state)
+    if (
+        _mode_label(state) == "fast" and github_status == "unknown"
+    ) or github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
+        return False
+    summary = review_ladder_summary(state, current_head=head)
+    return summary.get("review_ladder") == "invalidated" or bool(summary.get("acceptance"))
+
+
+def _continuation_head_match_kind(
+    state: dict[str, Any], *, review_root: Path, head: str
+) -> str | None:
+    identity = dict(state.get("identity") or {})
+    recorded_head = str(identity.get("head") or "").strip()
+    if not recorded_head:
+        return None
+    if recorded_head == head:
+        return "exact"
+    stage = str(state.get("stage") or "")
+    if stage == STAGE_CREATED:
+        if dict(state.get("deslop") or {}).get("status") in {
+            DESLOP_STATUS_DONE,
+            DESLOP_STATUS_CLOSED,
+        }:
+            return "changed"
+        if not _deslop_is_done_or_skipped(state):
+            return None
+        try:
+            if is_ancestor(review_root, recorded_head, head) or is_ancestor(
+                review_root, head, recorded_head
+            ):
+                return None
+            return "amended"
+        except ValueError:
+            return None
+    if stage in {
+        STAGE_DECISION_PENDING,
+        STAGE_FIX_PENDING,
+        STAGE_FOLLOWUP_PENDING,
+        "decision-required",
+    }:
+        return "changed"
+    if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        return "changed"
+    return None
+
+
+def _compatible_continuation_cycle(
+    *,
+    state_dir: Path,
+    review_root: Path,
+    base: str,
+    branch: str | None,
+    head: str,
+    merge_base_head: str,
+    effective_mode: str,
+    arena_enabled: bool,
+    review_brief: str | None = None,
+    skip_deslop: bool = False,
+) -> dict[str, Any] | None:
+    normalized_cwd = normalize_cwd(str(review_root))
+    normalized_branch = _normalized_branch(branch)
+    candidates: list[tuple[float, str, dict[str, Any], dict[str, Any] | None]] = []
+    directory = cycles_dir(state_dir)
+    if not directory.exists():
+        return None
+    for path in directory.glob("*.json"):
+        try:
+            state = load_cycle_by_key(state_dir, path.stem)
+        except ValueError:
+            continue
+        if not isinstance(state, dict):
+            continue
+        state_stage = str(state.get("stage") or "")
+        if state_stage not in CONTINUATION_REDIRECT_STAGES and not (
+            _green_cycle_needs_current_head_signoff(state, head=head)
+        ):
+            continue
+        if isinstance(state.get("superseded_by"), dict):
+            continue
+        identity = dict(state.get("identity") or {})
+        if str(identity.get("cwd") or "") != normalized_cwd:
+            continue
+        if str(identity.get("base") or "").strip() != str(base or "").strip():
+            continue
+        if _normalized_branch(str(identity.get("branch") or "")) != normalized_branch:
+            continue
+        recorded_merge_base = str(identity.get("merge_base") or "").strip()
+        base_drift = None
+        if recorded_merge_base != str(merge_base_head or "").strip():
+            reviewed_head = _base_drift_reviewed_head(state)
+            if not reviewed_head:
+                continue
+            try:
+                base_drift = _allowed_base_drift(
+                    review_root=review_root,
+                    recorded_merge_base=recorded_merge_base,
+                    current_merge_base=str(merge_base_head or "").strip(),
+                    reviewed_head=reviewed_head,
+                    current_head_value=head,
+                )
+            except OSError, ValueError:
+                continue
+            if base_drift is None:
+                continue
+            if state_stage == STAGE_CREATED and not bool(
+                base_drift.get("patch_equivalent")
+            ):
+                continue
+            if (
+                state_stage in {STAGE_DECISION_PENDING, STAGE_FIX_PENDING}
+                and not str(base_drift.get("equivalent_reviewed_head") or "").strip()
+            ):
+                continue
+        mode = dict(state.get("mode") or {})
+        state_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
+        decision_pending = state_stage == "decision-required"
+        if state_mode != effective_mode and not decision_pending:
+            continue
+        state_arena_enabled = any(
+            isinstance(step, dict) and step.get("kind") == "arena"
+            for step in dict(state.get("review_plan") or {}).get("steps", [])
+        )
+        if state_arena_enabled != arena_enabled and not decision_pending:
+            continue
+        if _cycle_cli_skips_deslop(state) != bool(skip_deslop) and not decision_pending:
+            continue
+        match_kind = _continuation_head_match_kind(
+            state, review_root=review_root, head=head
+        )
+        if match_kind is None:
+            continue
+        candidates.append((path.stat().st_mtime, match_kind, state, base_drift))
+    if not candidates:
+        return None
+    exact_candidates = [
+        candidate for candidate in candidates if candidate[1] == "exact"
+    ]
+    selected_candidates = exact_candidates or candidates
+    if len(selected_candidates) > 1:
+        public_ids = sorted(
+            str(candidate[2].get("public_id") or candidate[2].get("cycle_key") or "")
+            for candidate in selected_candidates
+        )
+        raise ValueError(
+            "multiple active review cycles match this repo/base/branch/merge-base; "
+            f"rerun with --id for one of: {', '.join(public_ids)}"
+        )
+    selected_base_drift = selected_candidates[0][3]
+    selected_state = selected_candidates[0][2]
+    _reject_review_brief_replacement(selected_state, review_brief)
+    if selected_state.get("stage") == STAGE_CREATED and dict(
+        selected_state.get("deslop") or {}
+    ).get("status") in {DESLOP_STATUS_DONE, DESLOP_STATUS_CLOSED}:
+        return _resume_progress(selected_state, state_dir=state_dir)
+    resumed = _with_current_identity(
+        selected_state,
+        head=head,
+        merge_base_head=merge_base_head,
+        base_drift=selected_base_drift,
+    )
+    if str(resumed.get("stage") or "") in {
+        STAGE_REVIEW_GREEN,
+        STAGE_LOCAL_GREEN_HANDOFF,
+    }:
+        from review_suite_core.patch_identity import acceptance
+        if acceptance(selected_state, head):
+            return _resume_progress(selected_state, state_dir=state_dir)
+        if bool(dict(selected_base_drift or {}).get("patch_equivalent")):
+            return _with_equivalent_base_drift_review_head(resumed, selected_base_drift)
+        return mark_latest_profile_step_rerun_needed(resumed, head=head)
+    return resumed
+
+
+def _requested_model_override(args: argparse.Namespace) -> dict[str, str]:
+    model = str(getattr(args, "model", "") or "").strip()
+    if model and "/" in model and not model.startswith(OPENCODE_MODEL_PREFIX):
+        model = f"{OPENCODE_MODEL_PREFIX}{model}"
+    if model:
+        split_review_backend_model(model)
+    reasoning = str(getattr(args, "reasoning", "") or "").strip()
+    override: dict[str, str] = {}
+    if model:
+        override["model"] = model
+    if reasoning:
+        override["reasoning"] = reasoning
+    return override
+
+
+def _config_with_model_override(
+    config: dict[str, Any], override: dict[str, str]
+) -> dict[str, Any]:
+    model = str(override.get("model") or "").strip()
+    reasoning = str(override.get("reasoning") or "").strip()
+    if not model and not reasoning:
+        return config
+    merged = deepcopy(config)
+    orchestrator = merged.setdefault("orchestrator", {})
+    defaults = dict(orchestrator.get("stable_defaults") or {})
+    for ref, group in (
+        ("signoff_base_model", "base"),
+        ("signoff_deep_model", "deep"),
+    ):
+        existing_model, existing_effort, existing_tier = parse_model_label(
+            defaults.get(ref), field=ref
+        )
+        chosen = override_model_config(
+            LensModelConfig(existing_model, existing_effort, existing_tier), override
+        )
+        chosen_model, effort, tier = chosen.model, chosen.reasoning_effort, chosen.service_tier
+        defaults[ref] = "-".join([chosen_model, effort] + ([tier] if tier else []))
+        section = merged.get(group)
+        if isinstance(section, dict):
+            section["model"] = chosen_model
+            if reasoning:
+                section["reasoning"] = reasoning
+            if chosen_model.startswith((OPENCODE_MODEL_PREFIX, CLAUDE_MODEL_PREFIX)):
+                section.pop("service_tier", None)
+    orchestrator["stable_defaults"] = defaults
+    return merged
+
+
+def _config_without_arena(config: dict[str, Any], *, disabled: bool) -> dict[str, Any]:
+    if not disabled:
+        return config
+    merged = deepcopy(config)
+    merged["arena"]["enabled"] = False
+    return merged
+
+
+def _record_model_override(state: dict[str, Any], override: dict[str, str]) -> None:
+    if override:
+        state["model_override"] = dict(override)
+
+
+def _reject_model_override_on_existing(
+    override: dict[str, str], state: dict[str, Any]
+) -> None:
+    if not override:
+        return
+    public_id = str(state.get("public_id") or "").strip()
+    raise ValueError(
+        "--model/--reasoning apply when a review is created; "
+        f"{f'review {public_id} already' if public_id else 'a review already'} "
+        "has a frozen plan. Remove the override to continue it, or start a new "
+        "review once this one closes."
+    )
+
+
+def _create_or_resume_cycle(
+    *, args: argparse.Namespace, state_dir: Path, public_id: str | None = None
+) -> dict[str, Any]:
+    mode = str(args.mode or "base")
+    review_root = resolve_repo_root(args.cd)
+    head = current_head(review_root)
+    branch = current_branch(review_root)
+    base_info = effective_base_ref(review_root, args.base)
+    base = str(base_info["base"])
+    merge_base_head = merge_base(review_root, base, "HEAD")
+    model_override = _requested_model_override(args)
+    config = _config_with_model_override(load_config(state_dir), model_override)
+    arena_disabled = bool(args.no_arena) or _repo_has_no_arena(review_root)
+    config = _config_without_arena(config, disabled=arena_disabled)
+    resolution = resolve_orchestrator_profile(
+        config, mode=mode, selection=_configured_selection(config)
+    )
+    skip_deslop = bool(args.skip_deslop)
+    # A caller-chosen id always names a new cycle, so it never adopts another.
+    continuation = None if public_id else _compatible_continuation_cycle(
+        state_dir=state_dir,
+        review_root=review_root,
+        base=base,
+        branch=branch,
+        head=head,
+        merge_base_head=merge_base_head,
+        effective_mode=resolution.effective_mode,
+        arena_enabled=any(step.kind == "arena" for step in resolution.steps),
+        review_brief=args.review_brief,
+        skip_deslop=skip_deslop,
+    )
+    if continuation is not None:
+        _reject_model_override_on_existing(model_override, continuation)
+        return _apply_runtime_options(continuation, args)
+    state = create_cycle(
+        cwd=review_root,
+        base=base,
+        branch=branch,
+        head=head,
+        merge_base=merge_base_head,
+        requested_mode=resolution.requested_mode,
+        effective_mode=resolution.effective_mode,
+        selection=resolution.requested_selection,
+        effective_selection=resolution.effective_selection,
+        deslop_enabled=not skip_deslop,
+        deslop_skip_source="cli" if skip_deslop else None,
+        cycle_token=",".join(
+            token
+            for token, enabled in (
+                ("skip-deslop", skip_deslop),
+                ("no-arena", arena_disabled),
+                (f"id-{public_id}", bool(public_id)),
+            )
+            if enabled
+        )
+        or None,
+        review_brief=args.review_brief,
+    )
+    if str(base_info["requested_base"]) != base:
+        state["identity"]["requested_base"] = str(base_info["requested_base"])
+    for key in EFFECTIVE_BASE_METADATA_KEYS:
+        if key in base_info:
+            state["identity"][key] = base_info[key]
+    state = _apply_runtime_options(state, args)
+    existing = load_cycle_by_key(state_dir, str(state["cycle_key"]))
+    if existing is not None:
+        _reject_model_override_on_existing(model_override, existing)
+        _reject_review_brief_replacement(existing, args.review_brief)
+        return _apply_runtime_options(existing, args)
+    state = _apply_profile_resolution(state, resolution)
+    if arena_disabled:
+        state["arena_disabled"] = "cli" if args.no_arena else "repository"
+    _record_model_override(state, model_override)
+    if public_id:
+        return create_cycle_with_public_id(state_dir, state, public_id)
+    return state
+
+
+def _apply_runtime_options(
+    state: dict[str, Any], args: argparse.Namespace
+) -> dict[str, Any]:
+    if not bool(getattr(args, "wsl", False)):
+        return state
+    next_state = dict(state)
+    runtime = dict(next_state.get("runtime") or {})
+    runtime["allow_unsafe_windows_wsl_fallback"] = True
+    next_state["runtime"] = runtime
+    return next_state
+
+
+def _copy_runtime_options(
+    target: dict[str, Any], source: dict[str, Any]
+) -> dict[str, Any]:
+    runtime = dict(source.get("runtime") or {})
+    if not runtime:
+        return target
+    next_target = dict(target)
+    next_target["runtime"] = runtime
+    return next_target
+
+
+def _current_restart_identity(
+    state: dict[str, Any], *, require_exact: bool = True
+) -> tuple[Path, str, str | None, str, str]:
+    identity = dict(state.get("identity") or {})
+    cwd = str(identity.get("cwd") or "").strip()
+    if not cwd:
+        raise ValueError("review cycle is missing cwd and cannot be restarted")
+    base = str(identity.get("base") or "").strip()
+    if not base:
+        raise ValueError("review cycle is missing base and cannot be restarted")
+    review_root = cwd_path_from_normalized(cwd)
+    old_branch = _normalized_branch(str(identity.get("branch") or ""))
+    branch = _normalized_branch(current_branch(review_root))
+    if branch != old_branch:
+        raise ValueError(
+            f"cannot restart review cycle on branch {branch or 'HEAD'}; expected {old_branch or 'HEAD'}"
+        )
+    if has_worktree_changes(review_root):
+        raise ValueError(
+            "cannot restart review cycle with a dirty worktree; commit or stash changes, then rerun"
+        )
+    head = current_head(review_root)
+    expected_head = str(identity.get("head") or "").strip()
+    if require_exact and head != expected_head:
+        raise ValueError(
+            "cannot restart review cycle after HEAD changed; start a new review instead"
+        )
+    merge_base_head = merge_base(review_root, base, "HEAD")
+    expected_merge_base = str(identity.get("merge_base") or "").strip()
+    if require_exact and merge_base_head != expected_merge_base:
+        raise ValueError(
+            "cannot restart review cycle after merge-base changed; start a new review instead"
+        )
+    return review_root, base, branch, head, merge_base_head
+
+
+def _create_successor_cycle(
+    *,
+    state: dict[str, Any],
+    state_dir: Path,
+    target_mode: str,
+    reason: str,
+    kind: str,
+    require_exact_identity: bool,
+    review_brief: str | None,
+) -> tuple[dict[str, Any], bool]:
+    if isinstance(state.get("superseded_by"), dict):
+        replacement = str(
+            dict(state.get("superseded_by") or {}).get("review") or ""
+        ).strip()
+        raise ValueError(
+            f"review cycle is already superseded{f' by {replacement}' if replacement else ''}"
+        )
+    current_mode = _current_mode(state)
+    review_root, base, branch, head, merge_base_head = _current_restart_identity(
+        state, require_exact=require_exact_identity
+    )
+    model_override = dict(state.get("model_override") or {})
+    config = _config_with_model_override(load_config(state_dir), model_override)
+    arena_disabled = state.get("arena_disabled") == "cli" or _repo_has_no_arena(
+        review_root
+    )
+    config = _config_without_arena(config, disabled=arena_disabled)
+    selection = str(
+        dict(state.get("selection") or {}).get("requested")
+        or _configured_selection(config)
+    ).strip()
+    resolution = resolve_orchestrator_profile(
+        config, mode=target_mode, selection=selection
+    )
+    source_deslop = dict(state.get("deslop") or {})
+    source_skipped_deslop = _cycle_cli_skips_deslop(state)
+    deslop_skip_source = (
+        str(source_deslop.get("source") or "cli").strip()
+        if source_skipped_deslop
+        else None
+    )
+    restart_token = (
+        f"{state.get('cycle_key')}:{target_mode}"
+        if kind == "mode-restart"
+        else f"{state.get('cycle_key')}:{kind}"
+    )
+    replacement = create_cycle(
+        cwd=review_root,
+        base=base,
+        branch=branch,
+        head=head,
+        merge_base=merge_base_head,
+        requested_mode=resolution.requested_mode,
+        effective_mode=resolution.effective_mode,
+        selection=resolution.requested_selection,
+        effective_selection=resolution.effective_selection,
+        deslop_enabled=not source_skipped_deslop,
+        deslop_skip_source=deslop_skip_source,
+        restart_token=restart_token,
+        review_brief=review_brief,
+    )
+    existing = load_cycle_by_key(state_dir, str(replacement["cycle_key"]))
+    if existing is not None:
+        if existing.get("review_brief") != review_brief:
+            raise ValueError("review cycle already has a different successor brief")
+        return _copy_runtime_options(existing, state), True
+    replacement = _copy_runtime_options(replacement, state)
+    if arena_disabled:
+        replacement["arena_disabled"] = (
+            "cli" if state.get("arena_disabled") == "cli" else "repository"
+        )
+    _record_model_override(replacement, model_override)
+    replacement["restart"].update(
+        {
+            "supersedes": str(state.get("public_id") or ""),
+            "supersedes_cycle_key": str(state.get("cycle_key") or ""),
+            "from_mode": current_mode,
+            "reason": reason,
+            "kind": kind,
+        }
+    )
+    return _apply_profile_resolution(replacement, resolution), False
+
+
+def _start_successor_cycle(state: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    replacement = _reserve_successor_cycle(state, **kwargs)
+    return _resume_reserved_successor(replacement, state_dir=kwargs["state_dir"])
+
+
+def _reserve_successor_cycle(
+    state: dict[str, Any],
+    *,
+    state_dir: Path,
+    target_mode: str,
+    reason: str,
+    kind: str,
+    require_exact_identity: bool,
+    review_brief: str | None,
+) -> dict[str, Any]:
+    replacement, _ = _create_successor_cycle(
+        state=state,
+        state_dir=state_dir,
+        target_mode=target_mode,
+        reason=reason,
+        kind=kind,
+        require_exact_identity=require_exact_identity,
+        review_brief=review_brief,
+    )
+    superseded = abort_cycle(state, reason=reason)
+    superseded["superseded_by"] = {
+        "mode": target_mode,
+        "reason": reason,
+        "kind": kind,
+    }
+    saved_replacement, _ = reserve_cycle_successor(
+        state_dir,
+        source=superseded,
+        successor=replacement,
+    )
+    return saved_replacement
+
+
+def _resume_reserved_successor(
+    state: dict[str, Any], *, state_dir: Path
+) -> dict[str, Any]:
+    if state.get("stage") not in {STAGE_CREATED, STAGE_RUNNING}:
+        return state
+    cycle_key = str(state.get("cycle_key") or "").strip()
+    try:
+        with orchestrator_store_lock(
+            state_dir=state_dir,
+            name=f"successor-{cycle_key}",
+            timeout_seconds=1,
+        ):
+            current = load_cycle_by_key(state_dir, cycle_key) or state
+            if current.get("stage") not in {STAGE_CREATED, STAGE_RUNNING}:
+                return current
+            advanced = _advance_without_decision(current, state_dir=state_dir)
+            return save_cycle(state_dir, advanced)
+    except TimeoutError:
+        raise SuccessorAdvanceBusyError(
+            load_cycle_by_key(state_dir, cycle_key) or state
+        ) from None
+
+
+def _is_successor_cycle(state: dict[str, Any]) -> bool:
+    restart = dict(state.get("restart") or {})
+    return bool(str(restart.get("token") or "").strip())
+
+
+def _successor_needs_locked_resume(state: dict[str, Any]) -> bool:
+    return _is_successor_cycle(state) and state.get("stage") in {
+        STAGE_CREATED,
+        STAGE_RUNNING,
+    }
+
+
+def _restart_cycle(
+    state: dict[str, Any], *, state_dir: Path, target_mode: str, reason: str
+) -> dict[str, Any]:
+    _validate_restart_mode(state, target_mode)
+    return _start_successor_cycle(
+        state,
+        state_dir=state_dir,
+        target_mode=target_mode,
+        reason=reason,
+        kind="mode-restart",
+        require_exact_identity=True,
+        review_brief=state.get("review_brief"),
+    )
+
+
+def _restart_review_brief(
+    state: dict[str, Any], *, state_dir: Path, **kwargs: Any
+) -> dict[str, Any]:
+    with orchestrator_store_lock(
+        state_dir=state_dir,
+        name=f"followup-{state['cycle_key']}",
+        timeout_seconds=1,
+    ):
+        current = load_cycle_by_key(state_dir, state["cycle_key"]) or state
+        current = _copy_runtime_options(current, state)
+        replacement = _reserve_review_brief_restart(
+            current, state_dir=state_dir, **kwargs
+        )
+    return _resume_reserved_successor(replacement, state_dir=state_dir)
+
+
+def _reserve_review_brief_restart(
+    state: dict[str, Any],
+    *,
+    state_dir: Path,
+    review_brief: str,
+    reason: str,
+    contract_conflict: str | None = None,
+) -> dict[str, Any]:
+    if not review_brief.strip():
+        raise ValueError("--restart-brief cannot be blank")
+    current_brief = state.get("review_brief")
+    if review_brief == current_brief:
+        raise ValueError("--restart-brief must differ from the frozen review brief")
+
+    convergence = convergence_summary(state)
+    budget_replan = (
+        state.get("stage") == "convergence-decided"
+        and convergence.get("status") == "DECIDED"
+        and convergence.get("decision") == "REPLAN"
+        and convergence.get("reason") == "budget_exhausted"
+        and bool(state.get("active_findings"))
+    )
+    if contract_conflict:
+        state = record_contract_replan(state, conflict=contract_conflict)
+    if contract_conflict or budget_replan:
+        source_round_id = dict(state["active_findings"])["round_id"]
+        round_state_dir = state_dir / "orchestrator" / "review-rounds"
+        for path in rounds_dir(round_state_dir).glob("*.json"):
+            payload = load_round(round_state_dir, path.stem)
+            if dict(payload.get("review_scope") or {}).get(
+                "source_round_id"
+            ) == source_round_id and round_has_live_reviewer_process(payload):
+                raise ValueError(
+                    "cannot replan while a follow-up reviewer is running; wait for it to finish or stop the owning review command"
+                )
+    elif (
+        state.get("stage")
+        not in {
+            STAGE_CREATED,
+            STAGE_DECISION_PENDING,
+            STAGE_REVIEW_GREEN,
+            STAGE_LOCAL_GREEN_HANDOFF,
+        }
+        or state.get("active_findings") is not None
+        or convergence.get("status") != "ACTIVE"
+        or int(convergence.get("accepted_findings_heads") or 0) != 0
+    ):
+        raise ValueError(
+            "cannot replace review brief after findings or convergence activity; "
+            "follow the existing review action, or add --contract-conflict <dimension> "
+            "with --reason <approved contract change> to replan"
+        )
+
+    review_root, _, _, head, merge_base_head = _current_restart_identity(
+        state, require_exact=False
+    )
+    identity = dict(state.get("identity") or {})
+    expected_head = str(identity.get("head") or "").strip()
+    expected_merge_base = str(identity.get("merge_base") or "").strip()
+    if merge_base_head != expected_merge_base:
+        raise ValueError(
+            "cannot replace review brief after merge-base changed; start a new review instead"
+        )
+    if head != expected_head and not is_ancestor(review_root, expected_head, head):
+        raise ValueError(
+            "cannot replace review brief after review lineage changed; start a new review instead"
+        )
+
+    return _reserve_successor_cycle(
+        state,
+        state_dir=state_dir,
+        target_mode=_current_mode(state),
+        reason=reason,
+        kind="contract-replan" if contract_conflict else "review-brief-restart",
+        require_exact_identity=False,
+        review_brief=review_brief,
+    )
+
+
+def _advance_without_decision(
+    state: dict[str, Any], *, state_dir: Path
+) -> dict[str, Any]:
+    ready_state = state
+    ran_expensive_step = False
+
+    def persist_running(next_state: dict[str, Any]) -> dict[str, Any]:
+        saved = save_cycle(state_dir, next_state)
+        return saved
+
+    for _ in range(6):
+        if deslop_is_ready(ready_state) or _deslop_is_open(ready_state):
+            resumed = _resume_progress(ready_state, state_dir=state_dir)
+            recovery = _blocked_decision_recovery_state(resumed, state_dir=state_dir)
+            if recovery != resumed and recovery.get("stage") == STAGE_FOLLOWUP_PENDING:
+                # Persist the retry before the existing follow-up ownership check.
+                return recovery
+            resumed = recovery
+        else:
+            resumed = ready_state
+        decided = (
+            _auto_record_structured_decision(resumed, state_dir=state_dir)
+            if deslop_is_ready(resumed)
+            else resumed
+        )
+        if decided != resumed:
+            ready_state = decided
+            continue
+        if ran_expensive_step:
+            return resumed
+        result = run_one_expensive_step(
+            resumed, state_dir=state_dir, persist_state=persist_running
+        )
+        if result.ran_step:
+            ran_expensive_step = True
+            ready_state = result.state
+            continue
+        if _run_arena_recovery_backend_once(resumed, state_dir=state_dir):
+            ready_state = resumed
+            continue
+        return _resume_progress(resumed, state_dir=state_dir)
+    return ready_state
+
+
+def _apply_decision(
+    state: dict[str, Any], decision: str, *, state_dir: Path
+) -> dict[str, Any]:
+    ready_state = (
+        _resume_progress(state, state_dir=state_dir)
+        if deslop_is_ready(state)
+        else state
+    )
+    if not deslop_is_ready(ready_state):
+        ready_state = run_one_expensive_step(ready_state, state_dir=state_dir).state
+        if not deslop_is_ready(ready_state):
+            return ready_state
+        ready_state = _resume_progress(ready_state, state_dir=state_dir)
+    try:
+        if (
+            decision == DECISION_CLEAN
+            and _auto_decision_command(ready_state, state_dir=state_dir) == DECISION_FINDINGS
+        ):
+            raise ValueError("rejecting pending structured findings requires --reason")
+        result = _apply_decision_to_ready_state(
+            ready_state, decision, state_dir=state_dir
+        )
+        if decision == DECISION_FINDINGS:
+            result["decisions"][-1]["source"] = "caller"
+        return result
+    except ValueError as exc:
+        if (
+            str(exc) == NO_DECISION_PENDING_MESSAGE
+            and ready_state.get("stage") != STAGE_DECISION_PENDING
+        ):
+            raise NoDecisionPendingError(ready_state) from exc
+        raise
+
+
+def _has_validation_status(args: argparse.Namespace) -> bool:
+    return any(
+        getattr(args, name) is not None
+        for name in ("focused_validation", "full_suite", "ci")
+    )
+
+
+def _record_validation_status(
+    state: dict[str, Any], args: argparse.Namespace
+) -> dict[str, Any]:
+    from review_suite_core.patch_identity import reviewed_receipt
+    current = _identity_head(state) or dict(state.get("identity") or {}).get("head")
+    previous = dict(state.get("validation") or {}).get("head")
+    if not previous:
+        try:
+            previous = dict(reviewed_receipt(state) or {}).get("reviewed_head")
+        except (OSError, ValueError):
+            previous = None
+    if previous and current != previous:
+        state = deepcopy(state)
+        state["validation"] = {**dict(state.get("validation") or {}), "full_suite": "unknown", "ci": "unknown"}
+    updated = record_validation_statuses(
+        state,
+        focused=args.focused_validation,
+        full_suite=args.full_suite,
+        ci=args.ci,
+        validation_note=args.validation_note,
+    )
+
+    updated.setdefault("validation", {})["head"] = _identity_head(state) or dict(state.get("identity") or {}).get("head")
+    return updated
+
+
+def _record_github_result(
+    state: dict[str, Any], args: argparse.Namespace
+) -> dict[str, Any]:
+    _require_local_green_for_github_review(state)
+    reviewed_head = str(
+        dict(state.get("review_heads") or {}).get("last_reviewed_head")
+        or dict(state.get("identity") or {}).get("head")
+        or ""
+    ).strip()
+    return record_github_result(
+        state,
+        result=str(args.github_result),
+        note=args.github_note,
+        reviewed_head=reviewed_head or None,
+        reviewed_tree=_reviewed_tree(state, reviewed_head),
+    )
+
+
+def _last_decision_is_clean_followup(state: dict[str, Any]) -> bool:
+    for item in reversed(list(state.get("decisions") or [])):
+        if not isinstance(item, dict):
+            continue
+        return (
+            str(item.get("lane") or "") == FOLLOWUP_LANE
+            and str(item.get("command") or "") == DECISION_CLEAN
+        )
+    return False
+
+
+def _review_step_label(state: dict[str, Any], pending: dict[str, Any]) -> str:
+    step = str(pending.get("step") or "").strip() or "next review step"
+    try:
+        position = int(pending.get("step_index")) + 1
+    except TypeError, ValueError:
+        position = None
+    steps = list(dict(state.get("review_plan") or {}).get("steps") or [])
+    if position is not None and steps:
+        return f"review step {position}/{len(steps)} {step}"
+    return f"review step {step}"
+
+
+def _continuation_note(state: dict[str, Any]) -> str | None:
+    pending = dict(state.get("pending_action") or {})
+    kind = str(pending.get("kind") or "").strip()
+    if kind == "run-review-step":
+        if not _last_decision_is_clean_followup(state):
+            return None
+        label = _review_step_label(state, pending)
+        return f"Clean follow-up is not final signoff; run {label} before treating the review as green."
+    return None
+
+
+def _github_handoff_action(
+    state: dict[str, Any], *, state_dir: Path, current_head: str | None = None,
+) -> dict[str, Any]:
+    public_id = str(state.get("public_id") or "").strip()
+    action: dict[str, Any] = {
+        "cmd": _github_review_action_command(public_id, state_dir=state_dir),
+        "after": "PR create/update",
+        "result": {
+            GITHUB_RESULT_CLEAN: _github_result_command(
+                public_id, GITHUB_RESULT_CLEAN, state_dir=state_dir
+            ),
+            GITHUB_RESULT_FINDINGS: _github_result_command(
+                public_id, GITHUB_RESULT_FINDINGS, state_dir=state_dir
+            ),
+            GITHUB_RESULT_WAIVED: _github_result_command(
+                public_id,
+                GITHUB_RESULT_WAIVED,
+                "--github-note",
+                "REASON",
+                state_dir=state_dir,
+            ),
+        },
+    }
+    github_review = dict(state.get("github_review") or {})
+    if str(github_review.get("status") or "") == GITHUB_RESULT_FINDINGS:
+        action["note"] = (
+            "GitHub findings were fixed and locally signed off; request GitHub review again."
+        )
+    blockers = validation_blockers(state, current_head=current_head)
+    if blockers:
+        action["blocked_by"] = blockers
+    return action
+
+
+def _validation_status_command(
+    public_id: str, blockers: list[str], *, state_dir: Path
+) -> str:
+    args: list[str] = []
+    for blocker in blockers:
+        key, value = blocker.split(":", 1)
+        if key == "full_suite":
+            args.extend(
+                [
+                    "--full-suite",
+                    "waived" if value == "waived_without_note" else "FULL_SUITE_STATUS",
+                ]
+            )
+        if key == "ci":
+            args.extend(
+                ["--ci", "waived" if value == "waived_without_note" else "CI_STATUS"]
+            )
+    if any(blocker.endswith(":waived_without_note") for blocker in blockers):
+        args.extend(["--validation-note", "WAIVER_REASON"])
+    return _review_command(public_id, *args, state_dir=state_dir)
+
+
+def _validation_blocker_action(
+    public_id: str, blockers: list[str], *, state_dir: Path
+) -> dict[str, Any]:
+    return {
+        "cmd": _validation_status_command(public_id, blockers, state_dir=state_dir),
+        "blocked_by": blockers,
+        "note": 'GitHub result is recorded; replace status placeholders with passed, or waived and append --validation-note "reason", before PR-final or merge-ready.',
+    }
+
+
+def _github_review_is_terminal(state: dict[str, Any]) -> bool:
+    github_review = dict(state.get("github_review") or {})
+    status = str(github_review.get("status") or "").strip()
+    if status not in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
+        return False
+    reviewed_head = str(github_review.get("reviewed_head") or "").strip()
+    if not reviewed_head:
+        return False
+    current_head_value = _identity_head(state)
+    if not current_head_value:
+        current_head_value = str(
+            dict(state.get("review_heads") or {}).get("last_reviewed_head") or ""
+        ).strip()
+    if not current_head_value:
+        current_head_value = str(
+            dict(state.get("identity") or {}).get("head") or ""
+        ).strip()
+    if not current_head_value:
+        return False
+    if reviewed_head == current_head_value:
+        return True
+    summary = review_ladder_summary(state, current_head=current_head_value)
+    return summary.get("review_ladder") != "invalidated"
+
+
+def _github_review_status(state: dict[str, Any]) -> str:
+    return (
+        str(dict(state.get("github_review") or {}).get("status") or "unknown").strip()
+        or "unknown"
+    )
+
+
+def _github_pending_head_change_identity(
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        return None
+    try:
+        identity = _current_cycle_identity_if_compatible(state)
+    except OSError, ValueError:
+        return None
+    if not identity:
+        try:
+            _, _, _, head, current_merge_base = _current_restart_identity(
+                state, require_exact=False
+            )
+        except AttributeError, OSError, ValueError:
+            return None
+        identity = {
+            "head": head,
+            "merge_base": current_merge_base,
+            "base_drift": None,
+        }
+    head = str(identity.get("head") or "").strip()
+    current_merge_base = str(identity.get("merge_base") or "").strip()
+    deslop = dict(state.get("deslop") or {})
+    signoff_head = str(
+        dict(state.get("review_heads") or {}).get("last_reviewed_head")
+        or dict(state.get("identity") or {}).get("head")
+        or ""
+    ).strip()
+    from review_suite_core.patch_identity import acceptance
+    if acceptance(state, head):
+        return None
+    if str(dict(state.get("identity") or {}).get("merge_base") or "") != current_merge_base:
+        return identity
+    terminal = _github_review_status(state) in {"clean", "waived"}
+    if (
+        str(deslop.get("status") or "").strip() != DESLOP_STATUS_SKIPPED or terminal
+    ) and (
+        signoff_head != head
+        or str(dict(state.get("identity") or {}).get("merge_base") or "").strip()
+        != current_merge_base
+    ):
+        return identity
+    if bool(dict(identity.get("base_drift") or {}).get("patch_equivalent")):
+        return None
+    summary = review_ladder_summary(state, current_head=head)
+    if summary.get("review_ladder") != "invalidated":
+        return None
+    reviewed_head = str(summary.get("reviewed_head") or "").strip()
+    current_head_value = str(summary.get("current_head") or "").strip()
+    if (
+        not reviewed_head
+        or not current_head_value
+        or reviewed_head == current_head_value
+    ):
+        return None
+    return identity
+
+
+def _github_terminal_action(
+    state: dict[str, Any], public_id: str, *, state_dir: Path, current_head: str | None = None,
+) -> dict[str, Any] | None:
+    blockers = validation_blockers(state, current_head=current_head)
+    if blockers:
+        return _validation_blocker_action(public_id, blockers, state_dir=state_dir)
+    return None
+
+
+def _deslop_is_open(state: dict[str, Any]) -> bool:
+    deslop = dict(state.get("deslop") or {})
+    return (
+        bool(deslop.get("tracked"))
+        and str(deslop.get("status") or "").strip() == DESLOP_STATUS_DONE
+    )
+
+
+def _with_deslop_done_action(
+    state: dict[str, Any],
+    action: dict[str, Any] | None,
+    public_id: str,
+    *,
+    state_dir: Path,
+) -> dict[str, Any] | None:
+    if not _deslop_is_open(state):
+        return action
+    deslop = dict(state.get("deslop") or {})
+    if deslop.get("conformance") == "MATERIALLY_DRIFTED":
+        return {
+            "choices": {
+                "revise": _review_command(public_id, state_dir=state_dir),
+                "dismiss": _review_command(
+                    public_id,
+                    "--deslop-done",
+                    "--reason",
+                    "<why the findings are dismissed>",
+                    state_dir=state_dir,
+                ),
+            },
+            "note": "Revise valid findings and commit before rerunning, or dismiss them with a reason.",
+        }
+    findings = deslop.get("decision") == "findings"
+    return {
+        "cmd": _deslop_done_command(public_id, state_dir=state_dir),
+        "note": (
+            "Address or dismiss the closure findings, then acknowledge the exact-head result."
+            if findings
+            else "Acknowledge the exact-head closure before continuing."
+        ),
+    }
+
+
+def _action_payload(
+    state: dict[str, Any], *, state_dir: Path, summary: dict[str, Any] | None = None,
+    recorded: bool = False,
+) -> dict[str, Any] | None:
+    public_id = str(state.get("public_id") or "").strip()
+    action: dict[str, Any] | None = None
+    stage = state.get("stage")
+    if stage in {"decision-required", "convergence-decided"}:
+        convergence = convergence_summary(state)
+        if convergence.get("status") != "DECISION_REQUIRED":
+            return None
+        return {
+            "choices": {
+                decision: _review_command(
+                    public_id,
+                    "--convergence-decision",
+                    decision.lower(),
+                    state_dir=state_dir,
+                )
+                for decision in convergence["recommendations"]
+            } | ({
+                "fixes_validated": _review_command(
+                    public_id, "--fixes-validated", "ELIGIBILITY_AND_VALIDATION", state_dir=state_dir
+                ),
+            } if convergence.get("reason") == "budget_exhausted" and state.get("active_findings") else {}),
+            "note": "At this checkpoint, reassess how to deliver the same feature and record an available decision: CONTINUE grants the one permitted extra fix/review round, REPLAN revises the implementation plan, and RESLICE splits the work into smaller reviewable changes.",
+        }
+    if stage == STAGE_ABORTED and isinstance(state.get("superseded_by"), dict):
+        replacement = dict(state.get("superseded_by") or {})
+        replacement_id = str(replacement.get("review") or "").strip()
+        if replacement_id:
+            action = {
+                "cmd": _review_command(replacement_id, state_dir=state_dir),
+                "note": f"Review {public_id} was superseded by {replacement_id}.",
+            }
+            return _with_deslop_done_action(
+                state, action, public_id, state_dir=state_dir
+            )
+    arena_recovery = None if recorded else _arena_recovery_action(
+        state, state_dir=state_dir, public_id=public_id
+    )
+    if arena_recovery:
+        return _with_deslop_done_action(
+            state, arena_recovery, public_id, state_dir=state_dir
+        )
+    if stage == STAGE_DECISION_PENDING:
+        blocked_action = _blocked_decision_action(
+            state, state_dir=state_dir, public_id=public_id
+        )
+        if blocked_action:
+            return _with_deslop_done_action(
+                state, blocked_action, public_id, state_dir=state_dir
+            )
+        grade = _arena_grade_command(state, state_dir=state_dir)
+        if grade:
+            action = {
+                "cmd": grade,
+                "note": "Grade the arena round, then rerun this review id to continue.",
+                "next": _review_command(public_id, state_dir=state_dir),
+            }
+            return _with_deslop_done_action(
+                state, action, public_id, state_dir=state_dir
+            )
+        auto_decision = _auto_decision_command(state, state_dir=state_dir)
+        if auto_decision:
+            action = {
+                "cmd": _review_command(public_id, state_dir=state_dir),
+                "note": f"Structured {auto_decision} verdict is ready; rerun this review id to record it and continue.",
+                "override": {
+                    DECISION_CLEAN: _review_command(
+                        public_id, "--decision", DECISION_CLEAN,
+                        *(["--reason", "WHY_FINDING_IS_INVALID_AND_DESCENDANT_VALIDATION"]
+                          if auto_decision == DECISION_FINDINGS else []),
+                        state_dir=state_dir
+                    ),
+                    DECISION_FINDINGS: _review_command(
+                        public_id, "--decision", DECISION_FINDINGS, state_dir=state_dir
+                    ),
+                },
+            }
+            if auto_decision == DECISION_FINDINGS:
+                action = {
+                    "choices": action["override"],
+                    "note": "Classify the completed findings before accepting a convergence head; explain rejection and descendant validation with --reason.",
+                }
+            return _with_deslop_done_action(
+                state, action, public_id, state_dir=state_dir
+            )
+        action = {
+            "choices": {
+                decision: _review_command(
+                    public_id, "--decision", decision, state_dir=state_dir
+                )
+                for decision in (DECISION_CLEAN, DECISION_FINDINGS)
+            },
+            "note": "Classify the reviewer output, then record clean or findings.",
+        }
+        return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
+    if stage in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}:
+        note = FIX_REVIEW_POLICY
+        if str(state.get("review_brief") or "").strip():
+            note += (
+                " If a finding conflicts with the frozen contract, rerun this review "
+                "id with --contract-conflict <dimension> instead."
+            )
+        action = {
+            "choices": {
+                "fixes_validated": _review_command(
+                    public_id,
+                    "--fixes-validated",
+                    "ELIGIBILITY_AND_VALIDATION",
+                    state_dir=state_dir,
+                ),
+                "repeat_review": _review_command(public_id, state_dir=state_dir),
+            },
+            "note": note,
+        }
+        return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
+    if stage == STAGE_CREATED:
+        action = {"cmd": _review_command(public_id, state_dir=state_dir)}
+        note = _continuation_note(state)
+        if note:
+            action["note"] = note
+        return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
+    if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        deslop = dict(state.get("deslop") or {})
+        if bool(deslop.get("tracked")) and str(deslop.get("status") or "") in {
+            "tracked",
+            "failed",
+        }:
+            return {
+                "cmd": _review_command(public_id, state_dir=state_dir),
+                "note": "Run the bounded exact-head closure before handoff.",
+            }
+        if recorded:
+            # The read already classified the stored record. Build only the
+            # corresponding command, with the recorded validation head.
+            next_action = (summary or {}).get("next_action")
+            recorded_head = (summary or {}).get("current_head", "")
+            if next_action == "github_review":
+                action = _github_handoff_action(state, state_dir=state_dir, current_head=recorded_head)
+            elif next_action == "validation":
+                action = _github_terminal_action(state, public_id, state_dir=state_dir, current_head=recorded_head)
+            elif next_action == "continue":
+                action = {"cmd": _review_command(public_id, state_dir=state_dir)}
+            return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
+        if summary is None:
+            summary = review_ladder_summary(state, current_head=_identity_head(state))
+        if summary.get("review_ladder") == "invalidated":
+            if green_review_head_change_summary(state, summary=summary):
+                action = {"cmd": _review_command(public_id, state_dir=state_dir),
+                          "note": "Review only the changed PR patch on this id; keep required current-head checks."}
+            elif _github_pending_head_change_identity(state):
+                action = {
+                    "cmd": _review_command(public_id, state_dir=state_dir),
+                    "note": "The PR patch changed before a terminal GitHub result; review only the changed patch on this id before GitHub review.",
+                }
+            else:
+                action = None
+        elif _github_review_is_terminal(state):
+            action = _github_terminal_action(state, public_id, state_dir=state_dir)
+        elif _mode_label(state) == "fast" and _github_review_status(state) == "unknown":
+            action = None
+        else:
+            action = _github_handoff_action(state, state_dir=state_dir)
+        return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
+    return _with_deslop_done_action(
+        state,
+        {"cmd": _review_command(public_id, state_dir=state_dir)},
+        public_id,
+        state_dir=state_dir,
+    )
+
+
+def _render(state: dict[str, Any], *, state_dir: Path) -> None:
+    payload: dict[str, Any] = {
+        "review": state.get("public_id"),
+        "review_brief": "available" if state.get("review_brief") else "unavailable",
+    }
+    summary = review_ladder_summary(state, current_head=_identity_head(state))
+    action = _action_payload(state, state_dir=state_dir, summary=summary)
+    summary = _add_review_ladder_fields(payload, state, action, summary=summary)
+    if action:
+        if summary.get("review_ladder") != "invalidated":
+            payload["Action"] = action
+    github_review = dict(state.get("github_review") or {})
+    github_status = str(github_review.get("status") or "").strip()
+    if github_status and github_status != "unknown":
+        payload["github_review"] = github_status
+    if conformance := str(
+        dict(state.get("deslop") or {}).get("conformance") or ""
+    ).strip():
+        payload["conformance"] = conformance
+    if reason := dict(state.get("deslop") or {}).get("dismissal_reason"):
+        payload["closure_dismissal_reason"] = reason
+    if convergence := _public_convergence(state):
+        payload["convergence"] = convergence
+    if validation := _validation_summary(state):
+        payload["validation"] = validation
+    if (
+        state.get("validated_fixes")
+        and state["validated_fixes"][-1]["head"] == _identity_head(state)
+        and not state.get("active_findings")
+    ):
+        payload["fix_resolution"] = FIXES_VALIDATED_NOTE
+    emit_toon(payload)
+
+
+def _render_stale_decision_recovery(
+    state: dict[str, Any], *, state_dir: Path, decision: str
+) -> None:
+    action = _action_payload(state, state_dir=state_dir)
+    note = "The review already advanced past that decision."
+    if action:
+        note += " Continue with Action.cmd; do not add --decision unless Action.override asks for it."
+    else:
+        note += " No further action is pending."
+    payload: dict[str, Any] = {
+        "review": state.get("public_id"),
+        "status": "decision_not_pending",
+        "decision": decision,
+        "note": note,
+    }
+    if action:
+        payload["Action"] = action
+    emit_toon(payload)
+
+
+def _require_local_green_for_github_review(state: dict[str, Any]) -> None:
+    if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        raise ValueError("--github-review requires local green review state")
+    if bool(dict(state.get("deslop") or {}).get("tracked")):
+        raise ValueError("--github-review requires completed exact-head closure")
+
+
+def _github_review_subprocess_command(
+    state: dict[str, Any], *, state_dir: Path, force: bool
+) -> list[str]:
+    identity = dict(state.get("identity") or {})
+    cwd = str(identity.get("cwd") or "").strip()
+    if not cwd:
+        raise ValueError("review cycle is missing cwd for --github-review")
+    command = [
+        sys.executable,
+        str(_launcher_script_path("review_github.py")),
+        "run",
+        "--cd",
+        str(cwd_path_from_normalized(cwd)),
+        "--state-dir",
+        str(state_dir),
+    ]
+    if force:
+        command.append("--force")
+    return command
+
+
+def _run_github_review(state: dict[str, Any], *, state_dir: Path, force: bool) -> int:
+    _require_local_green_for_github_review(state)
+    command = _github_review_subprocess_command(state, state_dir=state_dir, force=force)
+    return subprocess.run(command, check=False).returncode
+
+
+def _check_base_interaction(
+    state: dict[str, Any], *, state_dir: Path, reason: str | None
+) -> int:
+    from review_suite_core.patch_identity import (
+        acceptance,
+        bound_interaction,
+        interaction_prompt,
+        record_acceptance,
+    )
+    from review_suite_core.orchestrator_state import mark_decision_pending
+    from review_suite_core.orchestrator_runner import _attach_review_result
+    from review_suite_arena import (
+        run_orchestrator_followup_review_step,
+        resume_orchestrator_review_step,
+    )
+    from review_suite_local import ensure_clean_git_worktree
+
+    try:
+        with orchestrator_store_lock(
+            state_dir=state_dir,
+            name=f"base-interaction-{state['cycle_key']}",
+            timeout_seconds=1,
+        ):
+            state = load_cycle_by_key(state_dir, state["cycle_key"]) or state
+            identity = state["identity"]
+            cwd = cwd_path_from_normalized(identity["cwd"])
+            if current_branch(cwd) != identity["branch"]:
+                raise ValueError("review branch changed")
+            ensure_clean_git_worktree(cwd)
+            head = current_head(cwd)
+            accepted = acceptance(state, head)
+            pending = dict(state.get("base_interaction_pending") or {})
+            if pending and not pending.get("round_id") and (
+                not accepted or pending["binding"]["head"] != head
+                or pending["binding"]["base"] != accepted["accepted_base"]
+            ):
+                state.pop("base_interaction_pending", None)
+                state = save_cycle(state_dir, state, preserve_validation=True)
+                pending = {}
+            if not accepted and not pending:
+                raise ValueError(
+                    "PR patch changed; continue the existing review before checking base interaction"
+                )
+            binding = pending.get("binding") or {
+                "head": head,
+                "base": accepted["accepted_base"],
+                "patch": accepted["patch"],
+            }
+            if pending:
+                head = binding["head"]
+            if reason:
+                if pending or state.get("active_findings"):
+                    raise ValueError(
+                        "cannot override a pending check or active findings"
+                    )
+                state = record_acceptance(state, accepted)
+                state.setdefault("base_interaction_overrides", []).append({
+                    "binding": deepcopy(binding), "reason": reason.strip()})
+                state["base_interaction_receipt"] = {
+                    "binding": binding,
+                    "status": "overridden",
+                    "reason": reason.strip(),
+                }
+                return _show_status(save_cycle(state_dir, state, preserve_validation=True), state_dir=state_dir)
+            if not pending:
+                observed = record_acceptance(state, accepted)
+                if not bound_interaction(observed, accepted, recorded=True)["check"]:
+                    if observed is not state:
+                        state = save_cycle(state_dir, observed, preserve_validation=True)
+                    return _show_status(state, state_dir=state_dir)
+                state = observed
+            if not pending and state["stage"] not in {
+                STAGE_REVIEW_GREEN,
+                STAGE_LOCAL_GREEN_HANDOFF,
+            }:
+                raise ValueError(
+                    "finish the current review before checking base interaction"
+                )
+            common = dict(
+                review_cwd=cwd,
+                state_dir=state_dir,
+                sqlite_path=Path.home() / ".codex" / "state_5.sqlite",
+                task_id=state["public_id"],
+                progress_interval_seconds=30,
+            )
+            if pending and pending.get("round_id"):
+                payload = load_round(state_dir / "orchestrator" / "review-rounds", pending["round_id"])
+                if payload.get("status") in {"sampled", "failed"} or (
+                    payload.get("status") == "completed" and payload_has_blocked_runs(payload)
+                ):
+                    if not accepted or binding["head"] != current_head(cwd) or binding["base"] != accepted["accepted_base"]:
+                        state["stage"] = pending["stage"]
+                        state["pending_action"] = pending["pending_action"]
+                        state["review_heads"] = pending["review_heads"]
+                        state.pop("base_interaction_pending", None)
+                        state = save_cycle(state_dir, state, preserve_validation=True)
+                        pending = {}
+                        if not accepted:
+                            raise ValueError("PR patch changed; continue the existing review before checking base interaction")
+                        head = current_head(cwd)
+                        binding = {"head": head, "base": accepted["accepted_base"], "patch": accepted["patch"]}
+                    else:
+                        pending.pop("round_id")
+                        state["base_interaction_pending"] = pending
+                        state = save_cycle(state_dir, state, preserve_validation=True)
+            if pending and pending.get("round_id"):
+                result = resume_orchestrator_review_step(
+                    **common,
+                    round_id=pending["round_id"],
+                    lane="base-interaction",
+                    step_name="base-interaction",
+                    round_state_dir=None,
+                )
+            else:
+                state = record_acceptance(state, accepted)
+                config = _config_with_model_override(load_config(state_dir), dict(state.get("model_override") or {}))
+                resolution = resolve_orchestrator_profile(
+                    config, mode="base", selection=_configured_selection(config)
+                )
+                step = next(step for step in resolution.steps if step.kind == "review")
+                pending = pending or {
+                    "binding": binding,
+                    "stage": state["stage"],
+                    "pending_action": deepcopy(state.get("pending_action")),
+                    "review_heads": deepcopy(state.get("review_heads")),
+                }
+                state["base_interaction_pending"] = pending
+                state = save_cycle(state_dir, state, preserve_validation=True)
+
+                def started(info: dict[str, Any]) -> None:
+                    pending["round_id"] = str(info["round_id"])
+                    latest = load_cycle_by_key(state_dir, state["cycle_key"]) or state
+                    latest["base_interaction_pending"] = pending
+                    save_cycle(state_dir, latest, preserve_validation=True)
+
+                prompt = interaction_prompt(
+                    accepted, bound_interaction(state, accepted, recorded=True)
+                )
+                result = run_orchestrator_followup_review_step(
+                    **common,
+                    task_class="base_review",
+                    model=step.model,
+                    reasoning_effort=step.reasoning_effort,
+                    service_tier=step.service_tier,
+                    review_scope={
+                        "reviewed_head": head,
+                        "merge_base": binding["base"],
+                        "base_interaction": binding,
+                    },
+                    prompt=prompt,
+                    allow_unsafe_windows_wsl_fallback=False,
+                    on_round_started=started,
+                )
+            state = load_cycle_by_key(state_dir, state["cycle_key"]) or state
+            state = mark_decision_pending(
+                state,
+                round_id=str(result["round_id"]),
+                lane="base-interaction",
+                reviewed_head=head,
+                pending_action={
+                    "kind": "decision",
+                    "round_id": str(result["round_id"]),
+                    "lane": "base-interaction",
+                },
+            )
+            state["review_heads"] = deepcopy(state["base_interaction_pending"]["review_heads"])
+            state = _attach_review_result(state, result)
+            state = _auto_record_structured_decision(state, state_dir=state_dir)
+            return _show_status(save_cycle(state_dir, state, preserve_validation=True), state_dir=state_dir)
+    except TimeoutError:
+        return _show_status(
+            load_cycle_by_key(state_dir, state["cycle_key"]) or state,
+            state_dir=state_dir,
+        )
+
+
+def main() -> int:
+    parser = build_parser()
+    args: argparse.Namespace | None = None
+    try:
+        args = parser.parse_args()
+        if args.check_base_interaction or args.accept_base_interaction:
+            if not args.id:
+                raise ValueError("base interaction actions require --id")
+            if args.accept_base_interaction and not str(args.reason or "").strip():
+                raise ValueError("--accept-base-interaction requires --reason")
+            allowed = {
+                "id",
+                "cd",
+                "check_base_interaction",
+                "accept_base_interaction",
+                "reason",
+            }
+            if any(value for key, value in vars(args).items() if key not in allowed):
+                raise ValueError(
+                    "base interaction actions cannot be combined with other actions"
+                )
+            if args.check_base_interaction and args.reason:
+                raise ValueError("--reason requires --accept-base-interaction")
+            state_dir = Path(default_state_dir()).resolve(strict=False)
+            state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
+            _reject_id_creation_args(args, state)
+            return _check_base_interaction(
+                state, state_dir=state_dir, reason=args.reason
+            )
+        arena_configuration = _configure_repo_arena(args)
+        if arena_configuration is not None:
+            return arena_configuration
+        state_dir = Path(default_state_dir()).resolve(strict=False) if not args.show_status else None
+        has_validation_status = _has_validation_status(args)
+        has_restart_brief = args.restart_brief is not None
+        if args.fixes_validated is not None:
+            if not args.id:
+                raise ValueError("--fixes-validated requires --id")
+            if not args.fixes_validated.strip():
+                raise ValueError(
+                    "--fixes-validated requires an eligibility and validation note"
+                )
+            if any(
+                (
+                    args.status,
+                    args.show_status,
+                    args.show_findings,
+                    args.decision,
+                    args.deslop_done,
+                    args.restart_mode,
+                    has_restart_brief,
+                    args.reason,
+                    args.github_review,
+                    args.github_force,
+                    args.github_result,
+                    args.github_note,
+                    args.contract_conflict,
+                    args.convergence_decision,
+                    has_validation_status,
+                )
+            ):
+                raise ValueError(
+                    "--fixes-validated cannot be combined with another id action"
+                )
+        if args.json and not (args.status or args.show_status):
+            raise ValueError("--json requires --status or --show-status")
+        if args.json and args.verbose:
+            raise ValueError("--json cannot be combined with --verbose")
+        if args.verbose and not args.status:
+            raise ValueError("--verbose requires --status")
+        if args.validation_note and not has_validation_status:
+            raise ValueError(
+                "--validation-note requires --full-suite waived or --ci waived"
+            )
+        if args.status:
+            if args.id:
+                raise ValueError(
+                    "--status cannot be combined with --id; use --id <id> --show-status"
+                )
+            if (
+                args.mode
+                or args.restart_mode
+                or has_restart_brief
+                or args.contract_conflict
+                or args.convergence_decision
+                or args.reason
+                or args.decision
+                or args.github_review
+                or args.github_force
+                or args.github_result
+                or args.github_note
+                or args.focused_validation
+                or args.full_suite
+                or args.ci
+                or args.validation_note
+                or args.deslop_done
+                or args.skip_deslop
+                or args.review_brief
+                or args.model
+                or args.reasoning
+                or args.no_arena
+                or args.show_findings
+                or args.show_status
+            ):
+                raise ValueError(
+                    "--status cannot be combined with review creation, id actions, validation, or restart flags"
+                )
+            return cmd_branch_status(args)
+        if args.restart_mode and not args.id:
+            raise ValueError("--restart-mode requires --id")
+        if has_restart_brief and not args.id:
+            raise ValueError("--restart-brief requires --id")
+        convergence_action = args.contract_conflict or args.convergence_decision
+        if convergence_action and not args.id:
+            raise ValueError("convergence actions require --id")
+        convergence_conflict = args.contract_conflict and args.convergence_decision
+        other_action = (
+            any(
+                getattr(args, name)
+                for name in (
+                    "restart_mode",
+                    "reason",
+                    "decision",
+                    "github_review",
+                    "github_force",
+                    "github_result",
+                    "github_note",
+                    "deslop_done",
+                    "show_findings",
+                    "show_status",
+                    "wsl",
+                )
+            )
+            or has_restart_brief
+            or has_validation_status
+        )
+        contract_replan = bool(args.contract_conflict and has_restart_brief)
+        if (
+            convergence_action
+            and not contract_replan
+            and (convergence_conflict or other_action)
+        ):
+            raise ValueError(
+                "convergence actions cannot be combined with another id action"
+            )
+        if contract_replan and (
+            args.convergence_decision
+            or args.restart_mode
+            or args.deslop_done
+            or args.wsl
+        ):
+            raise ValueError(
+                "contract replan cannot be combined with another id action"
+            )
+        if args.reason and not (
+            args.restart_mode
+            or has_restart_brief
+            or args.deslop_done
+            or args.id
+            and args.decision == DECISION_CLEAN
+        ):
+            raise ValueError(
+                "--reason requires --restart-mode, --restart-brief, --deslop-done, or --id with --decision clean"
+            )
+        if args.deslop_done and not args.id:
+            raise ValueError("--deslop-done requires --id")
+        if args.deslop_done and (
+            args.restart_mode
+            or has_restart_brief
+            or args.decision
+            or args.github_review
+            or args.github_force
+            or args.github_result
+            or args.github_note
+            or has_validation_status
+            or args.show_findings
+            or args.show_status
+        ):
+            raise ValueError(
+                "--deslop-done cannot be combined with restart, decisions, GitHub review, GitHub results, "
+                "GitHub notes, validation status flags, show-findings, or show-status"
+            )
+        if args.restart_mode and (
+            has_restart_brief
+            or args.decision
+            or args.github_review
+            or args.github_force
+            or args.github_result
+            or has_validation_status
+        ):
+            raise ValueError(
+                "--restart-mode cannot be combined with restart-brief, decisions, GitHub review, GitHub results, or validation status flags"
+            )
+        if has_restart_brief and (
+            args.decision
+            or args.github_review
+            or args.github_force
+            or args.github_result
+            or has_validation_status
+        ):
+            raise ValueError(
+                "--restart-brief cannot be combined with decisions, GitHub review, GitHub results, or validation status flags"
+            )
+        if args.decision and not args.id:
+            raise ValueError("--decision requires --id")
+        if args.github_force and not args.github_review:
+            raise ValueError("--github-force requires --github-review")
+        if args.github_review and not args.id:
+            raise ValueError("--github-review requires --id")
+        if args.github_review and (
+            args.decision
+            or args.github_result
+            or args.github_note
+            or has_validation_status
+        ):
+            raise ValueError(
+                "--github-review cannot be combined with decisions, GitHub results, GitHub notes, or validation status flags"
+            )
+        if args.github_result and not args.id:
+            raise ValueError("--github-result requires --id")
+        if args.github_result and (args.decision or has_validation_status):
+            raise ValueError(
+                "--github-result cannot be combined with decisions or validation status flags"
+            )
+        if args.github_note and not args.github_result:
+            raise ValueError("--github-note requires --github-result")
+        if has_validation_status and not args.id:
+            raise ValueError("validation status flags require --id")
+        if args.show_findings and not args.id:
+            raise ValueError("--show-findings requires --id")
+        if args.show_status and not args.id:
+            raise ValueError("--show-status requires --id")
+        if args.show_findings and args.show_status:
+            raise ValueError("--show-findings cannot be combined with --show-status")
+        if args.show_findings and (
+            args.restart_mode
+            or has_restart_brief
+            or args.decision
+            or args.github_review
+            or args.github_force
+            or args.github_result
+            or args.github_note
+            or has_validation_status
+        ):
+            raise ValueError(
+                "--show-findings cannot be combined with decisions, GitHub review, GitHub results, validation status flags, or restart"
+            )
+        if args.show_status and (
+            args.restart_mode
+            or has_restart_brief
+            or args.decision
+            or args.github_review
+            or args.github_force
+            or args.github_result
+            or args.github_note
+            or has_validation_status
+        ):
+            raise ValueError(
+                "--show-status cannot be combined with decisions, GitHub review, GitHub results, validation status flags, or restart"
+            )
+        if args.id:
+            try:
+                if args.show_status:
+                    state_dir, state = load_status_cycle(
+                        str(args.id),
+                        locate=lambda: Path(default_state_dir(read_only=True)).resolve(strict=False),
+                    )
+                else:
+                    state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
+            except UnknownReviewIdError:
+                if _has_id_action(args) or not _starts_review(args):
+                    raise
+                if not CALLER_PUBLIC_ID_RE.fullmatch(str(args.id)):
+                    raise ValueError(
+                        f"review id {args.id!r} must match rvw_[a-z0-9]{{8,32}}"
+                    )
+                state = _create_or_resume_cycle(
+                    args=args, state_dir=state_dir, public_id=str(args.id)
+                )
+            else:
+                state = _apply_runtime_options(state, args)
+                _reject_id_creation_args(args, state)
+            if state.get("base_interaction_pending") and not _has_id_action(args):
+                return _check_base_interaction(state, state_dir=state_dir, reason=None)
+            if args.fixes_validated is not None:
+                identity = _current_cycle_identity_if_compatible(state)
+                if not identity and state.get("stage") == STAGE_FIX_PENDING:
+                    identity = _fix_pending_head_change_identity_if_compatible(state)
+                resolutions = state.get("validated_fixes") or []
+                if (
+                    identity
+                    and resolutions
+                    and resolutions[-1]["head"] == identity["head"]
+                ):
+                    _render(state, state_dir=state_dir)
+                    return 0
+                active = dict(state.get("active_findings") or {})
+                if not identity or not _is_material_fix_head(
+                    state,
+                    head=identity["head"],
+                    reviewed_head=str(active.get("reviewed_head") or ""),
+                ):
+                    raise ValueError(
+                        "--fixes-validated requires committed fixes on the clean review branch"
+                    )
+                state = _with_current_identity(
+                    state,
+                    head=identity["head"],
+                    merge_base_head=identity["merge_base"],
+                    base_drift=identity.get("base_drift"),
+                )
+                source = str(active.get("round_id") or "")
+                for candidate_dir in _round_state_dir_candidates(state_dir, active):
+                    for path in rounds_dir(candidate_dir).glob("*.json"):
+                        payload = load_round(candidate_dir, path.stem)
+                        if dict(payload.get("review_scope") or {}).get("source_round_id") != source:
+                            continue
+                        if round_has_live_reviewer_process(payload):
+                            raise ValueError("cannot validate fixes while a follow-up reviewer is running")
+                        if payload.get("status") in {"completed", "running"} and not _round_by_id(state, path.stem):
+                            raise ValueError("inspect the unconsumed follow-up review before validating fixes")
+                state = record_fixes_validated(
+                    state,
+                    head=identity["head"],
+                    note=args.fixes_validated,
+                )
+                saved = save_cycle(state_dir, state)
+                _render(saved, state_dir=state_dir)
+                return 0
+            if args.show_findings:
+                return _show_findings(state, state_dir=state_dir)
+            if args.show_status:
+                return _show_recorded_status(state, state_dir=state_dir, as_json=bool(args.json))
+            if args.contract_conflict and not has_restart_brief:
+                state = record_contract_conflict(
+                    state, conflict=str(args.contract_conflict)
+                )
+                saved = save_cycle(state_dir, state)
+                _render(saved, state_dir=state_dir)
+                return 0
+            if args.convergence_decision:
+                state = record_convergence_decision(
+                    state, decision=str(args.convergence_decision)
+                )
+                if str(args.convergence_decision).upper() == "CONTINUE":
+                    state = _resume_progress(state, state_dir=state_dir)
+                saved = save_cycle(state_dir, state)
+                _render(saved, state_dir=state_dir)
+                return 0
+            if args.deslop_done:
+                resumed = _resume_progress(state, state_dir=state_dir)
+                if resumed != state:
+                    saved = save_cycle(state_dir, resumed)
+                    _render(saved, state_dir=state_dir)
+                    return 0
+                if _current_cycle_identity_if_compatible(state) is None:
+                    raise ValueError(
+                        "--deslop-done requires the exact clean branch, HEAD, and merge-base"
+                    )
+                state = mark_deslop_closed(state, reason=args.reason)
+                saved = save_cycle(state_dir, state)
+                _render(saved, state_dir=state_dir)
+                return 0
+            if args.restart_mode:
+                state = _restart_cycle(
+                    state,
+                    state_dir=state_dir,
+                    target_mode=str(args.restart_mode),
+                    reason=_restart_reason(args),
+                )
+                _render(state, state_dir=state_dir)
+                return 0
+            if has_restart_brief:
+                state = _restart_review_brief(
+                    state,
+                    state_dir=state_dir,
+                    review_brief=str(args.restart_brief),
+                    reason=_restart_reason(args, option="--restart-brief"),
+                    contract_conflict=args.contract_conflict,
+                )
+                _render(state, state_dir=state_dir)
+                return 0
+            if args.github_review:
+                resumed = _resume_progress(state, state_dir=state_dir)
+                if resumed != state:
+                    saved = save_cycle(state_dir, resumed)
+                    _render(saved, state_dir=state_dir)
+                    return 0
+                saved = save_cycle(state_dir, state)
+                return _run_github_review(
+                    saved, state_dir=state_dir, force=bool(args.github_force)
+                )
+            if args.github_result:
+                resumed = _resume_progress(state, state_dir=state_dir)
+                if resumed != state and resumed.get("stage") not in {
+                    STAGE_REVIEW_GREEN,
+                    STAGE_LOCAL_GREEN_HANDOFF,
+                }:
+                    saved = save_cycle(state_dir, resumed)
+                    _render(saved, state_dir=state_dir)
+                    return 0
+                state = _record_github_result(resumed, args)
+                saved = save_cycle(state_dir, state)
+                _render(saved, state_dir=state_dir)
+                return 0
+            if args.decision:
+                if args.reason:
+                    latest_round = (state.get("rounds") or [{}])[-1]
+                    reasoned_clean = (
+                        _correct_inferred_clean_decision
+                        if _stored_clean_review(
+                            _load_output_round_payload(state_dir, latest_round)
+                        )
+                        else _record_caller_disagreement
+                    )
+                    state = reasoned_clean(
+                        state, state_dir=state_dir, reason=args.reason
+                    )
+                    if has_validation_status:
+                        state = _record_validation_status(state, args)
+                    saved = save_cycle(state_dir, state)
+                    _render(saved, state_dir=state_dir)
+                    return 0
+                if has_validation_status:
+                    state = _record_validation_status(state, args)
+                try:
+                    state = _apply_decision(
+                        state, str(args.decision), state_dir=state_dir
+                    )
+                except NoDecisionPendingError as exc:
+                    recovery_state = exc.state
+                    should_save = recovery_state != state
+                    if has_validation_status:
+                        recovery_state = _record_validation_status(recovery_state, args)
+                        should_save = True
+                    if should_save:
+                        recovery_state = save_cycle(state_dir, recovery_state)
+                    _render_stale_decision_recovery(
+                        recovery_state, state_dir=state_dir, decision=str(args.decision)
+                    )
+                    return 0
+            if has_validation_status and not args.decision:
+                resumed = (
+                    _resume_progress(state, state_dir=state_dir)
+                    if _github_review_status(state) in {"clean", "waived"}
+                    else state
+                )
+                if resumed != state:
+                    saved = save_cycle(state_dir, resumed)
+                    _render(saved, state_dir=state_dir)
+                    return 0
+                state = _record_validation_status(state, args)
+            elif not args.decision:
+                state = (
+                    _resume_reserved_successor(state, state_dir=state_dir)
+                    if _successor_needs_locked_resume(state)
+                    else _advance_without_decision(state, state_dir=state_dir)
+                )
+        else:
+            state = _create_or_resume_cycle(args=args, state_dir=state_dir)
+            state = _advance_without_decision(state, state_dir=state_dir)
+        saved = save_cycle(state_dir, state, validation_only=has_validation_status and not args.decision)
+        _render(saved, state_dir=state_dir)
+        return 0
+    except SuccessorAdvanceBusyError as exc:
+        emit_toon(
+            {
+                "review": str(exc.state.get("public_id") or ""),
+                "status": "busy",
+                "done": False,
+                "review_ladder": "pending",
+                "next_action": "wait",
+                "note": "The successor review is already advancing; retry this id after the active command finishes.",
+            }
+        )
+        return 0
+    except (ValueError, OSError) as exc:
+        status = "usage_error" if isinstance(exc, ValueError) else "error"
+        if args is not None and args.json and args.show_status:
+            write_text(json.dumps({"error": str(exc), "status": status}))
+            return 2 if status == "usage_error" else 1
+        return emit_error(
+            str(exc),
+            status=status,
+            help_items=[_help_command()] if status == "usage_error" else None,
+        )

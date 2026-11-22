@@ -17,7 +17,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-import review
+import review_orchestrator as review
 import review_suite_arena
 from review_suite_core import orchestrator_runner, orchestrator_store
 from review_suite_core.orchestrator_state import mark_followup_review_pending, mark_review_step_pending
@@ -38,7 +38,7 @@ _GIT_ENV = os.environ | {
 
 @pytest.fixture(autouse=True)
 def _isolate_default_state_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(review, "default_state_dir", lambda: tmp_path / "default-state")
+    monkeypatch.setattr(review, "default_state_dir", lambda **_kwargs: tmp_path / "default-state")
 
     def unexpected_cleanup(**kwargs: object) -> None:
         raise AssertionError(
@@ -136,7 +136,7 @@ def test_main_emits_structured_runtime_error_for_artifact_cleanup(
     def fail_artifact_cleanup(_args: object) -> int:
         raise OSError("review artifact cleanup incomplete")
 
-    monkeypatch.setattr(review, "default_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(review, "default_state_dir", lambda **_kwargs: tmp_path)
     monkeypatch.setattr(review, "cmd_branch_status", fail_artifact_cleanup)
     monkeypatch.setattr(sys, "argv", ["review.py", "--status"])
 
@@ -159,7 +159,7 @@ def _without_state_dir_args(
                 raise AssertionError("--state-dir test fixture is missing a value")
             state_dir = Path(args[index + 1]).resolve(strict=False)
             monkeypatch.setattr(
-                review, "default_state_dir", lambda state_dir=state_dir: state_dir
+                review, "default_state_dir", lambda state_dir=state_dir, **_kwargs: state_dir
             )
             index += 2
             continue
@@ -2397,7 +2397,7 @@ def test_clean_correction_rejects_unproven_or_changed_review(
     before = review.save_cycle(state_dir, before)
     errors = []
     monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2)
-    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
+    monkeypatch.setattr(review, "default_state_dir", lambda **_kwargs: state_dir)
     monkeypatch.setattr(sys, "argv", ["review.py", "--id", before["public_id"], "--decision", "clean", "--reason", "Explicit caller attestation"])
     assert review.main() == 2
     assert errors
@@ -2953,7 +2953,7 @@ def test_id_show_findings_prefers_open_cleanup_then_latest_review_without_runnin
         "emit_toon",
         lambda payload: (_ for _ in ()).throw(AssertionError("should not emit status")),
     )
-    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
+    monkeypatch.setattr(review, "default_state_dir", lambda **_kwargs: state_dir)
     monkeypatch.setattr(
         sys, "argv", ["review.py", "--id", public_id, "--show-findings"]
     )
@@ -3044,11 +3044,8 @@ def test_id_show_status_reports_cycle_without_advancing(
     assert payload["deslop"] == "skipped"
     assert payload["review_brief"] == "unavailable"
     assert payload["design_conformance_context"] == "unavailable"
-    assert dict(payload["worktree"]) == {
-        "branch": "feature/show-status",
-        "head": str(dict(before_state["identity"])["head"])[:12],
-        "dirty": True,
-    }
+    assert "worktree" not in payload
+    assert payload["current_head"] == before_state["identity"]["head"]
     assert payload["Action"] == created["Action"]
     assert len(review_calls) == before_calls
     assert _cycle_payload(state_dir, public_id) == before_state
@@ -3089,7 +3086,7 @@ def test_show_status_requires_id(
     monkeypatch.setattr(
         review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2
     )
-    monkeypatch.setattr(review, "default_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(review, "default_state_dir", lambda **_kwargs: tmp_path / "state")
     monkeypatch.setattr(sys, "argv", ["review.py", "--show-status"])
 
     assert review.main() == 2
@@ -4533,7 +4530,7 @@ def test_deslop_done_requires_id_and_rejects_other_actions(
     monkeypatch.setattr(
         review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2
     )
-    monkeypatch.setattr(review, "default_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(review, "default_state_dir", lambda **_kwargs: tmp_path / "state")
     monkeypatch.setattr(sys, "argv", ["review.py", "--deslop-done"])
 
     assert review.main() == 2
@@ -4764,7 +4761,9 @@ def test_show_status_json_by_id(
     repo = tmp_path / "repo"
     state_dir = tmp_path / "default-state"
     _init_repo(repo)
-    head = _commit_file(repo, "app.txt", "base\n", "base")
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/status-json")
+    head = _commit_file(repo, "app.txt", "feature\n", "feature")
     _start_fast_review(monkeypatch, repo, "--id", "rvw_caller0001")
     before = _cycle_payload(state_dir, "rvw_caller0001")
     capsys.readouterr()
@@ -4787,6 +4786,7 @@ def test_show_status_json_by_id(
         "base": "main",
     }
     assert {"steps", "rounds", "round_history", "review_ladder"} <= set(payload)
+    assert payload["base_interaction"]["status"] == "not_required"
     assert "Action" not in payload
     assert "superseded_by" not in payload
     assert "supersedes" not in payload
@@ -4804,6 +4804,78 @@ def test_show_status_json_by_id(
         "decision_required",
         "caller_decision",
     )
+
+
+@pytest.mark.windows_cli
+def test_installed_status_reads_moved_cycle_without_running_subprocesses(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    home = tmp_path / "home"
+    codex = home / ".codex"
+    state_dir = codex / "state" / "review-suite"
+    _init_repo(repo)
+    base = _commit_file(repo, "app.py", "value = 1\n", "base")
+    _git(repo, "checkout", "-b", "feature")
+    head = _commit_file(repo, "app.py", "value = 2\n", "reviewed change")
+    state = review.create_cycle(
+        cwd=repo, base="main", branch="feature", head=head, merge_base=base,
+        requested_mode="fast", effective_mode="fast", selection="auto", effective_selection="stable",
+    )
+    state = review.record_clean_decision(state, round_id="signoff", lane="review_base", reviewed_head=head)
+    saved = orchestrator_store.save_cycle(state_dir, state)
+    moved = _commit_file(repo, "app.py", "value = 3\n", "unreviewed follow-up")
+    assert moved != head
+
+    install = home / ".agents" / "skills" / "review-suite" / "plugins" / "review-suite"
+    shutil.copytree(SCRIPT_DIR, install / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(SCRIPT_DIR.parent / ".codex-plugin", install / ".codex-plugin")
+    launch_log = tmp_path / "launches.txt"
+    (tmp_path / "sitecustomize.py").write_text(
+        "import os, sys\n"
+        "def log(event):\n"
+        "    with open(os.environ['STATUS_LAUNCH_LOG'], 'a', encoding='utf-8') as out:\n"
+        "        out.write(event + '\\n')\n"
+        "log('python')\n"
+        "def audit(event, args):\n"
+        "    if event in ('os.exec', 'subprocess.Popen'):\n"
+        "        log(event)\n"
+        "sys.addaudithook(audit)\n",
+        encoding="utf-8",
+    )
+    # A known id resolves even with the aggregate index unavailable.
+    orchestrator_store.index_path(state_dir).unlink()
+    argv = [sys.executable, str(install / "scripts" / "review.py"), "--id", saved["public_id"], "--show-status", "--json"]
+    env = os.environ | {
+        "HOME": str(home), "USERPROFILE": str(home),
+        "CODEX_HOME": str(codex), "PYTHONPATH": str(tmp_path),
+        "STATUS_LAUNCH_LOG": str(launch_log),
+    }
+    env.pop("REVIEW_SUITE_STATE_DIR", None)
+    result = subprocess.run(
+        argv, cwd=tmp_path, env=env,
+        capture_output=True, text=True, encoding="utf-8", check=True,
+    )
+    assert launch_log.read_text(encoding="utf-8").splitlines() == ["python"]
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "done"
+    assert payload["done"] is True
+    assert payload["next_action"] == "none"
+    assert payload["reviewed_head"] == payload["accepted_head"] == payload["current_head"] == head
+    assert payload["base_interaction"]["status"] == "not_required"
+    assert orchestrator_store.load_cycle_by_key(state_dir, saved["cycle_key"]) == saved
+    assert not (home / ".agents" / "state").exists()
+
+    requested_cwd = (
+        f"/mnt/{repo.drive[0].lower()}/{repo.relative_to(repo.anchor).as_posix()}"
+        if os.name == "nt" else str(repo)
+    )
+    launch_log.write_text("", encoding="utf-8")
+    from_cd = subprocess.run(
+        [*argv, "--cd", requested_cwd], cwd=tmp_path, env=env,
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert from_cd.returncode == 0, from_cd.stdout + from_cd.stderr
+    assert from_cd.stdout == result.stdout
+    assert launch_log.read_text(encoding="utf-8").splitlines() == ["python"]
 
 
 @pytest.mark.parametrize(
@@ -5233,7 +5305,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
             "waived",
         ],
     )
-    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
+    monkeypatch.setattr(review, "default_state_dir", lambda **_kwargs: state_dir)
     exit_code = review.main()
 
     assert exit_code == 2
@@ -5447,10 +5519,9 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
 
     assert exit_code == 0
     assert status["review_ladder"] == "pending"
-    assert status["next_action"] == "continue"
-    assert status["current_head"] == amended_head
-    assert status["Action"]["cmd"].endswith(f"review.py --id {public_id}")
-    assert "--github-review" not in str(status["Action"]["cmd"])
+    assert status["next_action"] == "github_review"
+    assert status["current_head"] == status["reviewed_head"] != amended_head
+    assert status["Action"]["cmd"].endswith(f"review.py --id {public_id} --github-review")
 
     def fail_github_review(*args: object, **kwargs: object) -> int:
         raise AssertionError("--github-review must not run before amended head signoff")
@@ -7055,7 +7126,7 @@ def test_decision_pending_with_missing_metadata_still_errors(
     monkeypatch.setattr(
         review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2
     )
-    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
+    monkeypatch.setattr(review, "default_state_dir", lambda **_kwargs: state_dir)
     monkeypatch.setattr(
         sys, "argv", ["review.py", "--id", public_id, "--decision", "clean"]
     )
@@ -7189,6 +7260,10 @@ def test_base_interaction_clean_receipt_and_new_head_reflags(monkeypatch, tmp_pa
     assert len(calls) == 1
     _git(repo, "commit", "--allow-empty", "-m", "new head")
     _, status = _run_review(monkeypatch, [*args, "--show-status"])
+    assert status["base_interaction"]["status"] == "checked"
+    assert status["accepted_head"] != _git(repo, "rev-parse", "HEAD")
+    _run_review(monkeypatch, args)
+    _, status = _run_review(monkeypatch, [*args, "--show-status"])
     assert status["base_interaction"]["check"] is True
     assert status["base_interaction"]["status"] == "outstanding"
 
@@ -7247,16 +7322,19 @@ def test_equivalent_patch_with_older_followup_exposes_remaining_gates(
     # A receipt for C must not clear the interaction on an equivalent later head.
     _git(repo, "commit", "--allow-empty", "-m", "new identity")
     _, status = _run_review(monkeypatch, [*args, "--show-status"])
+    assert status["done"] and status["accepted_head"] == current
+    _run_review(monkeypatch, args)
+    _, status = _run_review(monkeypatch, [*args, "--show-status"])
     assert not status["done"]
     assert status["base_interaction"]["status"] == "outstanding"
     assert status["base_interaction"]["check"]
     assert status["review_ladder"] == "pending"
     assert status["accepted_head"] == _git(repo, "rev-parse", "HEAD")
     assert status["next_action"] == "validation"
-    _commit_file(repo, "app.py", "def a():\n    return 30\n\ndef b():\n    return 20\n", "changed patch")
-    _, status = _run_review(monkeypatch, [*args, "--show-status"])
-    assert not status["done"]
-    assert "acceptance" not in status
+    changed = _commit_file(repo, "app.py", "def a():\n    return 30\n\ndef b():\n    return 20\n", "changed patch")
+    _, after_change = _run_review(monkeypatch, [*args, "--show-status"])
+    assert after_change == status
+    assert after_change["accepted_head"] != changed
 
 
 def test_mode_continuation_preserves_equivalent_signoff_without_base_drift(monkeypatch, tmp_path):
@@ -7449,13 +7527,25 @@ def test_base_interaction_not_required_without_base_drift(monkeypatch, tmp_path)
     assert code == 0
     assert status["done"] is True
     assert status["base_interaction"]["status"] == "not_required"
-    assert not any({"diff", "show", "cat-file"}.intersection(cmd[1:3]) for cmd in git_commands)
+    assert git_commands == []
 
     calls = _stub_interaction(monkeypatch)
     code, status = _run_review(monkeypatch, ["--id", state["public_id"], "--state-dir", str(state_dir), "--check-base-interaction"])
     assert code == 0
     assert status["base_interaction"]["status"] == "not_required"
     assert calls == []
+
+    args = ["--id", state["public_id"], "--state-dir", str(state_dir)]
+    _git(repo, "commit", "--allow-empty", "-m", "equivalent head")
+    carried_head = _git(repo, "rev-parse", "HEAD")
+    _run_review(monkeypatch, [*args, "--check-base-interaction"])
+    _, carried = _run_review(monkeypatch, [*args, "--show-status"])
+    assert carried["accepted_head"] == carried_head != head
+    _git(repo, "reset", "--hard", head)
+    _run_review(monkeypatch, args)
+    _, restored = _run_review(monkeypatch, [*args, "--show-status"])
+    assert restored["accepted_head"] == head
+    assert restored["done"]
 
 
 @pytest.mark.parametrize("verdict", ["clean", "findings"])

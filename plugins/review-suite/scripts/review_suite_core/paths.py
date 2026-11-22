@@ -55,7 +55,9 @@ def _path_exists(path_text: str) -> bool:
         return False
 
 
-def _candidate_windows_paths_for_posix_input(cwd: str) -> list[str]:
+def _candidate_windows_paths_for_posix_input(
+    cwd: str, *, wsl_distributions: tuple[str, ...] | None = None,
+) -> list[str]:
     normalized = _windows_single_slash_posix_path(cwd)
     if not normalized:
         return []
@@ -70,13 +72,15 @@ def _candidate_windows_paths_for_posix_input(cwd: str) -> list[str]:
         remainder = normalized[7:]
         windows_path = f"{drive}:/{remainder}" if remainder else f"{drive}:/"
         candidates.append(windows_path)
-    for distro in _list_wsl_distributions():
+    for distro in _list_wsl_distributions() if wsl_distributions is None else wsl_distributions:
         candidates.append(f"//wsl.localhost/{distro}{normalized}")
     return candidates
 
 
-def _translate_windows_posix_path(cwd: str) -> str | None:
-    candidates = _candidate_windows_paths_for_posix_input(cwd)
+def _translate_windows_posix_path(
+    cwd: str, *, wsl_distributions: tuple[str, ...] | None = None,
+) -> str | None:
+    candidates = _candidate_windows_paths_for_posix_input(cwd, wsl_distributions=wsl_distributions)
     if candidates:
         preferred = candidates[0]
         if preferred.lower().startswith(
@@ -138,8 +142,10 @@ def _git_top_level(path: Path) -> Path:
     return Path(top_level)
 
 
-def resolve_cd_path(cd: str | Path) -> Path:
-    translated = _translate_windows_posix_path(str(cd))
+def resolve_cd_path(
+    cd: str | Path, *, wsl_distributions: tuple[str, ...] | None = None,
+) -> Path:
+    translated = _translate_windows_posix_path(str(cd), wsl_distributions=wsl_distributions)
     if translated:
         return Path(translated)
     path_message = _windows_posix_path_message(str(cd))
@@ -195,7 +201,7 @@ def _native_wsl_key(cwd: str) -> str | None:
     return _canonical_wsl_key(distro, normalized)
 
 
-def cwd_path_from_normalized(normalized_cwd: str) -> Path:
+def cwd_path_from_normalized(normalized_cwd: str, *, discover_wsl: bool = True) -> Path:
     value = str(normalized_cwd or "").strip()
     if value.lower().startswith("wsl:"):
         _scheme, rest = value.split(":", 1)
@@ -208,7 +214,7 @@ def cwd_path_from_normalized(normalized_cwd: str) -> Path:
                 matching_distro = next(
                     (
                         item
-                        for item in _list_wsl_distributions()
+                        for item in (_list_wsl_distributions() if discover_wsl else ())
                         if item.lower() == distro.lower()
                     ),
                     distro,

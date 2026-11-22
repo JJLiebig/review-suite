@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import atexit
-from contextlib import contextmanager
-from contextvars import ContextVar
 import errno
 import hashlib
 import json
@@ -22,26 +20,15 @@ from .orchestrator_store import (
     _unlock_file,
     orchestrator_store_lock,
 )
-
-_leases: dict[str, object] = {}
-_selected_state: ContextVar[Path | None] = ContextVar(
-    "review_suite_state", default=None
+from .state_locations import (
+    _same_state,
+    read_state_dir,
+    state_directory as state_directory,
+    state_locations,
+    state_override,
 )
 
-
-@contextmanager
-def state_directory(path: str | None):
-    token = _selected_state.set(Path(path).expanduser().absolute() if path else None)
-    try:
-        yield
-    finally:
-        _selected_state.reset(token)
-
-
-def _same_state(left: Path, right: Path) -> bool:
-    return left.exists() and right.exists() and left.samefile(right)
-
-
+_leases: dict[str, object] = {}
 def _report_leftover(legacy: Path, target: Path, control: Path) -> None:
     marker = control / (
         "reported-" + hashlib.sha256(str(legacy).encode()).hexdigest()[:16]
@@ -412,28 +399,12 @@ def _recover(target: Path, control: Path) -> None:
     _cleanup_retired(retired, journal, pending)
 
 
-def default_state_dir() -> Path:
-    if selected := _selected_state.get():
-        return selected
-    override = os.environ.get("REVIEW_SUITE_STATE_DIR", "").strip()
-    if override:
-        # An explicit independent state must not import the user's history.
-        return Path(override).expanduser().absolute()
-    target = Path.home() / ".agents" / "state" / "review-suite"
-    codex = (
-        Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-        .expanduser()
-        .absolute()
-    )
-    sources = list(
-        dict.fromkeys(
-            [
-                codex / "state" / "review-suite",
-                Path.home() / ".codex" / "state" / "review-suite",
-            ]
-        )
-    )
-    control = target.parent / ".review-suite-migration"
+def default_state_dir(*, read_only: bool = False) -> Path:
+    if read_only:
+        return read_state_dir()
+    if override := state_override():
+        return override
+    target, sources, control = state_locations()
     # No directory creation, process scan or lock on the normal migrated path.
     if not (control / "pending.json").exists() and not any(
         path.exists() and not _same_state(path, target) for path in sources

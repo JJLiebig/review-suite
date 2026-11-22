@@ -15,7 +15,8 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 from review_suite_core import state_paths
 from review_suite_core.config import load_config
-from review_suite_core.orchestrator_store import orchestrator_store_lock
+from review_suite_core.cycle_status import load_status_cycle
+from review_suite_core.orchestrator_store import create_cycle_with_public_id, orchestrator_store_lock
 
 
 @pytest.fixture
@@ -90,7 +91,7 @@ def test_install_first_run_moves_history_links_old_path_and_migrates_settings(
     ]
     first = subprocess.run(command, capture_output=True, text=True, timeout=40)
     assert first.returncode == 0, first.stdout + first.stderr
-    assert target.is_dir()
+    assert target.is_dir(), first.stdout + first.stderr
     assert legacy.is_junction() or legacy.is_symlink()
     assert (target / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
     assert (target / "names-backup-123/original.json").read_bytes() == b"backup"
@@ -116,6 +117,23 @@ def test_both_exist_never_merge_and_report_once(home, capsys):
     assert capsys.readouterr().err == ""
     assert (target / "runs.jsonl").read_text() == "new history"
     assert (legacy / "runs.jsonl").read_bytes() == b'{"history":"preserve"}\n'
+
+
+def test_status_reads_cycle_when_writer_moves_legacy_state(home):
+    legacy, target = seed(home)
+    review_id = "rvw_legacy0001"
+    saved = create_cycle_with_public_id(
+        legacy, {"cycle_key": "orc-" + "a" * 20, "stage": "created"}, review_id,
+    )
+
+    def locate():
+        selected = state_paths.default_state_dir(read_only=True)
+        if selected == legacy:
+            target.parent.mkdir(parents=True)
+            legacy.rename(target)
+        return selected
+
+    assert load_status_cycle(review_id, locate=locate) == (target, saved)
 
 
 @pytest.mark.parametrize("review_process", [False, True])

@@ -14,6 +14,15 @@ from review_suite_core import (
     resolve_repo_root,
 )
 from review_suite_core.config import default_state_dir
+from review_suite_core.cycle_status import (
+    _load_output_round_payload,
+    _public_status_payload,
+    _round_blocked,
+    _round_terminal_command,
+    json_status_payload,
+    review_status_details,
+    route_convergence,
+)
 from review_suite_core.orchestrator_profiles import MODE_STRICTNESS_ORDER
 from review_suite_core.orchestrator_state import (
     HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
@@ -25,15 +34,12 @@ from review_suite_core.orchestrator_state import (
 )
 from review_suite_local import (
     grade_rank_placeholders,
-    load_round,
     normalize_review_cwd_value,
     round_needs_caller_grade,
-    unique_round_state_dirs,
 )
 
 ORCHESTRATOR_HIDDEN_STAGES = {"aborted", "dismissed"}
 ORCHESTRATOR_HEAD_CURRENT_STAGES = {"review-green", "local-green-handoff"}
-DECISION_COMMANDS = {"clean", "findings"}
 
 
 def _script_path(name: str) -> str:
@@ -91,91 +97,6 @@ def _with_action_context(
     if round_id:
         action["round_id"] = round_id
     return action
-
-
-def _public_status_action(action: dict[str, object]) -> dict[str, object]:
-    hidden = {"lane", "round_id"}
-    return {
-        key: value
-        for key, value in action.items()
-        if key not in hidden and value not in (None, "", [], {})
-    }
-
-
-def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
-    public: dict[str, object] = {}
-    for key in (
-        "review",
-        "status",
-        "done",
-        "review_ladder",
-        "next_action",
-        "recommendation",
-        "reason",
-        "progress",
-        "convergence",
-        "base_interaction",
-    ):
-        value = payload.get(key)
-        if value not in (None, "", [], {}):
-            public[key] = value
-
-    if payload.get("pending_round_head_matches_current") is False:
-        reviewed_head = str(payload.get("pending_round_reviewed_head") or "").strip()
-        current_head = str(payload.get("pending_round_current_head") or "").strip()
-        if reviewed_head:
-            public["reviewed_head"] = reviewed_head
-        if current_head:
-            public["current_head"] = current_head
-        note = str(payload.get("note") or "").strip()
-        if note:
-            public["note"] = note
-
-    if payload.get("head_changed_after_review"):
-        for key in (
-            "head_changed_after_review",
-            "reviewed_head",
-            "current_head",
-            "changed_since_review",
-            "changed_since_review_count",
-            "note",
-        ):
-            value = payload.get(key)
-            if value not in (None, "", [], {}):
-                public[key] = value
-
-    action = payload.get("Action")
-    if isinstance(action, dict) and action:
-        public["Action"] = _public_status_action(action)
-    elif str(payload.get("note") or "").strip():
-        public["note"] = str(payload.get("note") or "").strip()
-
-    return public or payload
-
-
-def json_status_payload(payload: dict[str, object]) -> dict[str, object]:
-    public = _public_status_payload(payload)
-    public.pop("Action", None)
-    for key in ("base", "branch", "head", "mode", "reviewed_head", "accepted_head", "current_head", "acceptance", "required_checks", "validation_head", "base_interaction"):
-        value = payload.get(key)
-        if value not in (None, "", [], {}):
-            public[key] = value
-    for key in ("steps", "rounds", "round_history", "started_at", "round_started_at"):
-        if key in payload:
-            public[key] = payload[key]
-    return public
-
-
-def route_convergence(
-    payload: dict[str, object], convergence: dict[str, object]
-) -> None:
-    """Report a non-active convergence checkpoint as the cycle's status."""
-    if convergence.get("status") == "DECISION_REQUIRED":
-        payload["status"] = "decision_required"
-        payload["next_action"] = "caller_decision"
-    else:
-        payload["status"] = str(convergence.get("decision") or "decided").lower()
-        payload["next_action"] = "none"
 
 
 def _review_command(public_id: str, *, extra: tuple[str, ...] = ()) -> str:
@@ -317,64 +238,6 @@ def _round_by_id(state: dict[str, object], round_id: str) -> dict[str, object]:
     return {}
 
 
-def _orchestrator_review_state_dir(state_dir: Path) -> Path:
-    return state_dir / "orchestrator" / "review-rounds"
-
-
-def _round_state_dir_candidates(
-    state_dir: Path, round_record: dict[str, object]
-) -> list[Path]:
-    candidates: list[Path] = []
-    round_state_dir = str(round_record.get("round_state_dir") or "").strip()
-    if round_state_dir:
-        candidates.append(Path(round_state_dir))
-    candidates.extend([_orchestrator_review_state_dir(state_dir), state_dir])
-    return unique_round_state_dirs(candidates)
-
-
-def _fallback_round_payload(round_record: dict[str, object]) -> dict[str, object]:
-    payload = dict(round_record)
-    runs: list[dict[str, object]] = []
-    for raw_run in list(payload.get("runs") or []):
-        if not isinstance(raw_run, dict):
-            continue
-        run = dict(raw_run)
-        if (
-            not str(run.get("review_status") or "").strip()
-            and str(run.get("status") or "").strip()
-        ):
-            run["review_status"] = run.get("status")
-        if (
-            not str(run.get("reviewer_output") or "").strip()
-            and str(run.get("summary") or "").strip()
-        ):
-            run["reviewer_output"] = run.get("summary")
-        if (
-            not str(run.get("reviewer_output_ref") or "").strip()
-            and str(run.get("ref") or "").strip()
-        ):
-            run["reviewer_output_ref"] = run.get("ref")
-        runs.append(run)
-    payload["runs"] = runs
-    return payload
-
-
-def _load_output_round_payload(
-    state_dir: Path, round_record: dict[str, object]
-) -> dict[str, object]:
-    round_id = str(round_record.get("round_id") or "").strip()
-    if not round_id:
-        return _fallback_round_payload(round_record)
-    for candidate in _round_state_dir_candidates(state_dir, round_record):
-        try:
-            payload = load_round(candidate, round_id)
-            payload.setdefault("_round_state_dir", str(candidate))
-            return payload
-        except ValueError:
-            continue
-    return _fallback_round_payload(round_record)
-
-
 def _pending_grade_payload(
     state: dict[str, object], *, state_dir: Path
 ) -> dict[str, object] | None:
@@ -427,40 +290,6 @@ def _arena_grade_command(
     return format_command(command)
 
 
-def _round_blocked(round_record: dict[str, object]) -> bool:
-    if bool(round_record.get("review_blocked")):
-        return True
-    for run in list(round_record.get("runs") or []):
-        if not isinstance(run, dict):
-            continue
-        if bool(run.get("blocked")) or bool(run.get("grade_blocked")):
-            return True
-    return False
-
-
-def _round_terminal_command(round_record: dict[str, object]) -> str | None:
-    if (
-        bool(round_record.get("grading_required"))
-        and bool(round_record.get("needs_grade"))
-        and not bool(round_record.get("graded"))
-    ):
-        return None
-    commands: list[str] = []
-    for run in list(round_record.get("runs") or []):
-        if not isinstance(run, dict):
-            continue
-        status = str(run.get("review_status") or run.get("status") or "").strip()
-        if status and status != "completed":
-            return None
-        command = str(run.get("terminal_command") or "").strip().lower()
-        if command not in DECISION_COMMANDS:
-            return None
-        commands.append(command)
-    if not commands:
-        return None
-    return "findings" if "findings" in commands else "clean"
-
-
 def _auto_decision_command(state: dict[str, object], *, state_dir: Path) -> str | None:
     pending = dict(state.get("pending_action") or {})
     if str(pending.get("kind") or "") != "decision":
@@ -477,95 +306,6 @@ def _auto_decision_command(state: dict[str, object], *, state_dir: Path) -> str 
     if _round_blocked(round_record) or _round_blocked(round_payload):
         return None
     return _round_terminal_command(round_payload)
-
-
-def review_status_details(
-    state: dict[str, object], *, state_dir: Path
-) -> dict[str, object]:
-    progress = dict(state.get("review_progress") or {})
-    current_index = dict(progress.get("current_step") or {}).get("index")
-    if current_index is None:
-        current_index = progress.get("next_step_index")
-    if current_index is None:
-        current_index = dict(state.get("pending_action") or {}).get("step_index")
-    completed = {
-        item.get("index")
-        for item in list(progress.get("completed_steps") or [])
-        if isinstance(item, dict)
-    }
-    steps = [
-        {
-            "index": index,
-            "name": step.get("name"),
-            "state": (
-                "current"
-                if index == current_index
-                else "done"
-                if index in completed
-                else "pending"
-            ),
-        }
-        for index, step in enumerate(
-            dict(state.get("review_plan") or {}).get("steps") or []
-        )
-        if isinstance(step, dict)
-    ]
-    rounds = [
-        item for item in list(state.get("rounds") or []) if isinstance(item, dict)
-    ]
-    step_names = {}
-    for record in rounds:
-        profile = dict(record.get("profile_step") or {})
-        step_names[record.get("round_id")] = profile.get("name") or step_names.get(
-            record.get("source_round_id")
-        )
-    # Caller overrides retain the original round and decision audit records.
-    decisions = {
-        item.get("round_id"): item.get("command")
-        for collection in ("decisions", "rounds", "decision_corrections", "finding_dispositions")
-        for item in list(state.get(collection) or [])
-        if isinstance(item, dict) and item.get("command") in DECISION_COMMANDS
-    }
-    history = []
-    started_at = None
-    for number, record in enumerate(rounds[-20:], start=max(1, len(rounds) - 19)):
-        output = _load_output_round_payload(state_dir, record)
-        if number == 1:
-            started_at = output.get("review_started_at")
-        outcome = decisions.get(record.get("round_id"))
-        if outcome not in DECISION_COMMANDS:
-            blocked = (
-                record.get("status") == "blocked"
-                or output.get("status") == "blocked"
-                or _round_blocked(record)
-                or _round_blocked(output)
-            )
-            outcome = "blocked" if blocked else _round_terminal_command(output)
-        history.append(
-            {
-                "number": number,
-                "round_id": record.get("round_id"),
-                "lane": record.get("lane"),
-                "step": step_names.get(record.get("round_id")),
-                "status": record.get("status") or output.get("status"),
-                "outcome": outcome,
-                # Finding counts are not recorded; reviewer prose is not a count.
-                "findings": None,
-                "started_at": output.get("review_started_at"),
-                "finished_at": output.get("review_completed_at"),
-            }
-        )
-    if len(rounds) > 20:
-        started_at = _load_output_round_payload(state_dir, rounds[0]).get(
-            "review_started_at"
-        )
-    return {
-        "steps": steps,
-        "rounds": len(rounds),
-        "round_history": history,
-        "started_at": started_at,
-        "round_started_at": history[-1]["started_at"] if history else None,
-    }
 
 
 def _orchestrator_mode_label(state: dict[str, object]) -> str:

@@ -18,6 +18,7 @@ from review_suite_core.orchestrator_store import (
     index_path,
     load_index,
     orchestrator_store_lock,
+    public_id_path,
 )
 from review_suite_local import (
     ORCHESTRATOR_ROUND_STATE_DIR,
@@ -88,9 +89,13 @@ def _round_ids(payload: dict[str, Any]) -> set[str]:
 
 def _pruned_index(
     state_dir: Path, deleted_keys: set[str]
-) -> tuple[dict[str, Any], int]:
+) -> tuple[dict[str, Any], int, list[str]]:
     path = index_path(state_dir)
     index = load_index(state_dir)
+    removed_ids = [
+        public_id for public_id, cycle_key in index["ids"].items()
+        if cycle_key in deleted_keys
+    ]
     index["ids"] = {
         public_id: cycle_key
         for public_id, cycle_key in index["ids"].items()
@@ -102,7 +107,7 @@ def _pruned_index(
         if cycle_key not in deleted_keys
     }
     after = len((json.dumps(index, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    return index, max(0, _path_size(path) - after)
+    return index, max(0, _path_size(path) - after), removed_ids
 
 
 def _cycle_is_prunable(path: Path, payload: dict[str, Any], cutoff: datetime) -> bool:
@@ -148,10 +153,15 @@ def _prune_orchestrator_cycles(
                 with orchestrator_store_lock(
                     state_dir=state_dir, name="orchestrator-index"
                 ):
-                    index, saved = _pruned_index(state_dir, deleted_keys)
+                    index, saved, removed_ids = _pruned_index(state_dir, deleted_keys)
                     write_json(index_path(state_dir), index)
             else:
-                _, saved = _pruned_index(state_dir, deleted_keys)
+                _, saved, removed_ids = _pruned_index(state_dir, deleted_keys)
+            for public_id in removed_ids:
+                if lookup := public_id_path(state_dir, public_id):
+                    saved += _path_size(lookup)
+                    if apply:
+                        lookup.unlink(missing_ok=True)
             result["saved_b"] += saved
     return result, protected_round_ids
 

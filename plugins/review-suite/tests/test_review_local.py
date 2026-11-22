@@ -13,7 +13,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-import review
+import review_orchestrator as review
 import review_deslop
 import review_followup
 import review_github

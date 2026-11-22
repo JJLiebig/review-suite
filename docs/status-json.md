@@ -37,10 +37,17 @@ default branch status output remains unchanged.
 
 ## Status by id
 
-`review.py --id <id> --show-status --json` prints the same fields for one review
-cycle, wherever it is run. `head` is the full commit the cycle reviews, and
-`status`, `done`, and `next_action` say whether it is still running, finished,
-or waiting on the caller. An unknown id exits with code 2 and prints
+`review.py --id <id> --show-status --json` reads the recorded status for one
+review cycle from any directory. `head` is the full commit recorded by the
+cycle. `current_head` is the head used to report the recorded status, and
+`accepted_head` identifies the commit covered by acceptance when available.
+Consumers compare `accepted_head` to the current PR head before treating
+`done` as approval for that commit. Review commands record any acceptance
+carried forward to a new head and any base interaction checks. Use
+`review.py --status` to inspect the live checkout.
+
+`status`, `done`, and `next_action` say whether the review is still running,
+finished, or waiting on the caller. An unknown id exits with code 2 and prints
 `{"error": "unknown review cycle id: <id>", "status": "usage_error"}`.
 
 When a supported restart links cycles, the predecessor includes

@@ -2,15 +2,27 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 import uuid
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from .orchestrator_state import convergence_summary, record_contract_replan
+from .cycle_status import convergence_summary
+from .cycle_store import (
+    CALLER_PUBLIC_ID_RE as CALLER_PUBLIC_ID_RE,
+    UnknownReviewIdError as UnknownReviewIdError,
+    cycle_path as cycle_path,
+    cycles_dir as cycles_dir,
+    index_path as index_path,
+    load_cycle_by_key as load_cycle_by_key,
+    load_cycle_by_public_id as load_cycle_by_public_id,
+    orchestrator_dir as orchestrator_dir,
+    public_id_path as public_id_path,
+    read_json,
+    read_public_id_lookup,
+)
 
 if os.name == "nt":
     import msvcrt
@@ -20,39 +32,6 @@ else:
 
 ORCHESTRATOR_INDEX_SCHEMA_VERSION = 1
 ORCHESTRATOR_CYCLES_LOCK = "orchestrator-cycles"
-CALLER_PUBLIC_ID_RE = re.compile(r"rvw_[a-z0-9]{8,32}")
-
-
-class UnknownReviewIdError(ValueError):
-    pass
-
-
-def orchestrator_dir(state_dir: Path) -> Path:
-    return state_dir / "orchestrator"
-
-
-def cycles_dir(state_dir: Path) -> Path:
-    return orchestrator_dir(state_dir) / "cycles"
-
-
-def index_path(state_dir: Path) -> Path:
-    return orchestrator_dir(state_dir) / "index.json"
-
-
-def cycle_path(state_dir: Path, cycle_key: str) -> Path:
-    return cycles_dir(state_dir) / f"{cycle_key}.json"
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid orchestrator JSON at {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError(f"orchestrator JSON must be an object: {path}")
-    return payload
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -73,7 +52,7 @@ def _empty_index() -> dict[str, Any]:
 
 
 def load_index(state_dir: Path) -> dict[str, Any]:
-    raw = _read_json(index_path(state_dir))
+    raw = read_json(index_path(state_dir))
     if not raw:
         return _empty_index()
     ids = raw.get("ids") if isinstance(raw.get("ids"), dict) else {}
@@ -163,28 +142,6 @@ def public_id_for_cycle_key(state_dir: Path, cycle_key: str) -> str:
     raise ValueError(f"could not allocate public id for cycle key: {cycle_key}")
 
 
-def load_cycle_by_key(state_dir: Path, cycle_key: str) -> dict[str, Any] | None:
-    path = cycle_path(state_dir, cycle_key)
-    if not path.exists():
-        return None
-    return _read_json(path)
-
-
-def load_cycle_by_public_id(state_dir: Path, public_id: str) -> dict[str, Any]:
-    review_id = str(public_id or "").strip()
-    if not review_id:
-        raise ValueError("--id is required")
-    index = load_index(state_dir)
-    cycle_key = str(index["ids"].get(review_id) or "")
-    if not cycle_key:
-        raise UnknownReviewIdError(f"unknown review cycle id: {review_id}")
-    state = load_cycle_by_key(state_dir, cycle_key)
-    if state is None:
-        raise ValueError(f"review cycle state is missing for id: {review_id}")
-    state.setdefault("public_id", review_id)
-    return state
-
-
 def create_cycle_with_public_id(
     state_dir: Path, state: dict[str, Any], public_id: str
 ) -> dict[str, Any]:
@@ -204,6 +161,8 @@ def create_cycle_with_public_id(
             _write_index(state_dir, index)
         current = load_cycle_by_key(state_dir, cycle_key)
         if current is not None:
+            if current.get("public_id") == public_id:
+                _publish_public_id_lookup(state_dir, public_id, cycle_key)
             current["public_id"] = public_id
             return current
         return _save_cycle_unlocked(state_dir, state)
@@ -294,7 +253,16 @@ def _save_cycle_unlocked(state_dir: Path, state: dict[str, Any]) -> dict[str, An
         except (OSError, ValueError):
             pass
     _atomic_write_json(cycle_path(state_dir, cycle_key), payload)
+    _publish_public_id_lookup(state_dir, payload["public_id"], cycle_key)
     return payload
+
+
+def _publish_public_id_lookup(state_dir: Path, public_id: str, cycle_key: str) -> None:
+    path = public_id_path(state_dir, public_id)
+    if path is not None and read_public_id_lookup(path) != cycle_key:
+        # The cycle and aggregate index are already committed at this point.
+        with suppress(OSError):
+            _atomic_write_json(path, {"cycle_key": cycle_key})
 
 
 def reserve_cycle_successor(
@@ -329,6 +297,8 @@ def reserve_cycle_successor(
                 raise ValueError(
                     "source review changed during contract replan; inspect its status and retry"
                 )
+            from .orchestrator_state import record_contract_replan
+
             replanned = record_contract_replan(
                 current, conflict=source["convergence"]["conflict"]
             )

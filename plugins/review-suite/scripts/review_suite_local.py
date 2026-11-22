@@ -23,6 +23,12 @@ from typing import Any, Callable
 
 from review_suite_runtime_bootstrap import launcher_script_path
 from review_suite_core.costing import MODEL_PRICING_PER_MILLION
+from review_suite_core.round_store import (
+    load_round as load_round,
+    round_path,
+    rounds_dir as rounds_dir,
+    unique_round_state_dirs,
+)
 from review_suite_core.arena_lifecycle import (
     ArenaRetiredError,
     arena_launch_guard,
@@ -76,7 +82,6 @@ SUMMARY_FILENAME = "summary.json"
 ROSTER_FILENAME = "roster.json"
 RUBRIC_FILENAME = "rubric_v2.json"
 OPERATIONAL_STATE_FILENAME = "operational_state.json"
-ROUNDS_DIRNAME = "rounds"
 ORCHESTRATOR_ROUND_STATE_DIR = Path("orchestrator") / "review-rounds"
 GRADE_BASIS_VALUES = (
     "valid_findings_vs_none",
@@ -1067,14 +1072,6 @@ def total_usage_tokens(usage: dict[str, Any]) -> int:
     return core_usage_tokens(usage)
 
 
-def rounds_dir(state_dir: Path) -> Path:
-    return state_dir / ROUNDS_DIRNAME
-
-
-def round_path(state_dir: Path, round_id: str) -> Path:
-    return rounds_dir(state_dir) / f"{round_id}.json"
-
-
 def _round_prompt_is_needed(payload: dict[str, Any]) -> bool:
     return str(payload.get("status") or "") == "completed"
 
@@ -1217,23 +1214,6 @@ def iter_round_payloads(state_dir: Path) -> list[dict[str, Any]]:
         payload.setdefault("_round_file_path", str(path))
         entries.append(payload)
     return entries
-
-
-def _round_state_dir_key(path: Path) -> str:
-    resolved = path.resolve(strict=False)
-    return str(resolved).lower() if sys.platform == "win32" else str(resolved)
-
-
-def unique_round_state_dirs(paths: list[Path]) -> list[Path]:
-    seen: set[str] = set()
-    result: list[Path] = []
-    for path in paths:
-        key = _round_state_dir_key(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(path)
-    return result
 
 
 def _rerolled_round_sort_key(payload: dict[str, Any]) -> tuple[str, str]:
@@ -3183,13 +3163,6 @@ def write_round(state_dir: Path, payload: dict[str, Any]) -> Path:
                 raise OSError("reviewer artifact cleanup incomplete")
         write_json(path, compact_round_payload_for_storage(payload))
     return path
-
-
-def load_round(state_dir: Path, round_id: str) -> dict[str, Any]:
-    path = round_path(state_dir, round_id)
-    if not path.exists():
-        raise ValueError(f"unknown round_id: {round_id}")
-    return read_json(path)
 
 
 def save_benchmark_record(state_dir: Path, record: dict[str, Any]) -> bool:
