@@ -2310,15 +2310,15 @@ def test_id_json_accepts_identical_patch_with_shifted_lines_and_preserves_receip
     repo, state, reviewed, new_base = _equivalent_review_repo(tmp_path)
     head = _git(repo, "rev-parse", "HEAD")
     git_commands = []
-    run = subprocess.run
+    popen = subprocess.Popen
 
     def count_git(command, *args, **kwargs):
         if command[0] == "git":
             git_commands.append(command[1])
-        return run(command, *args, **kwargs)
+        return popen(command, *args, **kwargs)
 
     with monkeypatch.context() as context:
-        context.setattr(subprocess, "run", count_git)
+        context.setattr(subprocess, "Popen", count_git)
         review._show_status(state, state_dir=tmp_path / "state", as_json=True)
     result = json.loads(capsys.readouterr().out)
     assert git_commands.count("cat-file") == 1
@@ -2369,6 +2369,7 @@ def test_interaction_batches_hunks_across_shared_paths(tmp_path, monkeypatch):
     }
     for path in branch_contents:
         (repo / path).write_text(content, encoding="utf-8")
+    (repo / "unrelated.txt").write_text("old unrelated line\n" * 4096, encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "original files")
     base = _git(repo, "rev-parse", "HEAD")
@@ -2378,15 +2379,20 @@ def test_interaction_batches_hunks_across_shared_paths(tmp_path, monkeypatch):
     _git(repo, "checkout", "main")
     changed = content.replace("line 3\n", "base early edit\n").replace("line 11\n", "base late edit\n")
     for path in branch_contents:
-        new_base = _commit_file(repo, path, changed, "base edits")
+        _commit_file(repo, path, changed, "base edits")
+    new_base = _commit_file(repo, "unrelated.txt", "new unrelated line\n" * 4096, "unrelated edit")
 
     git_calls = []
+    patch_sizes = []
     run = subprocess.run
 
     def count_git(command, *args, **kwargs):
+        result = run(command, *args, **kwargs)
         if command[0] == "git":
             git_calls.append(command)
-        return run(command, *args, **kwargs)
+            if "--unified=0" in command:
+                patch_sizes.append(len(result.stdout))
+        return result
 
     monkeypatch.setattr(subprocess, "run", count_git)
     result = interaction(repo, base, new_base, head)
@@ -2398,6 +2404,7 @@ def test_interaction_batches_hunks_across_shared_paths(tmp_path, monkeypatch):
         "line_overlap_paths": ["café.txt", "last.txt"],
     }
     assert len(git_calls) <= 7
+    assert patch_sizes and max(patch_sizes) < 16_000
 
 
 @pytest.mark.parametrize("kind", ["binary", "delete", "rename", "mode"])

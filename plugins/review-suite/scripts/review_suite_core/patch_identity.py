@@ -7,17 +7,17 @@ import hashlib
 import json
 import re
 import subprocess
-from io import BytesIO
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from tempfile import TemporaryFile
+from typing import Any, BinaryIO, Iterator
 
 VERSION = 1
+PATHSPEC_BUDGET = 24_000  # Leave room for Git options under Windows' command-line limit.
 
 
-def git(repo: Path, *args: str, input: bytes | None = None) -> bytes:
-    result = subprocess.run(
-        ["git", *args], cwd=repo, input=input, capture_output=True, check=False
-    )
+def git(repo: Path, *args: str) -> bytes:
+    result = subprocess.run(["git", *args], cwd=repo, capture_output=True, check=False)
     if result.returncode:
         raise ValueError(result.stderr.decode("utf-8", "replace"))
     return result.stdout
@@ -52,29 +52,48 @@ def alignment_boundary(lines: list[bytes], start: int, count: int) -> bytes | No
     return None
 
 
-def _read_old_files(repo: Path, base: str, paths: set[str]) -> dict[str, bytes]:
+def _read_old_file(repo: Path, revision: str, output: BinaryIO) -> bytes | None:
+    header = output.readline()
+    if header.endswith((b" missing\n", b" ambiguous\n")):
+        return None
+    _, kind, size = header.split()
+    content = output.read(int(size))
+    output.read(1)  # Batch output adds one newline after each object's bytes.
+    if kind == b"blob":
+        return content
+    # A gitlink can resolve to a commit already present in this repository.
+    try:
+        return git(repo, "show", revision)
+    except ValueError:
+        return None
+
+
+@contextmanager
+def _read_old_files(
+    repo: Path, base: str, paths: list[str]
+) -> Iterator[Iterator[bytes | None]]:
     if not paths:
-        return {}
-    revisions = {path: f"{base}:{path}" for path in paths}
-    requests = "".join(f"{revision}\n" for revision in revisions.values())
-    output = BytesIO(git(repo, "cat-file", "--batch", input=requests.encode("utf-8")))
-    files = {}
-    for path, revision in revisions.items():
-        header = output.readline()
-        if header.endswith((b" missing\n", b" ambiguous\n")):
-            continue
-        _, kind, size = header.split()
-        content = output.read(int(size))
-        output.read(1)  # Batch output adds one newline after each object's bytes.
-        if kind == b"blob":
-            files[path] = content
-        else:
-            # A gitlink can resolve to a commit already present in this repository.
-            try:
-                files[path] = git(repo, "show", revision)
-            except ValueError:
-                pass
-    return files
+        yield iter(())
+        return
+    revisions = [f"{base}:{path}" for path in paths]
+    # Give Git the requests without competing pipes for input and output. Read
+    # one response at a time so only the current file is needed for alignment.
+    with TemporaryFile() as requests, TemporaryFile() as errors:
+        for revision in revisions:
+            requests.write(f"{revision}\n".encode("utf-8"))
+        requests.seek(0)
+        with subprocess.Popen(
+            ["git", "cat-file", "--batch"],
+            cwd=repo,
+            stdin=requests,
+            stdout=subprocess.PIPE,
+            stderr=errors,
+        ) as process:
+            assert process.stdout is not None
+            yield (_read_old_file(repo, revision, process.stdout) for revision in revisions)
+            if process.wait():
+                errors.seek(0)
+                raise ValueError(errors.read().decode("utf-8", "replace"))
 
 
 def patch_identity(repo: Path, base: str, head: str) -> dict[str, Any]:
@@ -119,45 +138,47 @@ def patch_identity(repo: Path, base: str, head: str) -> dict[str, Any]:
                 ambiguous = True
         sections.append((lines, binary, old_path))
 
-    old_files = _read_old_files(repo, base, {path for _, _, path in sections if path})
-    for lines, binary, old_path in sections:
-        old_lines = []
-        if old_path:
-            if old_path in old_files:
-                old_lines = old_files[old_path].splitlines(keepends=True)
-            else:
-                ambiguous = True
-        normalized = []
-        for line in lines:
-            if line.startswith(b"index ") and not binary:
-                continue
-            if line.startswith(b"@@ "):
-                # Preserve edit boundaries/counts, excluding offsets and function context.
-                match = re.match(rb"@@ -\d+(,\d+)? \+\d+(,\d+)? @@", line)
-                if not match:
-                    raise ValueError("unrecognized patch hunk")
-                location = re.match(rb"@@ -(\d+)(?:,(\d+))?", line)
-                start = int(location[1])
-                count = int(location[2]) if location[2] is not None else 1
-                if old_lines:
-                    boundary = alignment_boundary(
-                        old_lines, start - 1 if count else start, count
-                    )
-                    if boundary is None:
-                        ambiguous = True
-                    else:
-                        normalized.append(
-                            b"boundary:" + hashlib.sha256(boundary).digest()
+    old_paths = [path for _, _, path in sections if path]
+    with _read_old_files(repo, base, old_paths) as old_files:
+        for lines, binary, old_path in sections:
+            old_lines = []
+            if old_path:
+                old_file = next(old_files)
+                if old_file is None:
+                    ambiguous = True
+                else:
+                    old_lines = old_file.splitlines(keepends=True)
+            normalized = []
+            for line in lines:
+                if line.startswith(b"index ") and not binary:
+                    continue
+                if line.startswith(b"@@ "):
+                    # Preserve edit boundaries/counts, excluding offsets and function context.
+                    match = re.match(rb"@@ -\d+(,\d+)? \+\d+(,\d+)? @@", line)
+                    if not match:
+                        raise ValueError("unrecognized patch hunk")
+                    location = re.match(rb"@@ -(\d+)(?:,(\d+))?", line)
+                    start = int(location[1])
+                    count = int(location[2]) if location[2] is not None else 1
+                    if old_lines:
+                        boundary = alignment_boundary(
+                            old_lines, start - 1 if count else start, count
                         )
-                line = (
-                    b"@@ -"
-                    + (match[1] or b",1")
-                    + b" +"
-                    + (match[2] or b",1")
-                    + b" @@\n"
-                )
-            normalized.append(line)
-        canonical.append(b"".join(normalized))
+                        if boundary is None:
+                            ambiguous = True
+                        else:
+                            normalized.append(
+                                b"boundary:" + hashlib.sha256(boundary).digest()
+                            )
+                    line = (
+                        b"@@ -"
+                        + (match[1] or b",1")
+                        + b" +"
+                        + (match[2] or b",1")
+                        + b" @@\n"
+                    )
+                normalized.append(line)
+            canonical.append(b"".join(normalized))
     if ambiguous:
         canonical.append(
             git(repo, "diff", "--raw", "--no-abbrev", "--no-renames", base, head)
@@ -207,36 +228,60 @@ def _changed_paths(repo: Path, left: str, right: str, *options: str) -> set[byte
     return set(paths.split(b"\0")) - {b""}
 
 
+def _path_batches(paths: set[bytes]) -> Iterator[dict[bytes, str]]:
+    batch: dict[bytes, str] = {}
+    size = 0
+    for raw_path in sorted(paths):
+        path = raw_path.decode("utf-8", "surrogateescape")
+        quoted = subprocess.list2cmdline([path]).encode("utf-8", "surrogateescape")
+        cost = len(quoted) + 1
+        if batch and size + cost > PATHSPEC_BUDGET:
+            yield batch
+            batch = {}
+            size = 0
+        batch[raw_path] = path
+        size += cost
+    if batch:
+        yield batch
+
+
 def _patches_by_path(
     repo: Path, left: str, right: str, paths: set[bytes]
 ) -> dict[bytes, bytes]:
-    if not paths:
-        return {}
-    patch = git(
-        repo,
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-renames",
-        "--no-color",
-        "--no-prefix",
-        "--submodule=short",
-        "--unified=0",
-        left,
-        right,
-    )
-    patches = {}
-    for section in re.split(rb"(?m)^diff --git ", patch)[1:]:
-        names, _, body = section.partition(b"\n")
-        # With no prefixes or renames, Git prints the same name twice. The
-        # midpoint works for names containing spaces and for C-quoted names.
-        path = names[: len(names) // 2]
-        if path.startswith(b'"'):
-            path = codecs.escape_decode(path[1:-1])[0]
-        if path in paths:
-            # A file type change can emit separate deletion and addition sections.
-            patches[path] = patches.get(path, b"") + body
-    return patches
+    patches: dict[bytes, list[bytes]] = {}
+    for batch in _path_batches(paths):
+        patch = git(
+            repo,
+            "--literal-pathspecs",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--no-color",
+            "--no-prefix",
+            "--unified=0",
+            left,
+            right,
+            "--",
+            *batch.values(),
+        )
+        for section in re.split(rb"(?m)^diff --git ", patch)[1:]:
+            headers = re.search(rb"^--- (.+)\n\+\+\+ (.+)\n(?=@@ )", section, re.MULTILINE)
+            if headers is None:
+                continue
+            matches = set()
+            for header in headers.groups():
+                path = header.removesuffix(b"\t")
+                if path.startswith(b'"'):
+                    path = codecs.escape_decode(path[1:-1])[0]
+                # An inline submodule diff reports paths under the selected gitlink.
+                while path and path != b"/dev/null":
+                    if path in batch:
+                        matches.add(path)
+                    path = path.rpartition(b"/")[0]
+            for path in matches:
+                patches.setdefault(path, []).append(section[headers.end():])
+    return {path: b"".join(sections) for path, sections in patches.items()}
 
 
 def _has_moved_lines(patch: bytes) -> bool:
