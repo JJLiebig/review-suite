@@ -40,7 +40,6 @@ def _read_rollout_records(path: Path) -> tuple[list[dict[str, Any]], bool]:
                 rows.append(json.loads(line))
             except json.JSONDecodeError:
                 incomplete = True
-                break
     result = rows, incomplete
     _JSONL_CACHE[key] = result
     return result
@@ -57,8 +56,8 @@ def read_rollout_summary(path: Path) -> dict[str, Any]:
         return cached
     rows, incomplete = _read_rollout_records(path)
     if incomplete:
-        # The unreadable record may belong to a new turn. Do not recover a verdict
-        # from the prefix, even if an earlier turn wrote a complete answer.
+        # A missing record can hide a turn boundary. Only use readable records
+        # to track activity, not to recover a verdict.
         return {"rollout_incomplete": True}
     last_turn_context_index = 0
     for index, row in enumerate(rows):

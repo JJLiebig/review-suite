@@ -141,6 +141,29 @@ def test_rollout_activity_summary_ignores_token_count_heartbeats(
     assert summary["last_meaningful_type"] is None
 
 
+def test_rollout_activity_summary_tracks_recovered_writes(tmp_path: Path) -> None:
+    rollout = tmp_path / "recovered.jsonl"
+    _write_jsonl(rollout, [_assistant_message("Earlier response.")])
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.write('{"type":"response_item\n')
+        handle.write(
+            json.dumps(
+                {
+                    "timestamp": "2026-04-23T20:05:01Z",
+                    "type": "response_item",
+                    "payload": {"type": "function_call"},
+                }
+            )
+            + "\n"
+        )
+
+    summary = rollout_capture.rollout_activity_summary(rollout)
+
+    assert summary["last_meaningful_at"].isoformat() == "2026-04-23T20:05:01+00:00"
+    assert summary["last_meaningful_type"] == "function_call"
+    assert rollout_capture.rollout_final_assistant_text(rollout) == ""
+
+
 def test_rollout_activity_summary_tracks_assistant_activity(tmp_path: Path) -> None:
     rollout = tmp_path / "assistant-output.jsonl"
     _write_jsonl(
