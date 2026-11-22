@@ -6509,6 +6509,30 @@ def test_validated_fixes_preserve_findings_and_remaining_gates_without_review(
     _git(repo, "checkout", "-b", "other")
     assert close()[0] == 2
     _git(repo, "checkout", "feature")
+    if github:
+        # An unrelated saved follow-up can share this cycle's GitHub source round ID.
+        round_state_dir = state_dir / "orchestrator" / "review-rounds"
+        historic = {
+            "round_id": "historic-followup",
+            "review_scope": {
+                "source_round_id": before["active_findings"]["round_id"],
+                "commit": "historic-findings-head",
+                "reviewed_head": "historic-fix-head",
+            },
+            "status": "completed",
+            "runs": [],
+        }
+        write_round(round_state_dir, historic)
+        write_round(round_state_dir, {
+            **historic,
+            "round_id": "other-cycle-followup",
+            "review_scope": {
+                **historic["review_scope"],
+                "cycle_key": "orc-other-cycle",
+                "commit": findings_head,
+                "reviewed_head": fix_head,
+            },
+        })
     code, closed = close()
     assert code == 0
     assert len(calls) == 1
@@ -6551,13 +6575,16 @@ def test_validated_fixes_close_checkpoints_without_spending_or_bypassing_review(
     if checkpoint in {"running", "unconsumed"}:
         write_round(state_dir / "orchestrator" / "review-rounds", {
             "round_id": "unconsumed",
-            "review_scope": {"source_round_id": "automatic"},
+            "review_scope": {
+                "source_round_id": "automatic",
+                "cycle_key": before["cycle_key"],
+            },
             "status": "running" if checkpoint == "running" else "completed",
             "runs": [{"pid": os.getpid()}] if checkpoint == "running" else [],
         })
     before = review.save_cycle(state_dir, before)
     monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)
-    code, _ = _run_review(monkeypatch, [
+    code, result = _run_review(monkeypatch, [
         "--id", before["public_id"], "--fixes-validated",
         "Test-only fixture correction preserves coverage; owning tests passed",
         "--state-dir", str(state_dir),
@@ -6565,6 +6592,8 @@ def test_validated_fixes_close_checkpoints_without_spending_or_bypassing_review(
     saved = _cycle_payload(state_dir, before["public_id"])
     if checkpoint in {"running", "unconsumed", "contract"}:
         assert code == 2
+        if checkpoint == "unconsumed":
+            assert "inspect the unconsumed follow-up review" in str(result["error"])
         assert saved == before
         return
     assert code == 0
@@ -6583,6 +6612,47 @@ def test_validated_fixes_close_checkpoints_without_spending_or_bypassing_review(
         assert again["stage"] == "decision-required"
         with pytest.raises(ValueError, match="CONTINUE is available once"):
             review.record_convergence_decision(again, decision="CONTINUE")
+
+
+def test_validated_fixes_block_legacy_github_followup_after_retry_claim(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo, state_dir, state, _ = _automatic_findings_cycle(
+        tmp_path, final_step=True, pending=True
+    )
+    clean = review.record_clean_decision(state, round_id="automatic", lane="review_base")
+    findings = review.record_github_result(clean, result="findings")
+    source_id = findings["active_findings"]["round_id"]
+    head = _commit_file(repo, "app.py", "fixed\n", "fix")
+    pending = review.mark_fix_detected(findings, head=head)
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    write_round(round_state_dir, {
+        "round_id": "legacy-followup",
+        "review_scope": {"source_round_id": source_id},
+        "status": "completed",
+        "runs": [],
+    })
+    pending["pending_action"]["round_id"] = "legacy-followup"
+    review.save_cycle(state_dir, pending)
+
+    write_round(round_state_dir, {
+        "round_id": "retry",
+        "review_scope": {"source_round_id": source_id, "cycle_key": pending["cycle_key"]},
+        "status": "sampled",
+        "runs": [],
+    })
+    pending["pending_action"]["round_id"] = "retry"
+    review.save_cycle(state_dir, pending, claim_followup=True)
+    # Another writer can still have a snapshot from before the claim was saved.
+    before = review.save_cycle(state_dir, pending)
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)
+    code, result = _run_review(monkeypatch, [
+        "--id", before["public_id"], "--fixes-validated", "Focused checks passed",
+        "--state-dir", str(state_dir),
+    ])
+    assert code == 2
+    assert "inspect the unconsumed follow-up review" in str(result["error"])
+    assert _cycle_payload(state_dir, before["public_id"]) == before
 
 
 def test_clean_followup_note_does_not_leak_to_later_review_steps(

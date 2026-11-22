@@ -181,6 +181,8 @@ def save_cycle(
             payload["validation"] = deepcopy(validation)
         if preserve_validation and current is not None:
             payload["validation"] = deepcopy(current.get("validation") or {})
+        if current and (prior_rounds := current.get("prior_followup_round_ids")):
+            payload["prior_followup_round_ids"] = list(prior_rounds)
         if claim_followup and current is not None:
             from review_suite_local import _process_is_running
 
@@ -193,12 +195,18 @@ def save_cycle(
                 raise ValueError(
                     "source review changed before follow-up launch; inspect its status and follow the current action"
                 )
-            if _process_is_running(
-                dict(current.get("pending_action") or {}).get("wrapper_pid")
-            ):
+            pending = current.get("pending_action") or {}
+            if _process_is_running(pending.get("wrapper_pid")):
                 raise ValueError(
                     "follow-up wrapper is already running; wait for its owning review command"
                 )
+            previous_id = pending.get("round_id")
+            new_id = (payload.get("pending_action") or {}).get("round_id")
+            if previous_id and previous_id != new_id:
+                # Keep ownership of an interrupted round after its retry takes over.
+                prior_rounds = payload.setdefault("prior_followup_round_ids", [])
+                if previous_id not in prior_rounds:
+                    prior_rounds.append(previous_id)
             payload["convergence"] = deepcopy(current["convergence"])
         if current and dict(current.get("superseded_by") or {}).get("review"):
             return current

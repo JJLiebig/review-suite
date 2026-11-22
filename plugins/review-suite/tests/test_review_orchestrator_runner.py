@@ -1543,6 +1543,7 @@ def test_runner_runs_real_followup_once_from_followup_pending(
     assert (
         followup_calls[0]["review_scope"]["source_round_id"] == "phase_review-round-1"
     )
+    assert followup_calls[0]["review_scope"]["cycle_key"] == fixed["cycle_key"]
     assert followup_calls[0]["review_scope"]["commit"] == "head-1"
     assert followup_calls[0]["review_scope"]["commit_end"] == "head-2"
     assert followup_calls[0]["review_scope"]["branch_base"] == "origin/main"

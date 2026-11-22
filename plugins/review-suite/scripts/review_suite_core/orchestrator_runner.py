@@ -1296,6 +1296,7 @@ def _followup_review_scope(
     for key in EFFECTIVE_BASE_METADATA_KEYS:
         if key in identity:
             review_scope[key] = identity[key]
+    review_scope["cycle_key"] = state["cycle_key"]
     return review_scope, linear_range
 
 
