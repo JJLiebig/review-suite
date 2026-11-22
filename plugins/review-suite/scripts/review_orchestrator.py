@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
 from copy import deepcopy
 from hashlib import sha256
 from pathlib import Path
@@ -1077,6 +1078,37 @@ def _round_state_dir_candidates(
     return unique_round_state_dirs(candidates)
 
 
+def _followup_rounds(
+    state: dict[str, Any], source_round_id: str, *, state_dirs: list[Path]
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    source_round = _round_by_id(state, source_round_id)
+    github_source = source_round.get("lane") == "review-github"
+    pending = state.get("pending_action") or {}
+    pending_round_id = (
+        pending.get("round_id")
+        if pending.get("source_round_id") == source_round_id
+        else None
+    )
+    for directory in state_dirs:
+        for path in rounds_dir(directory).glob("*.json"):
+            payload = load_round(directory, path.stem)
+            scope = payload.get("review_scope") or {}
+            if scope.get("source_round_id") != source_round_id:
+                continue
+            owner = scope.get("cycle_key")
+            if owner is not None:
+                if owner != state["cycle_key"]:
+                    continue
+            # Legacy GitHub source IDs need a follow-up recorded by this cycle.
+            elif (
+                github_source
+                and path.stem != pending_round_id
+                and _round_by_id(state, path.stem).get("source_round_id") != source_round_id
+            ):
+                continue
+            yield path.stem, payload
+
+
 def _task_class_for_lane(lane: str) -> str:
     return {
         "review_base": "base_review",
@@ -1780,12 +1812,10 @@ def _correct_inferred_clean_decision(
         ):
             raise ValueError("cannot correct while a reviewer is running")
     source_round_id = str(round_record.get("source_round_id") or "")
-    round_state_dir = state_dir / "orchestrator" / "review-rounds"
-    for path in rounds_dir(round_state_dir).glob("*.json"):
-        candidate = load_round(round_state_dir, path.stem)
-        if dict(candidate.get("review_scope") or {}).get(
-            "source_round_id"
-        ) == source_round_id and round_has_live_reviewer_process(candidate):
+    for _, candidate in _followup_rounds(
+        state, source_round_id, state_dirs=[_orchestrator_review_state_dir(state_dir)]
+    ):
+        if round_has_live_reviewer_process(candidate):
             raise ValueError("cannot correct while a follow-up reviewer is running")
     if not _test_docs_only_interdiff(state, reviewed_head, head):
         raise ValueError("correction requires committed test/docs-only changes")
@@ -1869,24 +1899,21 @@ def _record_caller_disagreement(
             _load_output_round_payload(state_dir, record)
         ):
             raise ValueError("cannot reject findings while a reviewer is running")
-    for candidate_dir in _round_state_dir_candidates(state_dir, round_record):
-        for path in rounds_dir(candidate_dir).glob("*.json"):
-            candidate = load_round(candidate_dir, path.stem)
-            if (
-                dict(candidate.get("review_scope") or {}).get("source_round_id")
-                != source_round_id
-            ):
-                continue
-            if round_has_live_reviewer_process(candidate):
-                raise ValueError(
-                    "cannot reject findings while a follow-up reviewer is running"
-                )
-            if candidate.get("status") in {"completed", "running"} and not _round_by_id(
-                state, path.stem
-            ):
-                raise ValueError(
-                    "cannot reject findings before inspecting the unconsumed follow-up review"
-                )
+    for round_id, candidate in _followup_rounds(
+        state,
+        source_round_id,
+        state_dirs=_round_state_dir_candidates(state_dir, round_record),
+    ):
+        if round_has_live_reviewer_process(candidate):
+            raise ValueError(
+                "cannot reject findings while a follow-up reviewer is running"
+            )
+        if candidate.get("status") in {"completed", "running"} and not _round_by_id(
+            state, round_id
+        ):
+            raise ValueError(
+                "cannot reject findings before inspecting the unconsumed follow-up review"
+            )
     digest = sha256(
         "\n\n".join(str(run["reviewer_output"]) for run in payload["runs"]).encode()
     ).hexdigest()
@@ -2776,19 +2803,21 @@ def _reserve_review_brief_restart(
         and convergence.get("reason") == "budget_exhausted"
         and bool(state.get("active_findings"))
     )
-    if contract_conflict:
-        state = record_contract_replan(state, conflict=contract_conflict)
     if contract_conflict or budget_replan:
-        source_round_id = dict(state["active_findings"])["round_id"]
-        round_state_dir = state_dir / "orchestrator" / "review-rounds"
-        for path in rounds_dir(round_state_dir).glob("*.json"):
-            payload = load_round(round_state_dir, path.stem)
-            if dict(payload.get("review_scope") or {}).get(
-                "source_round_id"
-            ) == source_round_id and round_has_live_reviewer_process(payload):
+        replanned = (
+            record_contract_replan(state, conflict=contract_conflict)
+            if contract_conflict
+            else state
+        )
+        source_round_id = replanned["active_findings"]["round_id"]
+        for _, payload in _followup_rounds(
+            state, source_round_id, state_dirs=[_orchestrator_review_state_dir(state_dir)]
+        ):
+            if round_has_live_reviewer_process(payload):
                 raise ValueError(
                     "cannot replan while a follow-up reviewer is running; wait for it to finish or stop the owning review command"
                 )
+        state = replanned
     elif (
         state.get("stage")
         not in {
@@ -3954,16 +3983,15 @@ def main() -> int:
                     merge_base_head=identity["merge_base"],
                     base_drift=identity.get("base_drift"),
                 )
-                source = str(active.get("round_id") or "")
-                for candidate_dir in _round_state_dir_candidates(state_dir, active):
-                    for path in rounds_dir(candidate_dir).glob("*.json"):
-                        payload = load_round(candidate_dir, path.stem)
-                        if dict(payload.get("review_scope") or {}).get("source_round_id") != source:
-                            continue
-                        if round_has_live_reviewer_process(payload):
-                            raise ValueError("cannot validate fixes while a follow-up reviewer is running")
-                        if payload.get("status") in {"completed", "running"} and not _round_by_id(state, path.stem):
-                            raise ValueError("inspect the unconsumed follow-up review before validating fixes")
+                for round_id, payload in _followup_rounds(
+                    state,
+                    str(active.get("round_id") or ""),
+                    state_dirs=_round_state_dir_candidates(state_dir, active),
+                ):
+                    if round_has_live_reviewer_process(payload):
+                        raise ValueError("cannot validate fixes while a follow-up reviewer is running")
+                    if payload.get("status") in {"completed", "running"} and not _round_by_id(state, round_id):
+                        raise ValueError("inspect the unconsumed follow-up review before validating fixes")
                 state = record_fixes_validated(
                     state,
                     head=identity["head"],
