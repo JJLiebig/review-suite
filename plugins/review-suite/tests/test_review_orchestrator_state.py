@@ -44,6 +44,7 @@ from review_suite_core.orchestrator_state import (
     record_github_result,
 )
 from review_suite_core.orchestrator_store import (
+    link_cycle_successor,
     load_cycle_by_key,
     reserve_cycle_successor,
     save_cycle,
@@ -199,6 +200,34 @@ def test_reserve_contract_replan_between_steps(
     assert saved["active_findings"] is None
     assert saved["rounds"] == source["rounds"]
     assert saved["superseded_by"]["review"] == saved_successor["public_id"]
+
+
+def test_existing_successor_has_one_predecessor_and_stale_saves_cannot_reopen_it(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    successor = save_cycle(state_dir, _cycle(tmp_path))
+
+    def prepare_source(token):
+        pending = mark_decision_pending(_cycle(tmp_path, restart_token=token), round_id=token, lane="review_base")
+        source = save_cycle(state_dir, record_findings_decision(
+            pending, round_id=token, lane="review_base", reviewed_head="head-1",
+        ))
+        replanned = record_contract_replan(source, conflict="scope")
+        retired = abort_cycle(replanned, reason="Approved revised scope")
+        retired["superseded_by"] = {"kind": "contract-replan", "reason": "Approved revised scope"}
+        return source, retired
+
+    source, retired = prepare_source("first")
+    link_cycle_successor(state_dir, source=retired, successor=successor)
+    saved = load_cycle_by_key(state_dir, source["cycle_key"])
+    assert save_cycle(state_dir, source) == saved
+    assert saved["superseded_by"]["review"] == successor["public_id"]
+    assert saved["convergence"]["decision"] == "REPLAN"
+
+    other, other_retired = prepare_source("second")
+    with pytest.raises(ValueError, match=f"already linked from {source['public_id']}"):
+        link_cycle_successor(state_dir, source=other_retired, successor=successor)
+    assert load_cycle_by_key(state_dir, other["cycle_key"]) == other
+    assert load_cycle_by_key(state_dir, successor["cycle_key"]) == successor
 
 
 @pytest.mark.parametrize("stage", ["review-green", "local-green-handoff"])

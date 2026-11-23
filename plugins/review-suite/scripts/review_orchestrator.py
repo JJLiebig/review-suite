@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Iterator
+from contextlib import contextmanager
 from copy import deepcopy
 from hashlib import sha256
 from pathlib import Path
@@ -121,6 +122,7 @@ from review_suite_core.orchestrator_store import (
     CALLER_PUBLIC_ID_RE,
     create_cycle_with_public_id,
     cycles_dir,
+    link_cycle_successor,
     load_cycle_by_key,
     load_cycle_by_public_id,
     orchestrator_store_lock,
@@ -184,9 +186,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Replace a mistaken frozen review brief and start a fresh same-mode cycle.",
     )
     parser.add_argument(
+        "--link-successor",
+        metavar="ID",
+        help="Link an existing review for an approved contract change. Requires --contract-conflict and --reason.",
+    )
+    parser.add_argument(
         "--contract-conflict",
         choices=tuple(sorted(CONTRACT_CONFLICTS)),
-        help="Report a frozen-contract conflict; pair with --restart-brief and --reason for an approved contract replan.",
+        help="Report a frozen-contract conflict. For an approved replan, add --reason and --restart-brief or --link-successor.",
     )
     parser.add_argument(
         "--convergence-decision",
@@ -2712,18 +2719,20 @@ def _reserve_successor_cycle(
         require_exact_identity=require_exact_identity,
         review_brief=review_brief,
     )
-    superseded = abort_cycle(state, reason=reason)
-    superseded["superseded_by"] = {
-        "mode": target_mode,
-        "reason": reason,
-        "kind": kind,
-    }
     saved_replacement, _ = reserve_cycle_successor(
         state_dir,
-        source=superseded,
+        source=_superseding_cycle(state, mode=target_mode, reason=reason, kind=kind),
         successor=replacement,
     )
     return saved_replacement
+
+
+def _superseding_cycle(
+    state: dict[str, Any], *, mode: str, reason: str, kind: str,
+) -> dict[str, Any]:
+    superseded = abort_cycle(state, reason=reason)
+    superseded["superseded_by"] = {"mode": mode, "reason": reason, "kind": kind}
+    return superseded
 
 
 def _resume_reserved_successor(
@@ -2779,6 +2788,15 @@ def _restart_cycle(
 def _restart_review_brief(
     state: dict[str, Any], *, state_dir: Path, **kwargs: Any
 ) -> dict[str, Any]:
+    with _lock_brief_source(state, state_dir=state_dir) as current:
+        replacement = _reserve_review_brief_restart(current, state_dir=state_dir, **kwargs)
+    return _resume_reserved_successor(replacement, state_dir=state_dir)
+
+
+@contextmanager
+def _lock_brief_source(
+    state: dict[str, Any], *, state_dir: Path,
+) -> Iterator[dict[str, Any]]:
     cycle_key = state["cycle_key"]
     try:
         with (
@@ -2790,15 +2808,29 @@ def _restart_review_brief(
             ),
         ):
             current = load_cycle_by_key(state_dir, cycle_key) or state
-            current = _copy_runtime_options(current, state)
-            replacement = _reserve_review_brief_restart(
-                current, state_dir=state_dir, **kwargs
-            )
+            yield _copy_runtime_options(current, state)
     except TimeoutError as exc:
         raise ValueError(
             "cannot replace the review brief while the review state is busy. Wait for the active command to finish."
         ) from exc
-    return _resume_reserved_successor(replacement, state_dir=state_dir)
+
+
+def _check_replan_reviewers(state: dict[str, Any], *, state_dir: Path) -> None:
+    active = dict(state.get("active_findings") or {})
+    if not active and any(
+        round_has_live_reviewer_process(_load_output_round_payload(state_dir, item))
+        for item in state.get("rounds") or []
+    ):
+        raise ValueError("cannot replan while a reviewer is running")
+    for _, payload in _followup_rounds(
+        state,
+        active.get("round_id"),
+        state_dirs=[_orchestrator_review_state_dir(state_dir)],
+    ):
+        if round_has_live_reviewer_process(payload):
+            raise ValueError(
+                "cannot replan while a follow-up reviewer is running; wait for it to finish or stop the owning review command"
+            )
 
 
 def _reserve_review_brief_restart(
@@ -2829,21 +2861,7 @@ def _reserve_review_brief_restart(
             if contract_conflict
             else state
         )
-        active = dict(state.get("active_findings") or {})
-        if not active and any(
-            round_has_live_reviewer_process(_load_output_round_payload(state_dir, item))
-            for item in state.get("rounds") or []
-        ):
-            raise ValueError("cannot replan while a reviewer is running")
-        for _, payload in _followup_rounds(
-            state,
-            active.get("round_id"),
-            state_dirs=[_orchestrator_review_state_dir(state_dir)],
-        ):
-            if round_has_live_reviewer_process(payload):
-                raise ValueError(
-                    "cannot replan while a follow-up reviewer is running; wait for it to finish or stop the owning review command"
-                )
+        _check_replan_reviewers(state, state_dir=state_dir)
         state = replanned
     elif (
         state.get("stage")
@@ -2887,6 +2905,55 @@ def _reserve_review_brief_restart(
         require_exact_identity=False,
         review_brief=review_brief,
     )
+
+
+def _check_link_identity(source: dict[str, Any], successor: dict[str, Any]) -> str:
+    old = source["identity"]
+    new = successor["identity"]
+    for field in ("cwd", "base", "branch"):
+        if not old.get(field) or old[field] != new.get(field):
+            raise ValueError(f"successor review must have the same {field} as the source review")
+    mode = _current_mode(source)
+    if _current_mode(successor) != mode:
+        raise ValueError(f"successor review must have the same mode as the source review ({mode})")
+    brief = successor.get("review_brief")
+    if not brief or brief == source.get("review_brief"):
+        raise ValueError("successor review must have a different review brief")
+    review_root = cwd_path_from_normalized(old["cwd"])
+    for field, label in (("head", "head"), ("merge_base", "merge-base")):
+        if old[field] != new[field] and not is_ancestor(review_root, old[field], new[field]):
+            raise ValueError(f"successor review {label} must descend from the source review {label}")
+    return mode
+
+
+def _link_existing_successor(args: argparse.Namespace) -> int:
+    allowed = {"id", "cd", "link_successor", "contract_conflict", "reason"}
+    if any(value not in (None, False) for key, value in vars(args).items() if key not in allowed):
+        raise ValueError("--link-successor cannot be combined with other review actions or creation flags")
+    if not args.id or not args.contract_conflict:
+        raise ValueError("--link-successor requires --id and --contract-conflict")
+    reason = _restart_reason(args, option="--link-successor")
+    successor_id = args.link_successor.strip()
+    if not successor_id or successor_id == args.id.strip():
+        raise ValueError("--link-successor requires a different review id")
+    state_dir, state = _load_cycle_and_state_dir(Path(default_state_dir()).resolve(strict=False), args.id)
+    _reject_id_creation_args(args, state)
+    with _lock_brief_source(state, state_dir=state_dir) as current:
+        existing_id = (current.get("superseded_by") or {}).get("review")
+        if existing_id and existing_id != successor_id:
+            raise ValueError(f"source review cycle already has a different successor: {existing_id}")
+        if not existing_id:
+            replanned = record_contract_replan(current, conflict=args.contract_conflict)
+            _check_replan_reviewers(current, state_dir=state_dir)
+            successor = load_cycle_by_public_id(state_dir, successor_id)
+            mode = _check_link_identity(current, successor)
+            link_cycle_successor(
+                state_dir,
+                source=_superseding_cycle(replanned, mode=mode, reason=reason, kind="contract-replan"),
+                successor=successor,
+            )
+    emit_toon({"status": "linked", "review": state["public_id"], "superseded_by": {"review": successor_id}})
+    return 0
 
 
 def _advance_without_decision(
@@ -3711,6 +3778,8 @@ def main() -> int:
     args: argparse.Namespace | None = None
     try:
         args = parser.parse_args()
+        if args.link_successor is not None:
+            return _link_existing_successor(args)
         if args.check_base_interaction or args.accept_base_interaction:
             if not args.id:
                 raise ValueError("base interaction actions require --id")

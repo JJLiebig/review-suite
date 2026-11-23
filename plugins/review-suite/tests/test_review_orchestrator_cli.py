@@ -21,7 +21,11 @@ import review_orchestrator as review
 import review_suite_arena
 import review_suite_local
 from review_suite_core import orchestrator_runner, orchestrator_store
-from review_suite_core.orchestrator_state import mark_followup_review_pending, mark_review_step_pending
+from review_suite_core.orchestrator_state import (
+    mark_followup_review_pending,
+    mark_review_step_pending,
+    mark_review_step_running,
+)
 from review_suite_local import write_round
 
 
@@ -3763,6 +3767,194 @@ def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
         with pytest.raises(ValueError, match=f"Continue with {new_id}"):
             review._advance_without_decision(before, state_dir=state_dir)
         assert _cycle_payload(state_dir, old_id) == old_saved
+
+
+@pytest.fixture
+def link_successor_pair(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest):
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(review, "default_state_dir", lambda **_kwargs: state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "initial\n", "initial")
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/contract-link")
+    head = _commit_file(repo, "feature.txt", "feature\n", "feature")
+    start = ["--mode", "deep", "--no-arena", "--cd", str(repo), "--base", "main"]
+    source = review._create_or_resume_cycle(
+        args=review.build_parser().parse_args([*start, "--review-brief", "Original contract"]),
+        state_dir=state_dir,
+        public_id="rvw_linkfrom",
+    )
+    step = source["review_plan"]["steps"][0]["name"]
+    pending = mark_review_step_pending(
+        source, round_id="old-round", lane="review_base", step_index=0,
+        step_name=step, reviewed_head=head,
+    )
+    source = review.save_cycle(state_dir, review.record_findings_decision(
+        pending, round_id="old-round", lane="review_base", reviewed_head=head,
+    ))
+    if getattr(request, "param", False):
+        _git(repo, "checkout", "main")
+        _commit_file(repo, "app.txt", "new base\n", "advance base")
+        _git(repo, "checkout", "feature/contract-link")
+        _git(repo, "merge", "--no-edit", "main")
+        head = _git(repo, "rev-parse", "HEAD")
+    successor = review._create_or_resume_cycle(
+        args=review.build_parser().parse_args([*start, "--review-brief", "Revised contract"]),
+        state_dir=state_dir,
+        public_id="rvw_linknext",
+    )
+    successor = review.save_cycle(state_dir, mark_review_step_running(
+        successor, round_id="new-round", lane="review_base", step_index=0,
+        step_name=step, reviewed_head=head,
+    ))
+    return repo, state_dir, source, successor, start
+
+
+def _assert_link_rejected(monkeypatch, capsys, argv, message):
+    monkeypatch.setattr(sys, "argv", ["review.py", *argv])
+    assert review.main() == 2
+    assert message in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("checkpoint", "link_successor_pair"),
+    [("fix", False), ("followup", False), ("between-steps", True)],
+    indirect=["link_successor_pair"],
+)
+def test_link_eligible_predecessor_to_running_successor(
+    monkeypatch, capsys, link_successor_pair, checkpoint,
+) -> None:
+    repo, state_dir, source, successor, start = link_successor_pair
+    source_id, successor_id = source["public_id"], successor["public_id"]
+    head = source["identity"]["head"]
+    if checkpoint == "followup":
+        source = review.mark_fix_detected(source, head=head)
+        source["pending_action"]["wrapper_pid"] = os.getpid()
+    elif checkpoint == "between-steps":
+        source = review.record_fixes_validated(
+            source, head=successor["identity"]["head"], note="Focused checks passed",
+        )
+    source = review.save_cycle(state_dir, source)
+    argv = [
+        "--id", source_id, "--link-successor", successor_id,
+        "--contract-conflict", "acceptance", "--reason", "Caller approved revised acceptance",
+    ]
+
+    if checkpoint == "followup":
+        _assert_link_rejected(monkeypatch, capsys, argv, "follow-up wrapper is running")
+        assert _cycle_payload(state_dir, source_id) == source
+        source["pending_action"].pop("wrapper_pid")
+        _write_cycle_payload(state_dir, source_id, source)
+    else:
+        # A running reviewer can outlive its wrapper.
+        followup = checkpoint == "fix"
+        round_payload = {
+            "round_id": "live-followup" if followup else "old-round",
+            "runs": [{"slot": "alpha", "pid": os.getpid()}],
+        }
+        if followup:
+            round_payload["review_scope"] = {"source_round_id": "old-round"}
+        round_dir = state_dir / "orchestrator" / "review-rounds"
+        write_round(round_dir, round_payload)
+        _assert_link_rejected(monkeypatch, capsys, argv, "reviewer is running")
+        assert _cycle_payload(state_dir, source_id) == source
+        round_payload["runs"][0]["review_status"] = "completed"
+        write_round(round_dir, round_payload)
+
+    start_args = review.build_parser().parse_args(start)
+    if checkpoint == "between-steps":
+        _assert_link_rejected(monkeypatch, capsys, [
+            "--id", source_id, "--restart-brief", "Revised contract", *argv[4:],
+        ], "cannot replace review brief after merge-base changed")
+    else:
+        with pytest.raises(ValueError, match="multiple active review cycles"):
+            review._create_or_resume_cycle(args=start_args, state_dir=state_dir)
+    successor_path = orchestrator_store.cycle_path(state_dir, successor["cycle_key"])
+    before = successor_path.stat()
+    exit_code, linked = _run_review(monkeypatch, argv)
+    assert exit_code == 0
+    assert linked["superseded_by"] == {"review": successor_id}
+    archived = _cycle_payload(state_dir, source_id)
+    for key in ("review_brief", "rounds", "decisions", "active_findings", "validation"):
+        assert archived[key] == source[key]
+    assert archived["stage"] == "aborted"
+    assert archived["convergence"]["decisions"] == [{"decision": "REPLAN", "reason": "contract_conflict"}]
+    assert archived["convergence"]["conflict"] == "acceptance"
+    assert archived["recovery"]["reason"] == "Caller approved revised acceptance"
+    assert review._create_or_resume_cycle(args=start_args, state_dir=state_dir)["public_id"] == successor_id
+    assert _cycle_payload(state_dir, successor_id) == successor
+    assert successor_path.stat().st_ino == before.st_ino
+    assert successor_path.stat().st_mtime_ns == before.st_mtime_ns
+
+    for review_id in (source_id, successor_id):
+        monkeypatch.setattr(sys, "argv", ["review.py", "--id", review_id, "--show-status", "--json"])
+        assert review.main() == 0
+        status = json.loads(capsys.readouterr().out)
+        assert status["review"] == review_id
+        assert status["branch"] == "feature/contract-link"
+        if review_id == source_id:
+            assert status["superseded_by"] == {"review": successor_id}
+        else:
+            assert "superseded_by" not in status
+
+    assert _run_review(monkeypatch, argv)[0] == 0
+    _assert_link_rejected(monkeypatch, capsys, [*argv[:3], "rvw_another1", *argv[4:]], "different successor")
+    assert _cycle_payload(state_dir, source_id) == archived
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("cwd", "/another/checkout", "the same cwd"),
+        ("base", "another-base", "the same base"),
+        ("branch", "another-branch", "the same branch"),
+        ("head", "main", "head must descend"),
+        ("merge_base", "main^", "merge-base must descend"),
+        ("mode", {"requested": "deep", "effective": "base"}, "the same mode"),
+        ("review_brief", "Original contract", "a different review brief"),
+        ("stage", "aborted", "is aborted"),
+        ("superseded_by", {"review": "rvw_another1"}, "already superseded"),
+        ("restart", {"supersedes": "rvw_another1"}, "already linked"),
+    ],
+)
+def test_link_refuses_incompatible_successor(
+    monkeypatch, capsys, link_successor_pair, field, value, message,
+) -> None:
+    repo, state_dir, source, successor, _ = link_successor_pair
+    if field in successor["identity"]:
+        if field in {"head", "merge_base"}:
+            value = _git(repo, "rev-parse", value)
+        successor["identity"][field] = value
+    else:
+        successor[field] = value
+    _write_cycle_payload(state_dir, successor["public_id"], successor)
+    _assert_link_rejected(monkeypatch, capsys, [
+        "--id", source["public_id"], "--link-successor", successor["public_id"],
+        "--contract-conflict", "scope", "--reason", "Approved revised scope",
+    ], message)
+    assert _cycle_payload(state_dir, source["public_id"]) == source
+
+
+def test_link_refuses_missing_approval_and_ineligible_predecessor(
+    monkeypatch, capsys, link_successor_pair,
+) -> None:
+    _, state_dir, source, successor, _ = link_successor_pair
+    args = ["--id", source["public_id"], "--link-successor", successor["public_id"]]
+    conflict = ["--contract-conflict", "scope"]
+    reason = ["--reason", "Caller approved revised scope"]
+    _assert_link_rejected(monkeypatch, capsys, [*args, *reason], "requires --id and --contract-conflict")
+    _assert_link_rejected(monkeypatch, capsys, [*args, *conflict], "--reason is required")
+    _assert_link_rejected(monkeypatch, capsys, [*args[2:], *conflict, *reason], "requires --id and --contract-conflict")
+    _assert_link_rejected(monkeypatch, capsys, [*args[:3], source["public_id"], *conflict, *reason], "a different review id")
+    _assert_link_rejected(monkeypatch, capsys, [*args, *conflict, *reason, "--restart-brief", ""], "cannot be combined")
+    _assert_link_rejected(monkeypatch, capsys, [*args[:3], "rvw_unknown1", *conflict, *reason], "unknown review cycle id")
+    assert _cycle_payload(state_dir, source["public_id"]) == source
+    running = review.save_cycle(state_dir, mark_review_step_running(
+        source, round_id="later-round", lane="review_base", step_index=1, step_name="base-signoff",
+    ))
+    _assert_link_rejected(monkeypatch, capsys, [*args, *conflict, *reason], "contract replan requires findings")
+    assert _cycle_payload(state_dir, source["public_id"]) == running
 
 
 def test_contract_conflict_and_one_use_continue_are_durable(
