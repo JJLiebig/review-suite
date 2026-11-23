@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -301,6 +301,25 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
         ran_step=True,
         step="deslop",
     )
+
+
+def _run_deslop_for_cycle(
+    state: dict[str, Any], *, state_dir: Path
+) -> OrchestratorRunnerResult:
+    # A cleanup pass leaves the cycle at "created" until its output is saved.
+    # Brief restart uses this same lock to check and supersede the idle cycle.
+    with orchestrator_store_lock(
+        state_dir=state_dir, name=f"followup-{state['cycle_key']}", timeout_seconds=1
+    ):
+        current = load_cycle_by_key(state_dir, state["cycle_key"])
+        if current is not None and (
+            current.get("superseded_by") or current.get("deslop") != state.get("deslop")
+        ):
+            return OrchestratorRunnerResult(current, ran_step=False)
+        result = _run_deslop_once(state)
+        if current is not None and result.ran_step:
+            return replace(result, state=save_cycle(state_dir, result.state))
+        return result
 
 
 def _review_should_run(state: dict[str, Any]) -> bool:
@@ -1433,7 +1452,7 @@ def run_one_expensive_step(
     # A new round binds its scope to the checkout after cycle selection.
     with git_read_scope():
         if deslop_should_run(state):
-            result = _run_deslop_once(state)
+            result = _run_deslop_for_cycle(state, state_dir=resolved_state_dir)
         elif state.get("stage") == STAGE_RUNNING:
             result = _collect_running_review_once(state, state_dir=resolved_state_dir)
         elif (

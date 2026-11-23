@@ -307,6 +307,7 @@ def reserve_cycle_successor(
                 )
             from .orchestrator_state import record_contract_replan
 
+            # A new round or decision can change eligibility without changing active findings.
             replanned = record_contract_replan(
                 current, conflict=source["convergence"]["conflict"]
             )

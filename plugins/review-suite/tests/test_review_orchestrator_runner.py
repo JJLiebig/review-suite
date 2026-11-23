@@ -32,6 +32,7 @@ from review_suite_core.orchestrator_state import (
     mark_review_step_running,
     record_clean_decision,
     record_findings_decision,
+    record_fixes_validated,
     record_contract_replan,
     record_contract_conflict,
 )
@@ -1300,6 +1301,45 @@ def test_runner_base_mode_failed_cleanup_blocks_signoff(
     assert result.state["deslop"]["status"] == "failed"
     assert len(deslop_calls) == 1
     assert result.state["stage"] == STAGE_RETRY_REQUESTED
+
+
+def test_runner_keeps_cleanup_result_available_for_decision_before_replan(
+    monkeypatch, clean_worktree: None, tmp_path: Path,
+) -> None:
+    state = _cycle(tmp_path, mode="deep", step_names=("base-signoff", "deep-signoff"))
+    pending = mark_review_step_pending(
+        state, round_id="base-round", lane="review_base",
+        step_index=0, step_name="base-signoff", reviewed_head="head-1",
+    )
+    findings = record_findings_decision(
+        pending, round_id="base-round", lane="review_base", reviewed_head="head-1",
+    )
+    state_dir = tmp_path / "state"
+    ready = save_cycle(
+        state_dir, record_fixes_validated(findings, head="head-2", note="checks passed")
+    )
+
+    def fake_cleanup(*, command, cwd):
+        # Simulate the restart arriving while the cleanup reviewer owns the cycle.
+        with pytest.raises(TimeoutError):
+            with orchestrator_store_lock(
+                state_dir=state_dir, name=f"followup-{ready['cycle_key']}", timeout_seconds=0,
+            ):
+                pytest.fail("brief restart acquired the cycle during cleanup")
+        return subprocess.CompletedProcess(
+            command, 0, "Conformance: NOT_APPLICABLE\nReview decision: clean", ""
+        )
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fake_cleanup)
+    result = orchestrator_runner.run_one_expensive_step(ready, state_dir=state_dir)
+
+    stored = load_cycle_by_key(state_dir, ready["cycle_key"])
+    assert result.state == stored
+    assert stored["deslop"]["decision"] == "clean"
+    with pytest.raises(ValueError, match="awaiting a decision"):
+        record_contract_replan(stored, conflict="scope")
+    closed = mark_deslop_closed(stored)
+    assert record_contract_replan(closed, conflict="scope")["convergence"]["decision"] == "REPLAN"
 
 
 def test_runner_retry_completes_closure_with_conformance(

@@ -119,7 +119,7 @@ def test_contract_replan_reservation_preserves_convergence_under_late_writes(
             current["convergence"].update(reason="budget_exhausted", conflict=None)
         saved = save_cycle(state_dir, current)
         with pytest.raises(
-            ValueError, match="contract replan requires active findings"
+            ValueError, match="contract replan requires findings awaiting"
         ):
             reserve_cycle_successor(state_dir, source=replanned, successor=successor)
         assert load_cycle_by_key(state_dir, stale["cycle_key"]) == saved
@@ -135,6 +135,79 @@ def test_contract_replan_reservation_preserves_convergence_under_late_writes(
         assert saved["convergence"]["decision"] == "REPLAN"
         assert saved["superseded_by"]["review"]
         assert saved["active_findings"] == stale["active_findings"]
+
+
+@pytest.fixture
+def between_review_steps(tmp_path: Path) -> dict[str, object]:
+    state = _cycle(tmp_path, mode="deep")
+    state["review_plan"] = {
+        "steps": [{"name": "base-signoff"}, {"name": "deep-signoff"}],
+    }
+    for index in range(1, 4):
+        state = record_findings_decision(
+            mark_review_step_pending(
+                state, round_id=f"round-{index}", lane="review_base",
+                step_index=0, step_name="base-signoff", reviewed_head=f"head-{index}",
+            ),
+            round_id=f"round-{index}", lane="review_base", reviewed_head=f"head-{index}",
+        )
+    continued = record_convergence_decision(state, decision="CONTINUE")
+    return record_fixes_validated(continued, head="head-4", note="focused checks passed")
+
+
+@pytest.mark.parametrize("intervening_round", [None, mark_review_step_running, mark_review_step_pending])
+def test_reserve_contract_replan_between_steps(
+    tmp_path: Path, between_review_steps: dict[str, object], intervening_round,
+) -> None:
+    state_dir = tmp_path / "state"
+    source = save_cycle(state_dir, between_review_steps)
+    assert source["stage"] == STAGE_CREATED
+    assert source["pending_action"]["step"] == "deep-signoff"
+    assert source["active_findings"] is None
+    assert len(source["convergence"]["accepted_findings_heads"]) == 3
+    assert source["convergence"]["continue_used"] is True
+
+    replanned = record_contract_replan(source, conflict="authorized-behavior")
+    archived = abort_cycle(replanned, reason="approved")
+    archived["superseded_by"] = {"kind": "contract-replan"}
+    successor = _cycle(tmp_path, mode="deep", restart_token="contract-replan")
+
+    if intervening_round:
+        current = save_cycle(state_dir, intervening_round(
+            source, round_id="round-4", lane="review_deep",
+            step_index=1, step_name="deep-signoff", reviewed_head="head-4",
+        ))
+        with pytest.raises(ValueError, match="idle checkpoint between review steps"):
+            reserve_cycle_successor(state_dir, source=archived, successor=successor)
+        assert load_cycle_by_key(state_dir, source["cycle_key"]) == current
+        assert load_cycle_by_key(state_dir, successor["cycle_key"]) is None
+        return
+
+    saved_successor, _ = reserve_cycle_successor(state_dir, source=archived, successor=successor)
+    saved = load_cycle_by_key(state_dir, source["cycle_key"])
+    assert saved["convergence"] == {
+        **source["convergence"],
+        "status": "DECIDED",
+        "reason": "contract_conflict",
+        "conflict": "authorized-behavior",
+        "decision": "REPLAN",
+        "decisions": [
+            {"decision": "CONTINUE", "reason": "budget_exhausted"},
+            {"decision": "REPLAN", "reason": "contract_conflict"},
+        ],
+    }
+    assert saved["active_findings"] is None
+    assert saved["rounds"] == source["rounds"]
+    assert saved["superseded_by"]["review"] == saved_successor["public_id"]
+
+
+@pytest.mark.parametrize("stage", ["review-green", "local-green-handoff"])
+def test_contract_replan_does_not_supersede_green_review(
+    between_review_steps: dict[str, object], stage: str,
+) -> None:
+    state = {**between_review_steps, "stage": stage, "pending_action": None}
+    with pytest.raises(ValueError, match="idle checkpoint between review steps"):
+        record_contract_replan(state, conflict="authorized-behavior")
 
 
 def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(
