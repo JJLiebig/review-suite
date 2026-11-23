@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -12,24 +13,27 @@ DEFAULT_CODEX_HOME = Path.home() / ".codex"
 DEFAULT_SQLITE_STATE_PATH = DEFAULT_CODEX_HOME / "state_5.sqlite"
 REVIEW_SUBAGENT_SOURCE = json.dumps({"subagent": "review"}, separators=(",", ":"))
 
-_JSONL_CACHE: dict[tuple[str, int, int], tuple[list[dict[str, Any]], bool]] = {}
-_ROLLOUT_SUMMARY_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
-_ROLLOUT_META_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
+type _FileVersion = tuple[int, int]
+type _RolloutRecords = tuple[list[dict[str, Any]], bool]
+
+_JSONL_CACHE: dict[Path, tuple[_FileVersion, _RolloutRecords]] = {}
+_ROLLOUT_SUMMARY_CACHE: dict[Path, tuple[_FileVersion, dict[str, Any]]] = {}
+_ROLLOUT_META_CACHE: dict[Path, tuple[_FileVersion, dict[str, Any]]] = {}
 _THREAD_LOOKUP_CACHE: dict[
     tuple[str, int, int, str, str | None, int | None], dict[str, Any] | None
 ] = {}
 
 
-def _path_cache_key(path: Path) -> tuple[str, int, int]:
+def _path_version(path: Path) -> _FileVersion:
     stat = path.stat()
-    return (str(path), stat.st_mtime_ns, stat.st_size)
+    return stat.st_mtime_ns, stat.st_size
 
 
-def _read_rollout_records(path: Path) -> tuple[list[dict[str, Any]], bool]:
-    key = _path_cache_key(path)
-    cached = _JSONL_CACHE.get(key)
-    if cached is not None:
-        return cached
+def _read_rollout_records(path: Path) -> _RolloutRecords:
+    version = _path_version(path)
+    cached = _JSONL_CACHE.get(path)
+    if cached is not None and cached[0] == version:
+        return cached[1]
     rows: list[dict[str, Any]] = []
     incomplete = False
     with path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -41,7 +45,7 @@ def _read_rollout_records(path: Path) -> tuple[list[dict[str, Any]], bool]:
             except json.JSONDecodeError:
                 incomplete = True
     result = rows, incomplete
-    _JSONL_CACHE[key] = result
+    _JSONL_CACHE[path] = version, result
     return result
 
 
@@ -50,10 +54,10 @@ def _token_usage_dict(value: dict[str, Any] | None) -> dict[str, int] | None:
 
 
 def read_rollout_summary(path: Path) -> dict[str, Any]:
-    key = _path_cache_key(path)
-    cached = _ROLLOUT_SUMMARY_CACHE.get(key)
-    if cached is not None:
-        return cached
+    version = _path_version(path)
+    cached = _ROLLOUT_SUMMARY_CACHE.get(path)
+    if cached is not None and cached[0] == version:
+        return cached[1]
     rows, incomplete = _read_rollout_records(path)
     if incomplete:
         # A missing record can hide a turn boundary. Only use readable records
@@ -152,7 +156,7 @@ def read_rollout_summary(path: Path) -> dict[str, Any]:
         "reviewer_output": final_text,
         "task_error": task_error,
     }
-    _ROLLOUT_SUMMARY_CACHE[key] = summary
+    _ROLLOUT_SUMMARY_CACHE[path] = version, summary
     return summary
 
 
@@ -166,12 +170,12 @@ def rollout_final_assistant_text(path: Path) -> str:
 
 def _rollout_session_meta(path: Path) -> dict[str, Any]:
     try:
-        key = _path_cache_key(path)
+        version = _path_version(path)
     except OSError:
         return {}
-    cached = _ROLLOUT_META_CACHE.get(key)
-    if cached is not None:
-        return cached
+    cached = _ROLLOUT_META_CACHE.get(path)
+    if cached is not None and cached[0] == version:
+        return cached[1]
     meta = {}
     try:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -191,7 +195,7 @@ def _rollout_session_meta(path: Path) -> dict[str, Any]:
                     break
     except OSError, json.JSONDecodeError:
         pass
-    _ROLLOUT_META_CACHE[key] = meta
+    _ROLLOUT_META_CACHE[path] = version, meta
     return meta
 
 
@@ -326,6 +330,7 @@ def find_review_child_thread(
     sqlite_path: Path,
     parent_thread_id: str,
     started_at: str | None = None,
+    review_cwd: Path | None = None,
 ) -> dict[str, Any] | None:
     parent_id = str(parent_thread_id or "").strip()
     if not parent_id:
@@ -339,7 +344,8 @@ def find_review_child_thread(
         return None
     # Codex uses local dates for session paths. Include adjacent days for midnight.
     start_day = started.astimezone().date()
-    sessions = sqlite_path.parent / "sessions"
+    codex_home = Path(os.environ.get("CODEX_HOME") or DEFAULT_CODEX_HOME)
+    sessions = (review_cwd or Path.cwd()) / codex_home / "sessions"
     for offset in (0, 1, -1):
         day = start_day + timedelta(days=offset)
         directory = sessions / f"{day:%Y/%m/%d}"

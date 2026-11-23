@@ -1236,6 +1236,8 @@ def test_collect_completed_review_capture_finds_unindexed_review_child(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     sqlite_path = tmp_path / "state_5.sqlite"
+    review_cwd = tmp_path / "repo"
+    monkeypatch.setenv("CODEX_HOME", "codex-home")
     launcher_rollout = tmp_path / "launcher.jsonl"
     _launcher_rollout(launcher_rollout, "launcher text")
     with sqlite3.connect(sqlite_path) as con:
@@ -1254,7 +1256,7 @@ def test_collect_completed_review_capture_finds_unindexed_review_child(
     con.close()
 
     # The child started after local midnight, on the day after its launcher.
-    sessions = tmp_path / "sessions" / "2026" / "04" / "14"
+    sessions = review_cwd / "codex-home" / "sessions" / "2026" / "04" / "14"
     sessions.mkdir(parents=True)
     child_rollout = sessions / "rollout-2026-04-14T00-00-00-child-alpha.jsonl"
     _child_rollout(
@@ -1304,7 +1306,7 @@ def test_collect_completed_review_capture_finds_unindexed_review_child(
         stderr_path=stderr_path,
         started_at=datetime(2026, 4, 13, 23, 59, 59).astimezone().isoformat(),
         sqlite_path=sqlite_path,
-        review_cwd=tmp_path,
+        review_cwd=review_cwd,
     )
 
     assert capture["thread_id"] == "child-alpha"

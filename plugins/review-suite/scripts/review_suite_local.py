@@ -1644,6 +1644,7 @@ def _live_review_thread(
         sqlite_path=sqlite_path,
         parent_thread_id=session_id,
         started_at=run.get("started_at"),
+        review_cwd=review_cwd,
     )
 
 
@@ -3619,6 +3620,7 @@ def collect_completed_review_capture(
                     sqlite_path=sqlite_path,
                     parent_thread_id=session_id,
                     started_at=started_at if attempt == 5 else None,
+                    review_cwd=review_cwd,
                 )
             if thread:
                 break
