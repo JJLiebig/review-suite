@@ -7,6 +7,7 @@
     "openai-astra": ["gpt-6-astra", "gpt-6.2-astra"],
     "deepseek-flash": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-1017"],
     "glm-flash": ["glm-5.3-flash"],
+    "glm-flagship": ["glm-5.4"],
     "anthropic-opus": ["claude-opus-5.5"],
     "anthropic-sonnet": ["claude-sonnet-5.5"]
   },
@@ -547,6 +548,33 @@
       "id": "glm-5.3-flash-max",
       "model_id": "glm-5.3-flash",
       "model": "opencode::opencode-go/glm-5.3-flash",
+      "reasoning_effort": "max",
+      "task_classes": ["base_review", "deep_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "glm-5.4-low",
+      "model_id": "glm-5.4",
+      "model": "opencode::zai-coding-plan/glm-5.4",
+      "reasoning_effort": "low",
+      "task_classes": ["base_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "glm-5.4-high",
+      "model_id": "glm-5.4",
+      "model": "opencode::zai-coding-plan/glm-5.4",
+      "reasoning_effort": "high",
+      "task_classes": ["base_review", "deep_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "glm-5.4-max",
+      "model_id": "glm-5.4",
+      "model": "opencode::zai-coding-plan/glm-5.4",
       "reasoning_effort": "max",
       "task_classes": ["base_review", "deep_review"],
       "state": "active",

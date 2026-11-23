@@ -18,7 +18,16 @@ model = "opencode::opencode-go/glm-5.3-flash"
 reasoning = "high"
 ```
 
-OpenCode maps `reasoning` to the `provider/model#variant` model suffix. The OpenCode Go models expose `low`, `high`, and `max` thinking levels (`opencode-go/deepseek-v4.1-flash` is DeepSeek V4.1 Flash, `opencode-go/glm-5.3-flash` is GLM-5.3-Flash). An explicit `reasoning` outside that set is rejected with the supported values; an unsupported level inherited from settings is normalized to the model's default (`high`). Models without a known mapping run at the provider's default reasoning behavior without a variant suffix.
+To review with GLM 5.4, connect Z.AI Coding Plan in OpenCode and confirm that
+`zai-coding-plan/glm-5.4` appears in `opencode models`. [Z.AI OpenCode guide](https://docs.z.ai/devpack/tool/opencode)
+
+```toml
+[base]
+model = "opencode::zai-coding-plan/glm-5.4"
+reasoning = "high"
+```
+
+These models support `low`, `high`, and `max` reasoning. Review Suite rejects an explicit unsupported level and uses `high` when the inherited level is unsupported. Models without a known mapping use the provider's default reasoning behavior.
 
 ## Runtime contract
 
@@ -35,7 +44,7 @@ OpenCode is launched through a small adapter with a Review Suite-owned primary r
 - prefers the final JSON text step containing Review Suite's terminal result marker and falls back to `opencode session export --standalone <session>` when that step is missing. The export fallback also preserves completed responses without the marker for caller classification, as on the Codex path;
 - captures per-step tokens and cost from the JSON event stream, reconciles them against `opencode session export --standalone <session>` (which also covers runs where OpenCode drops the final step event), and reports the provider's USD cost as authoritative.
 
-Usage is normalized to Review Suite's token shape and the provider cost is stored as-is, so Arena leaderboards and the review cost ledger account for OpenCode reviews exactly like Codex reviews. OpenCode model pricing is never looked up locally; the provider-reported cost wins when present.
+Review Suite records OpenCode token usage and uses the reported USD cost when available. It leaves USD cost blank when OpenCode reports the Z.AI Coding Plan's placeholder zero.
 
 This intentionally keeps provider quirks inside the backend. Adding another OpenCode Go model should normally be a model/configuration change, not a new execution path.
 
@@ -53,6 +62,6 @@ Environment-level adapter failures (OpenCode CLI missing, an empty prompt, or a 
 
 ## Prerequisites
 
-Install and authenticate the OpenCode CLI normally, including the OpenCode Go subscription/provider. Review Suite does not copy or manage OpenCode credentials.
+Install the OpenCode CLI and connect the provider for your selected model. Review Suite uses the credentials configured in OpenCode.
 
 `service_tier` is Codex-specific and is rejected for OpenCode-backed reviewers rather than silently ignored.

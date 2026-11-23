@@ -9,10 +9,10 @@ Review Fast:
 Final signoff (2x gpt-6.2-sol medium) -> Done
 
 Review Base:
-Optional Arena (40 variants / 13 loops) -> Cleanup once (gpt-6.2-astra high) -> Final signoff (2x gpt-6.2-sol medium) -> GitHub review -> Done
+Optional Arena (43 variants / 13 loops) -> Cleanup once (gpt-6.2-astra high) -> Final signoff (2x gpt-6.2-sol medium) -> GitHub review -> Done
 
 Review Deep:
-Review (2x gpt-6.2-sol medium) -> Optional Arena (57 variants / 13 loops) -> Cleanup once (gpt-6.2-astra high) -> Final signoff (2x gpt-6.2-astra high) -> GitHub review -> Done
+Review (2x gpt-6.2-sol medium) -> Optional Arena (59 variants / 13 loops) -> Cleanup once (gpt-6.2-astra high) -> Final signoff (2x gpt-6.2-astra high) -> GitHub review -> Done
 
 ```
 

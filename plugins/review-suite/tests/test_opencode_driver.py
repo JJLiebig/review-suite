@@ -614,9 +614,17 @@ def test_driver_stdio_roundtrips_unicode(monkeypatch) -> None:
     assert proc.stdout == text
 
 
-@pytest.mark.parametrize("recovered_output", [False, True])
+@pytest.mark.parametrize(
+    "model,recovered_output,expected_cost",
+    [
+        ("opencode-go/deepseek-v4.1-flash", False, None),
+        ("opencode-go/deepseek-v4.1-flash", True, 0),
+        ("zai-coding-plan/glm-5.4", True, None),
+    ],
+)
 def test_driver_main_preserves_recovered_output_or_reports_provider_failure(
-    monkeypatch, tmp_path: Path, capsys, recovered_output: bool
+    monkeypatch, tmp_path: Path, capsys, model: str, recovered_output: bool,
+    expected_cost: float | None,
 ) -> None:
     error_event = json.dumps(
         {
@@ -641,6 +649,8 @@ def test_driver_main_preserves_recovered_output_or_reports_provider_failure(
                                 {
                                     "type": "assistant",
                                     "finish": "stop",
+                                    "tokens": {"input": 10, "output": 3},
+                                    "cost": 0,
                                     "content": [
                                         {"type": "text", "text": "Review result: clean"}
                                     ],
@@ -666,7 +676,7 @@ def test_driver_main_preserves_recovered_output_or_reports_provider_failure(
         [
             "opencode_driver.py",
             "--model",
-            "opencode-go/deepseek-v4.1-flash",
+            model,
             "--dir",
             str(tmp_path),
             "--title",
@@ -682,6 +692,13 @@ def test_driver_main_preserves_recovered_output_or_reports_provider_failure(
     assert metadata.get("error_class") == (None if recovered_output else "capacity")
     assert metadata["error_name"] == "ProviderError"
     assert metadata["error_message"] == "429 Too Many Requests"
+    assert metadata.get("cost_usd") == expected_cost
+    if recovered_output:
+        assert metadata["usage"] == {
+            "input_tokens": 10,
+            "cached_input_tokens": 0,
+            "output_tokens": 3,
+        }
 
 
 def test_driver_main_emits_adapter_error_when_cli_missing(
