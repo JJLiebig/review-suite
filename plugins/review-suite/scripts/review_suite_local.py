@@ -1641,7 +1641,10 @@ def _live_review_thread(
     if candidate and str(candidate.get("source") or "") == REVIEW_SUBAGENT_SOURCE:
         return candidate
     return find_review_child_thread(
-        sqlite_path=sqlite_path, parent_thread_id=session_id
+        sqlite_path=sqlite_path,
+        parent_thread_id=session_id,
+        started_at=run.get("started_at"),
+        review_cwd=review_cwd,
     )
 
 
@@ -3614,7 +3617,10 @@ def collect_completed_review_capture(
                 thread = candidate
             else:
                 thread = find_review_child_thread(
-                    sqlite_path=sqlite_path, parent_thread_id=session_id
+                    sqlite_path=sqlite_path,
+                    parent_thread_id=session_id,
+                    started_at=started_at if attempt == 5 else None,
+                    review_cwd=review_cwd,
                 )
             if thread:
                 break
