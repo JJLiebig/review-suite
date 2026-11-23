@@ -25,7 +25,7 @@ from review_suite_local import (
 
 from .axi_output import format_command, write_text
 from .config import lens_model_config, override_model_config
-from .git_reads import refresh_git_reads
+from .git_reads import git_read_scope, refresh_git_reads
 from .lens_runtime import (
     DEFAULT_PROGRESS_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -1430,25 +1430,27 @@ def run_one_expensive_step(
     from .state_paths import default_state_dir
 
     resolved_state_dir = state_dir or default_state_dir()
-    if deslop_should_run(state):
-        result = _run_deslop_once(state)
-    elif state.get("stage") == STAGE_RUNNING:
-        result = _collect_running_review_once(state, state_dir=resolved_state_dir)
-    elif (
-        state.get("stage") == STAGE_RETRY_REQUESTED
-        and dict(state.get("pending_action") or {}).get("kind") == "arena-blocked"
-    ):
-        result = _recover_blocked_arena_once(state, state_dir=resolved_state_dir)
-    elif _review_should_run(state):
-        result = _run_profile_step_once(
-            state,
-            state_dir=resolved_state_dir,
-            persist_state=persist_state,
-        )
-    elif state.get("stage") == STAGE_FOLLOWUP_PENDING:
-        result = _run_followup_review_once(state, state_dir=resolved_state_dir)
-    else:
-        return OrchestratorRunnerResult(state, ran_step=False)
+    # A new round binds its scope to the checkout after cycle selection.
+    with git_read_scope():
+        if deslop_should_run(state):
+            result = _run_deslop_once(state)
+        elif state.get("stage") == STAGE_RUNNING:
+            result = _collect_running_review_once(state, state_dir=resolved_state_dir)
+        elif (
+            state.get("stage") == STAGE_RETRY_REQUESTED
+            and dict(state.get("pending_action") or {}).get("kind") == "arena-blocked"
+        ):
+            result = _recover_blocked_arena_once(state, state_dir=resolved_state_dir)
+        elif _review_should_run(state):
+            result = _run_profile_step_once(
+                state,
+                state_dir=resolved_state_dir,
+                persist_state=persist_state,
+            )
+        elif state.get("stage") == STAGE_FOLLOWUP_PENDING:
+            result = _run_followup_review_once(state, state_dir=resolved_state_dir)
+        else:
+            return OrchestratorRunnerResult(state, ran_step=False)
     if result.ran_step:
         refresh_git_reads()
     return result

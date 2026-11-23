@@ -1516,7 +1516,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     ]
     git_commands.clear()
     exit_code, payload = _run_review(monkeypatch, args)
-    assert len(git_commands) <= 13, git_commands
+    assert len(git_commands) <= 15, git_commands
     public_id = str(payload["review"])
 
     assert exit_code == 0
@@ -1711,6 +1711,36 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert state["validation"]["note"] == "CI unavailable for this docs-only change"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 2
+
+
+def test_start_binds_head_after_cycle_setup(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "app.py", "value = 1\n", "base")
+    _git(repo, "checkout", "-b", "feature")
+    _commit_file(repo, "app.py", "value = 2\n", "feature")
+    load_config = review.load_config
+
+    def commit_during_cycle_setup(state_dir):
+        config = load_config(state_dir)
+        _commit_file(repo, "app.py", "value = 3\n", "concurrent commit")
+        return config
+
+    launch_heads = []
+
+    def capture_launch(**kwargs):
+        launch_heads.append(kwargs["review_scope"]["reviewed_head"])
+        raise ValueError("Test stopped before reviewer launch")
+
+    monkeypatch.setattr(review, "load_config", commit_during_cycle_setup)
+    monkeypatch.setattr(review_suite_local, "_launch_reviewer_process", capture_launch)
+    _capture_errors(monkeypatch)
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", "--mode", "fast", "--cd", str(repo), "--base", "main"]
+    )
+
+    assert review.main() == 2
+    assert launch_heads == [_git(repo, "rev-parse", "HEAD")]
 
 
 def test_start_rechecks_worktree_at_dispatch(monkeypatch, tmp_path):

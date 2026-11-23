@@ -1,6 +1,7 @@
 """Share Git reads during a command's evaluation of the checkout."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from functools import wraps
@@ -12,14 +13,20 @@ _reads: ContextVar[dict[tuple[Any, ...], Any] | None] = ContextVar(
 )
 
 
+@contextmanager
+def git_read_scope() -> Iterator[None]:
+    token = _reads.set({})
+    try:
+        yield
+    finally:
+        _reads.reset(token)
+
+
 def with_git_reads[**P, T](function: Callable[P, T]) -> Callable[P, T]:
     @wraps(function)
     def run(*args: P.args, **kwargs: P.kwargs) -> T:
-        token = _reads.set({})
-        try:
+        with git_read_scope():
             return function(*args, **kwargs)
-        finally:
-            _reads.reset(token)
 
     return run
 
