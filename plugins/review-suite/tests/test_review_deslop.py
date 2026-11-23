@@ -13,10 +13,50 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import review_deslop
+import review_orchestrator
 from review_suite_core import orchestrator_runner, lens_runtime, claude_runtime, opencode_runtime
+from review_suite_core.orchestrator_state import abort_cycle, create_cycle
+from review_suite_core.orchestrator_store import orchestrator_store_lock, save_cycle
 
 _CLEAN_PROTOCOL = "Conformance: CONFORMS\nReview decision: clean"
 _FINDINGS_PROTOCOL = "Conformance: CONFORMS\nReview decision: findings"
+
+
+def test_cleanup_owns_cycle_without_launcher_and_refuses_superseded_cycle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    state_dir = tmp_path / "state"
+    source = save_cycle(state_dir, create_cycle(
+        cwd=tmp_path, base="main", branch="feature", head="head",
+        merge_base="base", requested_mode="deep",
+    ))
+    monkeypatch.setenv("REVIEW_SUITE_STATE_DIR", str(state_dir))
+    monkeypatch.setattr(review_deslop, "resolve_repo_root", lambda _: tmp_path)
+    monkeypatch.setattr(
+        review_orchestrator, "orchestrator_store_lock",
+        lambda **kwargs: orchestrator_store_lock(**(kwargs | {"timeout_seconds": 0})),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "review_deslop.py", "--commit", "head", "--conformance-only", "--output-only",
+        "--orchestrator-cycle", str(state_dir), source["cycle_key"],
+    ])
+
+    def review_while_restart_arrives(**kwargs):
+        with pytest.raises(ValueError, match="review state is busy"):
+            review_orchestrator._restart_review_brief(
+                source, state_dir=state_dir, review_brief="new brief", reason="approved",
+            )
+        return {"returncode": 0, "final_message": _CLEAN_PROTOCOL}
+
+    monkeypatch.setattr(review_deslop, "run_codex", review_while_restart_arrives)
+    assert review_deslop.main() == 0
+    assert capsys.readouterr().out.strip() == _CLEAN_PROTOCOL
+
+    superseded = abort_cycle(source, reason="approved")
+    superseded["superseded_by"] = {"review": "rvw_replacement"}
+    save_cycle(state_dir, superseded)
+    assert review_deslop.main() == 2
+    assert "Continue with rvw_replacement" in capsys.readouterr().out
 
 
 def test_emit_output_only_reports_timeout_without_returncode(capsys) -> None:

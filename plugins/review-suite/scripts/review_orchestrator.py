@@ -1081,35 +1081,37 @@ def _round_state_dir_candidates(
 
 
 def _followup_rounds(
-    state: dict[str, Any], source_round_id: str, *, state_dirs: list[Path]
+    state: dict[str, Any], source_round_id: str | None, *, state_dirs: list[Path]
 ) -> Iterator[tuple[str, dict[str, Any]]]:
-    source_round = _round_by_id(state, source_round_id)
-    github_source = source_round.get("lane") == "review-github"
     pending = state.get("pending_action") or {}
-    pending_round_id = (
-        pending.get("round_id")
-        if pending.get("source_round_id") == source_round_id
-        else None
-    )
     prior_round_ids = state.get("prior_followup_round_ids") or []
     for directory in state_dirs:
         for path in rounds_dir(directory).glob("*.json"):
             payload = load_round(directory, path.stem)
             scope = payload.get("review_scope") or {}
-            if scope.get("source_round_id") != source_round_id:
+            scoped_source = scope.get("source_round_id")
+            if not scoped_source or (
+                source_round_id is not None and scoped_source != source_round_id
+            ):
                 continue
             owner = scope.get("cycle_key")
             if owner is not None:
                 if owner != state["cycle_key"]:
                     continue
-            # Legacy GitHub source IDs need a follow-up recorded by this cycle.
-            elif (
-                github_source
-                and path.stem != pending_round_id
-                and path.stem not in prior_round_ids
-                and _round_by_id(state, path.stem).get("source_round_id") != source_round_id
-            ):
-                continue
+            else:
+                source = _round_by_id(state, scoped_source)
+                # Legacy payloads with shared or unknown source IDs need a recorded follow-up.
+                needs_record = source.get("lane") == "review-github" or (
+                    source_round_id is None and not source
+                )
+                if (
+                    needs_record
+                    and (pending.get("round_id"), pending.get("source_round_id"))
+                    != (path.stem, scoped_source)
+                    and path.stem not in prior_round_ids
+                    and _round_by_id(state, path.stem).get("source_round_id") != scoped_source
+                ):
+                    continue
             yield path.stem, payload
 
 
@@ -2777,16 +2779,25 @@ def _restart_cycle(
 def _restart_review_brief(
     state: dict[str, Any], *, state_dir: Path, **kwargs: Any
 ) -> dict[str, Any]:
-    with orchestrator_store_lock(
-        state_dir=state_dir,
-        name=f"followup-{state['cycle_key']}",
-        timeout_seconds=1,
-    ):
-        current = load_cycle_by_key(state_dir, state["cycle_key"]) or state
-        current = _copy_runtime_options(current, state)
-        replacement = _reserve_review_brief_restart(
-            current, state_dir=state_dir, **kwargs
-        )
+    cycle_key = state["cycle_key"]
+    try:
+        with (
+            orchestrator_store_lock(
+                state_dir=state_dir, name=f"followup-{cycle_key}", timeout_seconds=1,
+            ),
+            orchestrator_store_lock(
+                state_dir=state_dir, name=f"cleanup-{cycle_key}", timeout_seconds=1,
+            ),
+        ):
+            current = load_cycle_by_key(state_dir, cycle_key) or state
+            current = _copy_runtime_options(current, state)
+            replacement = _reserve_review_brief_restart(
+                current, state_dir=state_dir, **kwargs
+            )
+    except TimeoutError as exc:
+        raise ValueError(
+            "cannot replace the review brief while the review state is busy. Wait for the active command to finish."
+        ) from exc
     return _resume_reserved_successor(replacement, state_dir=state_dir)
 
 
@@ -2818,9 +2829,16 @@ def _reserve_review_brief_restart(
             if contract_conflict
             else state
         )
-        source_round_id = replanned["active_findings"]["round_id"]
+        active = dict(state.get("active_findings") or {})
+        if not active and any(
+            round_has_live_reviewer_process(_load_output_round_payload(state_dir, item))
+            for item in state.get("rounds") or []
+        ):
+            raise ValueError("cannot replan while a reviewer is running")
         for _, payload in _followup_rounds(
-            state, source_round_id, state_dirs=[_orchestrator_review_state_dir(state_dir)]
+            state,
+            active.get("round_id"),
+            state_dirs=[_orchestrator_review_state_dir(state_dir)],
         ):
             if round_has_live_reviewer_process(payload):
                 raise ValueError(
@@ -2840,9 +2858,9 @@ def _reserve_review_brief_restart(
         or int(convergence.get("accepted_findings_heads") or 0) != 0
     ):
         raise ValueError(
-            "cannot replace review brief after findings or convergence activity; "
-            "follow the existing review action, or add --contract-conflict <dimension> "
-            "with --reason <approved contract change> to replan"
+            "cannot replace review brief at this checkpoint. Follow the current review action. "
+            "For an approved contract change, use --contract-conflict <dimension> with --reason "
+            "while awaiting a fix or follow-up, between steps after accepted findings, or after recording that conflict"
         )
 
     review_root, _, _, head, merge_base_head = _current_restart_identity(
@@ -2879,6 +2897,10 @@ def _advance_without_decision(
 
     def persist_running(next_state: dict[str, Any]) -> dict[str, Any]:
         saved = save_cycle(state_dir, next_state)
+        if successor := (saved.get("superseded_by") or {}).get("review"):
+            raise ValueError(f"review cycle was superseded. Continue with {successor}.")
+        if saved.get("pending_action") != next_state.get("pending_action"):
+            raise ValueError("review state changed before launch. Follow the current review action.")
         return saved
 
     for _ in range(6):

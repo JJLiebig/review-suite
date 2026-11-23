@@ -3588,29 +3588,27 @@ def test_restart_brief_cannot_reset_accepted_findings(
     )
 
     assert review.main() == 2
-    assert errors[-1] == (
-        "cannot replace review brief after findings or convergence activity; "
-        "follow the existing review action, or add --contract-conflict <dimension> "
-        "with --reason <approved contract change> to replan"
-    )
+    assert "cannot replace review brief at this checkpoint" in errors[-1]
+    assert "--contract-conflict <dimension>" in errors[-1]
     assert _cycle_payload(state_dir, public_id) == before
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
 
 
 @pytest.mark.parametrize(
-    "followup_pending",
+    "checkpoint",
     [
-        False,
-        True,
+        "fix",
+        "followup",
         pytest.param("abandoned", marks=pytest.mark.windows_cli),
         "conflict",
         "replan",
+        "between-steps",
     ],
 )
 def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    followup_pending: bool | str,
+    checkpoint: str,
 ) -> None:
     _use_compact_base_profile(monkeypatch, tmp_path / "state", include_deep=True)
     review_calls = _stub_review(monkeypatch, "old-round", "new-round")
@@ -3638,18 +3636,23 @@ def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
     )
     old_id = str(created["review"])
     _run_review(monkeypatch, ["--id", old_id, "--decision", "findings"])
-    _commit_file(repo, "app.txt", "approved contract\n", "approved product change")
+    head = _commit_file(repo, "app.txt", "approved contract\n", "approved product change")
     before = _cycle_payload(state_dir, old_id)
-    if followup_pending in {"conflict", "replan"}:
+    if checkpoint in {"conflict", "replan"}:
         before = review.record_contract_conflict(before, conflict="acceptance")
-        if followup_pending == "replan":
+        if checkpoint == "replan":
             before = review.record_convergence_decision(before, decision="REPLAN")
         review.save_cycle(state_dir, before)
-    elif followup_pending:
-        before = review.mark_fix_detected(before, head=_git(repo, "rev-parse", "HEAD"))
+    elif checkpoint == "between-steps":
+        before = review.record_fixes_validated(before, head=head, note="focused checks passed")
+        review.save_cycle(state_dir, before)
+        assert before["stage"] == "created"
+        assert before["active_findings"] is None
+    elif checkpoint in {"followup", "abandoned"}:
+        before = review.mark_fix_detected(before, head=head)
         review.save_cycle(state_dir, before)
         assert before["stage"] == "followup-pending"
-        if followup_pending == "abandoned":
+        if checkpoint == "abandoned":
             child = subprocess.Popen([sys.executable, "-c", "pass"])
             child.wait(timeout=10)
             before["pending_action"]["wrapper_pid"] = child.pid
@@ -3657,12 +3660,15 @@ def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
     reason = (
         "User approved changed acceptance; old findings target the obsolete contract"
     )
-    argv = [
+    restart_argv = [
         "review.py",
         "--id",
         old_id,
         "--restart-brief",
         "Approved contract",
+    ]
+    argv = [
+        *restart_argv,
         "--contract-conflict",
         "acceptance",
         "--reason",
@@ -3678,8 +3684,23 @@ def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
     assert "--reason is required" in errors[-1]
     assert _cycle_payload(state_dir, old_id) == before
 
-    # A still-running follow-up is not safely supersedable, even if its wrapper was lost.
     round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    if checkpoint == "between-steps":
+        monkeypatch.setattr(sys, "argv", [*restart_argv, "--reason", reason])
+        assert review.main() == 2
+        assert "cannot replace review brief at this checkpoint" in errors[-1]
+        assert _cycle_payload(state_dir, old_id) == before
+
+        running_signoff = {"round_id": "old-round", "runs": [{"slot": "alpha", "pid": os.getpid()}]}
+        write_round(round_state_dir, running_signoff)
+        monkeypatch.setattr(sys, "argv", argv)
+        assert review.main() == 2
+        assert "cannot replan while a reviewer is running" in errors[-1]
+        assert _cycle_payload(state_dir, old_id) == before
+        running_signoff["runs"][0]["review_status"] = "completed"
+        write_round(round_state_dir, running_signoff)
+
+    # A still-running follow-up is not safely supersedable, even if its wrapper was lost.
     live_round = {
         "round_id": "live-followup",
         "review_scope": {"source_round_id": "old-round"},
@@ -3693,7 +3714,7 @@ def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
 
     live_round["runs"][0]["review_status"] = "completed"
     write_round(round_state_dir, live_round)
-    if followup_pending != "replan":
+    if checkpoint not in {"replan", "between-steps"}:
         # Plain creation with a new brief cannot abandon pending accepted findings.
         monkeypatch.setattr(
             sys,
@@ -3738,6 +3759,10 @@ def test_approved_contract_replan_preserves_findings_and_starts_fresh_successor(
     assert new_saved["convergence"]["accepted_findings_heads"] == []
     assert new_saved["decisions"] == []
     assert len(review_calls) == 2
+    if checkpoint == "between-steps":
+        with pytest.raises(ValueError, match=f"Continue with {new_id}"):
+            review._advance_without_decision(before, state_dir=state_dir)
+        assert _cycle_payload(state_dir, old_id) == old_saved
 
 
 def test_contract_conflict_and_one_use_continue_are_durable(

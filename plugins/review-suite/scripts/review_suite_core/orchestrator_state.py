@@ -482,24 +482,37 @@ def record_convergence_decision(
 def record_contract_replan(state: dict[str, Any], *, conflict: str) -> dict[str, Any]:
     pending = dict(state.get("pending_action") or {})
     convergence = convergence_summary(state)
+    stage = state.get("stage")
+    active = state.get("active_findings")
     recorded_conflict = (
         convergence.get("reason") == "contract_conflict"
         and convergence.get("conflict") == conflict
         and (
-            (state.get("stage"), convergence["status"])
-            == ("decision-required", "DECISION_REQUIRED")
-            or (state.get("stage"), convergence["status"], convergence.get("decision"))
+            (stage, convergence["status"]) == ("decision-required", "DECISION_REQUIRED")
+            or (stage, convergence["status"], convergence.get("decision"))
             == ("convergence-decided", "DECIDED", "REPLAN")
         )
     )
-    if not isinstance(state.get("active_findings"), dict) or not (
-        recorded_conflict
-        or state.get("stage") in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}
-        and convergence["status"] == "ACTIVE"
+    if active is None:
+        has_findings = convergence["accepted_findings_heads"] > 0
+        eligible_stage = (
+            stage == STAGE_CREATED and pending.get("kind") == "run-review-step"
+        )
+    else:
+        has_findings = isinstance(active, dict)
+        eligible_stage = stage in {STAGE_FIX_PENDING, STAGE_FOLLOWUP_PENDING}
+    if not has_findings or not (
+        recorded_conflict or eligible_stage and convergence["status"] == "ACTIVE"
     ):
         raise ValueError(
-            "contract replan requires active findings awaiting a fix or follow-up"
+            "contract replan requires findings awaiting a fix or follow-up, "
+            "or an idle checkpoint between review steps after accepted findings"
         )
+    if active is None and (
+        (state.get("deslop") or {}).get("status") == DESLOP_STATUS_DONE
+        or (state.get("review_progress") or {}).get("current_step")
+    ):
+        raise ValueError("cannot replan while a review is running or awaiting a decision")
     if pending.get("wrapper_pid") is not None:
         from review_suite_local import _process_is_running
 
