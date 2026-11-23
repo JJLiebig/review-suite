@@ -291,6 +291,24 @@ def reserve_cycle_successor(
     return _reserve_cycle_successor(state_dir, source=source, successor=successor, existing=False)
 
 
+def existing_contract_link(
+    state: dict[str, Any], *, successor_id: str, conflict: str,
+) -> bool:
+    """Recognize retries and refuse redirects from a different decision."""
+    redirect = state.get("superseded_by") or {}
+    if not (existing_id := redirect.get("review")):
+        return False
+    if existing_id != successor_id:
+        raise ValueError(f"source review cycle already has a different successor: {existing_id}")
+    convergence = convergence_summary(state)
+    if redirect.get("kind") != "contract-replan" or (
+        convergence["status"], convergence.get("decision"),
+        convergence.get("reason"), convergence.get("conflict"),
+    ) != ("DECIDED", "REPLAN", "contract_conflict", conflict):
+        raise ValueError(f"source review already points to {existing_id} without the requested contract replan for {conflict}")
+    return True
+
+
 def link_cycle_successor(
     state_dir: Path,
     *,
@@ -332,6 +350,10 @@ def _reserve_cycle_successor(
         superseded = dict(current.get("superseded_by") or {})
         existing_id = str(superseded.get("review") or "").strip()
         if existing_id:
+            if existing:
+                existing_contract_link(
+                    current, successor_id=successor["public_id"], conflict=source["convergence"]["conflict"],
+                )
             existing_key = str(superseded.get("cycle_key") or "").strip()
             requested_key = str(successor.get("cycle_key") or "").strip()
             if existing_key != requested_key:

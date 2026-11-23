@@ -122,6 +122,7 @@ from review_suite_core.orchestrator_store import (
     CALLER_PUBLIC_ID_RE,
     create_cycle_with_public_id,
     cycles_dir,
+    existing_contract_link,
     link_cycle_successor,
     load_cycle_by_key,
     load_cycle_by_public_id,
@@ -2911,7 +2912,7 @@ def _check_link_identity(source: dict[str, Any], successor: dict[str, Any]) -> s
     old = source["identity"]
     new = successor["identity"]
     for field in ("cwd", "base", "branch"):
-        if not old.get(field) or old[field] != new.get(field):
+        if old.get(field) != new.get(field):
             raise ValueError(f"successor review must have the same {field} as the source review")
     mode = _current_mode(source)
     if _current_mode(successor) != mode:
@@ -2939,10 +2940,7 @@ def _link_existing_successor(args: argparse.Namespace) -> int:
     state_dir, state = _load_cycle_and_state_dir(Path(default_state_dir()).resolve(strict=False), args.id)
     _reject_id_creation_args(args, state)
     with _lock_brief_source(state, state_dir=state_dir) as current:
-        existing_id = (current.get("superseded_by") or {}).get("review")
-        if existing_id and existing_id != successor_id:
-            raise ValueError(f"source review cycle already has a different successor: {existing_id}")
-        if not existing_id:
+        if not existing_contract_link(current, successor_id=successor_id, conflict=args.contract_conflict):
             replanned = record_contract_replan(current, conflict=args.contract_conflict)
             _check_replan_reviewers(current, state_dir=state_dir)
             successor = load_cycle_by_public_id(state_dir, successor_id)
