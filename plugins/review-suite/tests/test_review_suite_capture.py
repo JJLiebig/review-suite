@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,7 @@ def _child_rollout(
     usage: dict[str, int],
     text: str,
     parent_thread_id: str,
+    thread_id: str | None = None,
 ) -> None:
     total_tokens = int(usage["input_tokens"]) + int(usage["output_tokens"])
     _write_jsonl(
@@ -77,7 +79,11 @@ def _child_rollout(
         [
             {
                 "type": "session_meta",
-                "payload": {"parent_thread_id": parent_thread_id},
+                "payload": {
+                    "id": thread_id,
+                    "parent_thread_id": parent_thread_id,
+                    "source": {"subagent": "review"},
+                },
             },
             {
                 "type": "turn_context",
@@ -1226,45 +1232,93 @@ def test_collect_completed_review_capture_does_not_use_title_fallback(
     assert started_at
 
 
-def test_collect_completed_review_capture_uses_launcher_parent_id(
+def test_collect_completed_review_capture_finds_unindexed_review_child(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    sqlite_path = tmp_path / "state_5.sqlite"
+    launcher_rollout = tmp_path / "launcher.jsonl"
+    _launcher_rollout(launcher_rollout, "launcher text")
+    with sqlite3.connect(sqlite_path) as con:
+        con.execute(THREAD_SCHEMA)
+        _insert_thread(
+            con,
+            thread_id="launcher-alpha",
+            rollout_path=launcher_rollout,
+            cwd=str(tmp_path),
+            source="exec",
+            created_at=0,
+            updated_at=0,
+            tokens_used=0,
+            title="review",
+        )
+    con.close()
+
+    # The child started after local midnight, on the day after its launcher.
+    sessions = tmp_path / "sessions" / "2026" / "04" / "14"
+    sessions.mkdir(parents=True)
+    child_rollout = sessions / "rollout-2026-04-14T00-00-00-child-alpha.jsonl"
+    _child_rollout(
+        child_rollout,
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
+        usage={"input_tokens": 840, "cached_input_tokens": 240, "output_tokens": 36},
+        text="No findings.",
+        parent_thread_id="launcher-alpha",
+        thread_id="child-alpha",
+    )
+    _write_jsonl(
+        sessions / "rollout-2026-04-14T00-00-01-other-child.jsonl",
+        [
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "other-child",
+                    "parent_thread_id": "launcher-alpha",
+                    "source": {"subagent": "compact"},
+                },
+            },
+        ],
+    )
+    _child_rollout(
+        sessions / "rollout-2026-04-14T00-00-02-child-bravo.jsonl",
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
+        usage={"input_tokens": 500, "output_tokens": 25},
+        text="Unrelated findings.",
+        parent_thread_id="launcher-bravo",
+        thread_id="child-bravo",
+    )
+
     stdout_path = tmp_path / "review.stdout.txt"
     stderr_path = tmp_path / "review.stderr.txt"
-    stdout_path.write_text("No findings.\n", encoding="utf-8")
     stderr_path.write_text("Session ID: launcher-alpha\n", encoding="utf-8")
-    observed: dict[str, object] = {}
-
-    monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: None)
     monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
 
-    def fake_find_review_child_thread(**kwargs: object) -> None:
-        observed.setdefault("parent_thread_id", kwargs["parent_thread_id"])
-        return None
-
-    monkeypatch.setattr(
-        review_suite_local, "find_review_child_thread", fake_find_review_child_thread
-    )
-    monkeypatch.setattr(review_suite_local, "enrich_thread_record", lambda thread: {})
-
-    review_suite_local.collect_completed_review_capture(
+    capture = review_suite_local.collect_completed_review_capture(
         slot="review-1",
-        variant_id="gpt-5.5-max",
-        variant={
-            "model": "gpt-5.5",
-            "reasoning_effort": "max",
-            "effective_reasoning_effort": "xhigh",
-        },
+        variant_id="gpt-5.4-xhigh",
+        variant=_minimal_roster()["variants"][0],
         title="local-review::repo::review-1",
         command=["codex", "review"],
         stdout_path=stdout_path,
         stderr_path=stderr_path,
-        started_at="2026-04-13T10:00:00Z",
-        sqlite_path=tmp_path / "state_5.sqlite",
+        started_at=datetime(2026, 4, 13, 23, 59, 59).astimezone().isoformat(),
+        sqlite_path=sqlite_path,
         review_cwd=tmp_path,
     )
 
-    assert observed["parent_thread_id"] == "launcher-alpha"
+    assert capture["thread_id"] == "child-alpha"
+    assert capture["rollout_path"] == str(child_rollout)
+    assert capture["reviewer_output_ref"] == "rollout://child-alpha/gpt-5.4-xhigh"
+    assert capture["reviewer_output"] == "No findings."
+    assert capture["review_status"] == "completed"
+    assert capture["tokens_used"] == 876
+    assert capture["usage"] == {
+        "input_tokens": 840,
+        "cached_input_tokens": 240,
+        "output_tokens": 36,
+    }
+    assert capture["cost_usd"] == pytest.approx(0.0021)
 
 
 def test_collect_completed_review_capture_prefers_final_message_path(

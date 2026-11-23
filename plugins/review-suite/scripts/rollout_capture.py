@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,7 @@ REVIEW_SUBAGENT_SOURCE = json.dumps({"subagent": "review"}, separators=(",", ":"
 
 _JSONL_CACHE: dict[tuple[str, int, int], tuple[list[dict[str, Any]], bool]] = {}
 _ROLLOUT_SUMMARY_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
-_ROLLOUT_PARENT_CACHE: dict[tuple[str, int, int], str | None] = {}
+_ROLLOUT_META_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _THREAD_LOOKUP_CACHE: dict[
     tuple[str, int, int, str, str | None, int | None], dict[str, Any] | None
 ] = {}
@@ -164,14 +164,15 @@ def rollout_final_assistant_text(path: Path) -> str:
     return str(read_rollout_summary(path).get("reviewer_output") or "")
 
 
-def rollout_parent_thread_id(path: Path) -> str | None:
+def _rollout_session_meta(path: Path) -> dict[str, Any]:
     try:
         key = _path_cache_key(path)
     except OSError:
-        return None
-    if key in _ROLLOUT_PARENT_CACHE:
-        return _ROLLOUT_PARENT_CACHE[key]
-    parent_thread_id = None
+        return {}
+    cached = _ROLLOUT_META_CACHE.get(key)
+    if cached is not None:
+        return cached
+    meta = {}
     try:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             for line in handle:
@@ -183,14 +184,19 @@ def rollout_parent_thread_id(path: Path) -> str | None:
                 if row.get("type") == "session_meta":
                     payload = row.get("payload", {})
                     if isinstance(payload, dict):
-                        parent_thread_id = (
-                            str(payload.get("parent_thread_id") or "") or None
-                        )
+                        meta = {
+                            field: payload.get(field)
+                            for field in ("id", "parent_thread_id", "source")
+                        }
                     break
     except OSError, json.JSONDecodeError:
-        parent_thread_id = None
-    _ROLLOUT_PARENT_CACHE[key] = parent_thread_id
-    return parent_thread_id
+        pass
+    _ROLLOUT_META_CACHE[key] = meta
+    return meta
+
+
+def rollout_parent_thread_id(path: Path) -> str | None:
+    return str(_rollout_session_meta(path).get("parent_thread_id") or "") or None
 
 
 def _parse_event_timestamp(value: Any) -> datetime | None:
@@ -319,11 +325,46 @@ def find_review_child_thread(
     *,
     sqlite_path: Path,
     parent_thread_id: str,
+    started_at: str | None = None,
 ) -> dict[str, Any] | None:
-    if not sqlite_path.is_file():
-        return None
     parent_id = str(parent_thread_id or "").strip()
     if not parent_id:
+        return None
+    indexed = _find_indexed_review_child_thread(sqlite_path, parent_id)
+    if indexed is not None:
+        return indexed
+
+    started = _parse_event_timestamp(started_at)
+    if started is None:
+        return None
+    # Codex uses local dates for session paths. Include adjacent days for midnight.
+    start_day = started.astimezone().date()
+    sessions = sqlite_path.parent / "sessions"
+    for offset in (0, 1, -1):
+        day = start_day + timedelta(days=offset)
+        directory = sessions / f"{day:%Y/%m/%d}"
+        for path in sorted(directory.glob("rollout-*.jsonl"), reverse=True):
+            if rollout_parent_thread_id(path) != parent_id:
+                continue
+            meta = _rollout_session_meta(path)
+            thread_id = meta.get("id")
+            if (
+                meta.get("source") == {"subagent": "review"}
+                and isinstance(thread_id, str)
+                and thread_id
+            ):
+                return {
+                    "id": thread_id,
+                    "rollout_path": str(path),
+                    "source": REVIEW_SUBAGENT_SOURCE,
+                }
+    return None
+
+
+def _find_indexed_review_child_thread(
+    sqlite_path: Path, parent_id: str
+) -> dict[str, Any] | None:
+    if not sqlite_path.is_file():
         return None
     stat = sqlite_path.stat()
     cache_key = (
@@ -396,7 +437,12 @@ def enrich_thread_record(thread_row: dict[str, Any]) -> dict[str, Any]:
     rollout_path = Path(thread_row["rollout_path"])
     summary = read_rollout_summary(rollout_path) if rollout_path.is_file() else {}
     enriched = dict(thread_row)
-    enriched["usage"] = summary.get("usage") or {}
+    usage = summary.get("usage") or {}
+    enriched["usage"] = usage
+    if "tokens_used" not in enriched and usage:
+        enriched["tokens_used"] = usage.get("input_tokens", 0) + usage.get(
+            "output_tokens", 0
+        )
     enriched["reviewer_output"] = summary.get("reviewer_output") or ""
     enriched["task_error"] = summary.get("task_error") or ""
     enriched["rollout_incomplete"] = bool(summary.get("rollout_incomplete"))
