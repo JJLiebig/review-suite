@@ -2779,16 +2779,25 @@ def _restart_cycle(
 def _restart_review_brief(
     state: dict[str, Any], *, state_dir: Path, **kwargs: Any
 ) -> dict[str, Any]:
-    with orchestrator_store_lock(
-        state_dir=state_dir,
-        name=f"followup-{state['cycle_key']}",
-        timeout_seconds=1,
-    ):
-        current = load_cycle_by_key(state_dir, state["cycle_key"]) or state
-        current = _copy_runtime_options(current, state)
-        replacement = _reserve_review_brief_restart(
-            current, state_dir=state_dir, **kwargs
-        )
+    cycle_key = state["cycle_key"]
+    try:
+        with (
+            orchestrator_store_lock(
+                state_dir=state_dir, name=f"followup-{cycle_key}", timeout_seconds=1,
+            ),
+            orchestrator_store_lock(
+                state_dir=state_dir, name=f"cleanup-{cycle_key}", timeout_seconds=1,
+            ),
+        ):
+            current = load_cycle_by_key(state_dir, cycle_key) or state
+            current = _copy_runtime_options(current, state)
+            replacement = _reserve_review_brief_restart(
+                current, state_dir=state_dir, **kwargs
+            )
+    except TimeoutError as exc:
+        raise ValueError(
+            "cannot replace the review brief while the review state is busy. Wait for the active command to finish."
+        ) from exc
     return _resume_reserved_successor(replacement, state_dir=state_dir)
 
 
@@ -2890,6 +2899,8 @@ def _advance_without_decision(
         saved = save_cycle(state_dir, next_state)
         if successor := (saved.get("superseded_by") or {}).get("review"):
             raise ValueError(f"review cycle was superseded. Continue with {successor}.")
+        if saved.get("pending_action") != next_state.get("pending_action"):
+            raise ValueError("review state changed before launch. Follow the current review action.")
         return saved
 
     for _ in range(6):

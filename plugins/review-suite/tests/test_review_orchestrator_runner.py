@@ -15,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from review_suite_core import orchestrator_runner
+import review_orchestrator
 from review_suite_core.config import load_config
 from review_suite_core.orchestrator_profiles import resolve_orchestrator_profile
 from review_suite_core.orchestrator_state import (
@@ -269,8 +270,10 @@ def test_runner_runs_cleanup_before_final_correctness_and_waits_for_acknowledgme
     assert len(calls) == 1
 
     command, cwd = calls[0]
-    assert command[-4:-1] == ["--commit", "base-1", "head-1"]
-    assert (len(review_calls), command[-1]) == (1, "--review-brief=- frozen")
+    commit_flag = command.index("--commit")
+    assert command[commit_flag + 1:commit_flag + 3] == ["base-1", "head-1"]
+    assert "--review-brief=- frozen" in command
+    assert len(review_calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -370,7 +373,9 @@ def test_runner_retries_cleanup_on_current_head_and_blocks_wrong_branch_or_dirty
         assert result.state[mirror]["merge_base"] == "different-base"
     assert result.state["deslop"]["status"] == "done"
     assert result.state["review_progress"]["completed_steps"] == []
-    assert calls[0]["command"][-3:] == ["--commit", "different-base", "head-2"]
+    command = calls[0]["command"]
+    commit_flag = command.index("--commit")
+    assert command[commit_flag + 1:commit_flag + 3] == ["different-base", "head-2"]
     monkeypatch.setattr(runner, "current_branch", lambda cwd: "other")
     assert runner.run_one_expensive_step(green).state is green
     monkeypatch.setattr(runner, "current_head", lambda cwd: "head-1")
@@ -1338,7 +1343,13 @@ def test_runner_keeps_cleanup_result_available_for_decision_before_replan(
     assert stored["deslop"]["decision"] == "clean"
     with pytest.raises(ValueError, match="awaiting a decision"):
         record_contract_replan(stored, conflict="scope")
-    closed = mark_deslop_closed(stored)
+    with pytest.raises(ValueError, match="cleanup state changed"):
+        review_orchestrator._advance_without_decision(ready, state_dir=state_dir)
+    assert load_cycle_by_key(state_dir, ready["cycle_key"]) == stored
+
+    closed = save_cycle(state_dir, mark_deslop_closed(stored))
+    assert save_cycle(state_dir, stored) == closed
+    assert save_cycle(state_dir, ready) == closed
     assert record_contract_replan(closed, conflict="scope")["convergence"]["decision"] == "REPLAN"
 
 

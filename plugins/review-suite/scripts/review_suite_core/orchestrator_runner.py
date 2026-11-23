@@ -191,7 +191,9 @@ def _process_output(proc: subprocess.CompletedProcess) -> str:
     return str(proc.stdout or "").strip() or str(proc.stderr or "").strip()
 
 
-def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
+def _run_deslop_once(
+    state: dict[str, Any], *, state_dir: Path
+) -> OrchestratorRunnerResult:
     cwd = cwd_path_from_normalized(_identity_text(state, "cwd"))
     expected_head = _identity_text(state, "head")
     expected_merge_base = _identity_text(state, "merge_base")
@@ -220,7 +222,10 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     command = deslop_command(state)
     command_text = format_command(command)
     try:
-        proc = run_deslop_subprocess(command=command, cwd=cwd)
+        proc = run_deslop_subprocess(
+            command=[*command, "--orchestrator-cycle", str(state_dir), state["cycle_key"]],
+            cwd=cwd,
+        )
     except OSError as exc:
         _print_step_output(
             label="review-deslop", status="failed", body=f"review-deslop failed: {exc}"
@@ -315,8 +320,10 @@ def _run_deslop_for_cycle(
         if current is not None and (
             current.get("superseded_by") or current.get("deslop") != state.get("deslop")
         ):
-            return OrchestratorRunnerResult(current, ran_step=False)
-        result = _run_deslop_once(state)
+            raise ValueError(
+                "cleanup state changed while the review was resuming. Follow the current review action."
+            )
+        result = _run_deslop_once(state, state_dir=state_dir)
         if current is not None and result.ran_step:
             return replace(result, state=save_cycle(state_dir, result.state))
         return result

@@ -210,6 +210,15 @@ def save_cycle(
             payload["convergence"] = deepcopy(current["convergence"])
         if current and dict(current.get("superseded_by") or {}).get("review"):
             return current
+        if current:
+            stored_cleanup = (current.get("deslop") or {}).get("status")
+            incoming_cleanup = (payload.get("deslop") or {}).get("status")
+            if (
+                stored_cleanup in {"done", "closed"}
+                and incoming_cleanup in {"tracked", "failed"}
+            ) or (stored_cleanup == "closed" and incoming_cleanup == "done"):
+                # A late resume cannot erase a completed cleanup or its acknowledgement.
+                return current
         if current and current.get("stage") == "followup-pending":
             from review_suite_local import _process_is_running
 

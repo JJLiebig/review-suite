@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,7 +40,9 @@ from review_suite_core import (
 )
 from review_suite_local import ensure_clean_git_worktree
 from review_suite_core.config import override_model_config
+from review_suite_core.cycle_store import CYCLE_KEY_RE
 from review_suite_core.model_labels import SUPPORTED_REASONING_EFFORTS
+from review_suite_core.orchestrator_store import load_cycle_by_key, orchestrator_store_lock
 from review_suite_core.review_backend import split_review_backend_model
 
 STATIC_CLEANUP_LIMIT = 20
@@ -97,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--wsl", action="store_true")
     parser.add_argument("--output-only", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--orchestrator-cycle", nargs=2, help=argparse.SUPPRESS)
     return parser
 
 
@@ -545,8 +549,21 @@ def emit_output_only(*, tool_name: str, result: dict[str, object]) -> int:
 
 def main() -> int:
     parser = build_parser()
+    cleanup_ownership = ExitStack()
     try:
         args = parser.parse_args()
+        if args.orchestrator_cycle:
+            state_dir_text, cycle_key = args.orchestrator_cycle
+            if not CYCLE_KEY_RE.fullmatch(cycle_key):
+                raise ValueError("invalid review cycle key")
+            state_dir = Path(state_dir_text)
+            # Own the cycle during review even if the parent launcher is interrupted.
+            cleanup_ownership.enter_context(orchestrator_store_lock(
+                state_dir=state_dir, name=f"cleanup-{cycle_key}", timeout_seconds=0,
+            ))
+            current = load_cycle_by_key(state_dir, cycle_key) or {}
+            if successor := (current.get("superseded_by") or {}).get("review"):
+                raise ValueError(f"review cycle was superseded. Continue with {successor}.")
         commit, commit_end = normalize_commit_spec(args.commit)
         if commit and args.base is not None:
             raise ValueError("use either --base or --commit")
@@ -624,12 +641,16 @@ def main() -> int:
             tool_name="review-deslop",
             result=_with_effective_returncode(result),
         )
+    except TimeoutError:
+        return emit_error("cleanup could not start while the review state is busy")
     except ValueError as exc:
         return emit_error(
             str(exc),
             status="usage_error",
             help_items=[_help_command()],
         )
+    finally:
+        cleanup_ownership.close()
 
 
 if __name__ == "__main__":
