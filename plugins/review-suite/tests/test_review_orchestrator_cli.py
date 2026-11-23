@@ -1713,18 +1713,17 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert len(review_calls) == 2
 
 
-def test_start_binds_head_after_cycle_setup(monkeypatch, tmp_path):
+def test_start_binds_head_when_building_request(monkeypatch, tmp_path):
     repo = tmp_path / "repo"
     _init_repo(repo)
     _commit_file(repo, "app.py", "value = 1\n", "base")
     _git(repo, "checkout", "-b", "feature")
     _commit_file(repo, "app.py", "value = 2\n", "feature")
-    load_config = review.load_config
+    build_request = review_suite_arena._orchestrator_review_request
 
-    def commit_during_cycle_setup(state_dir):
-        config = load_config(state_dir)
+    def commit_before_request(**kwargs):
         _commit_file(repo, "app.py", "value = 3\n", "concurrent commit")
-        return config
+        return build_request(**kwargs)
 
     launch_heads = []
 
@@ -1732,7 +1731,7 @@ def test_start_binds_head_after_cycle_setup(monkeypatch, tmp_path):
         launch_heads.append(kwargs["review_scope"]["reviewed_head"])
         raise ValueError("Test stopped before reviewer launch")
 
-    monkeypatch.setattr(review, "load_config", commit_during_cycle_setup)
+    monkeypatch.setattr(review_suite_arena, "_orchestrator_review_request", commit_before_request)
     monkeypatch.setattr(review_suite_local, "_launch_reviewer_process", capture_launch)
     _capture_errors(monkeypatch)
     monkeypatch.setattr(

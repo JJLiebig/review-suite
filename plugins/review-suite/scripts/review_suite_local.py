@@ -270,7 +270,9 @@ def build_correctness_review_contract() -> str:
     )
 
 
+@with_git_reads
 def _base_review_scope(*, review_cwd: Path, base: str) -> tuple[dict[str, Any], str]:
+    """Bind the request to the live checkout after the runner's preflight."""
     base_info = effective_base_ref(review_cwd, base)
     effective_base = str(base_info["base"])
     requested_base = str(base_info["requested_base"])
