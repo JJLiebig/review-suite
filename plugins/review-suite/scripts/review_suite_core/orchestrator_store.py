@@ -288,6 +288,58 @@ def reserve_cycle_successor(
     source: dict[str, Any],
     successor: dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
+    return _reserve_cycle_successor(state_dir, source=source, successor=successor, existing=False)
+
+
+def existing_contract_link(
+    state: dict[str, Any], *, successor_id: str, conflict: str,
+) -> bool:
+    """Recognize retries and refuse redirects from a different decision."""
+    redirect = state.get("superseded_by") or {}
+    if not (existing_id := redirect.get("review")):
+        return False
+    if existing_id != successor_id:
+        raise ValueError(f"source review cycle already has a different successor: {existing_id}")
+    convergence = convergence_summary(state)
+    if redirect.get("kind") != "contract-replan" or (
+        convergence["status"], convergence.get("decision"),
+        convergence.get("reason"), convergence.get("conflict"),
+    ) != ("DECIDED", "REPLAN", "contract_conflict", conflict):
+        raise ValueError(f"source review already points to {existing_id} without the requested contract replan for {conflict}")
+    return True
+
+
+def link_cycle_successor(
+    state_dir: Path,
+    *,
+    source: dict[str, Any],
+    successor: dict[str, Any],
+) -> None:
+    # Serialize competing links without holding the cycle save lock during the scan.
+    with orchestrator_store_lock(state_dir=state_dir, name="orchestrator-links"):
+        for path in cycles_dir(state_dir).glob("*.json"):
+            if path.stem in (source["cycle_key"], successor["cycle_key"]):
+                continue
+            try:
+                other = read_json(path)
+            except ValueError:
+                continue
+            redirect = other.get("superseded_by")
+            if isinstance(redirect, dict) and redirect.get("review") == successor["public_id"]:
+                predecessor = other.get("public_id") or path.stem
+                raise ValueError(
+                    f"successor review {successor['public_id']} is already linked from {predecessor}"
+                )
+        _reserve_cycle_successor(state_dir, source=source, successor=successor, existing=True)
+
+
+def _reserve_cycle_successor(
+    state_dir: Path,
+    *,
+    source: dict[str, Any],
+    successor: dict[str, Any],
+    existing: bool,
+) -> tuple[dict[str, Any], bool]:
     source_key = str(source.get("cycle_key") or "").strip()
     if not source_key:
         raise ValueError("source cycle_key is required")
@@ -298,6 +350,10 @@ def reserve_cycle_successor(
         superseded = dict(current.get("superseded_by") or {})
         existing_id = str(superseded.get("review") or "").strip()
         if existing_id:
+            if existing:
+                existing_contract_link(
+                    current, successor_id=successor["public_id"], conflict=source["convergence"]["conflict"],
+                )
             existing_key = str(superseded.get("cycle_key") or "").strip()
             requested_key = str(successor.get("cycle_key") or "").strip()
             if existing_key != requested_key:
@@ -320,7 +376,22 @@ def reserve_cycle_successor(
             replanned = record_contract_replan(
                 current, conflict=source["convergence"]["conflict"]
             )
-        saved_successor = _save_cycle_unlocked(state_dir, successor)
+        if existing:
+            saved_successor = load_cycle_by_key(state_dir, successor["cycle_key"])
+            if saved_successor is None or any(
+                saved_successor.get(key) != successor.get(key)
+                for key in ("public_id", "identity", "mode", "review_brief")
+            ):
+                raise ValueError("successor review changed while linking; inspect its status and retry")
+            if saved_successor.get("superseded_by"):
+                raise ValueError("successor review is already superseded")
+            if saved_successor.get("stage") == "aborted":
+                raise ValueError("successor review is aborted")
+            # A restart-created successor carries its backlink in its own state.
+            if predecessor := (saved_successor.get("restart") or {}).get("supersedes"):
+                raise ValueError(f"successor review is already linked from {predecessor}")
+        else:
+            saved_successor = _save_cycle_unlocked(state_dir, successor)
         saved_source = deepcopy(current)
         for key in ("stage", "pending_action", "recovery", "superseded_by"):
             saved_source[key] = deepcopy(source.get(key))
