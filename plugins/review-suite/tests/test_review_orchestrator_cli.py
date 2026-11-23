@@ -25,6 +25,9 @@ from review_suite_core.orchestrator_state import mark_followup_review_pending, m
 from review_suite_local import write_round
 
 
+pytestmark = pytest.mark.orchestrator_cli
+
+
 _GIT_ENV = os.environ | {
     "GIT_AUTHOR_EMAIL": "codex@example.invalid",
     "GIT_AUTHOR_NAME": "Codex",
@@ -451,6 +454,7 @@ def _enable_arena(state_dir: Path) -> None:
     )
 
 
+@pytest.mark.windows_cli
 def test_repo_no_arena_preference_handles_spaces_and_can_be_cleared(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1489,6 +1493,7 @@ def test_id_retries_legacy_uninspected_followup_without_resetting_cycle(
     assert followup_calls[0]["reasoning_effort"] == "xhigh"
 
 
+@pytest.mark.windows_cli
 def test_create_resume_and_id_reprint_use_one_pending_action(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, git_commands: list[list[str]]
 ) -> None:
@@ -2858,6 +2863,7 @@ def test_caller_disagreement_rejects_stale_uninspected_or_consumed_decisions(
     assert _cycle_payload(state_dir, before["public_id"]) == before
 
 
+@pytest.mark.windows_cli
 def test_wsl_flag_persists_to_orchestrated_steps(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -3596,7 +3602,7 @@ def test_restart_brief_cannot_reset_accepted_findings(
     [
         False,
         True,
-        "abandoned",
+        pytest.param("abandoned", marks=pytest.mark.windows_cli),
         "conflict",
         "replan",
     ],
@@ -4272,6 +4278,7 @@ def test_restart_mode_requires_escalation_reason_and_stricter_mode(
     assert "--restart-mode must increase strictness" in messages[-1]
 
 
+@pytest.mark.windows_cli
 def test_restart_mode_rejects_dirty_worktree(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -4786,6 +4793,7 @@ def test_start_under_caller_id_creates_then_resumes_same_cycle(
     assert dict(cycle["mode"])["requested"] == "fast"
 
 
+@pytest.mark.windows_cli
 def test_caller_id_bound_to_another_worktree_is_refused(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -4887,6 +4895,7 @@ def test_show_status_json_by_id(
     )
 
 
+@pytest.mark.windows_cli
 def test_installed_status_reads_moved_cycle_without_running_subprocesses(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     home = tmp_path / "home"
@@ -5291,6 +5300,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
     )
 
 
+@pytest.mark.windows_cli
 def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -5708,6 +5718,7 @@ def test_mode_rerun_after_pending_github_head_change_reuses_same_id_for_signoff(
     assert state["github_review"]["status"] == "unknown"
 
 
+@pytest.mark.windows_cli
 def test_patch_equivalent_rebase_after_cleanup_keeps_local_signoff(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -7289,6 +7300,7 @@ def test_decision_pending_with_missing_metadata_still_errors(
     assert _cycle_payload(state_dir, public_id) == state
 
 
+@pytest.mark.windows_cli
 def test_changed_pr_patch_reuses_id_and_reviews_only_delta(monkeypatch, tmp_path):
     calls = _stub_review_with_terminal(monkeypatch, "clean", "clean", "clean", "clean",
                                       round_ids=("first", "second", "delta", "delta2"))

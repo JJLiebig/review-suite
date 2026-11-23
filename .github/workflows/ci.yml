@@ -54,5 +54,8 @@ jobs:
 
       - name: Run tests
         env:
-          PYTEST_ADDOPTS: --durations=10
+          # Exercise native CLI paths on Windows and the full CLI matrix on Linux and macOS.
+          PYTEST_ADDOPTS: >-
+            --durations=10
+            ${{ runner.os == 'Windows' && '-m "not orchestrator_cli or windows_cli"' || '' }}
         run: just test
