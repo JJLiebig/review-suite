@@ -40,6 +40,7 @@ from review_suite_core import (
     resolve_ref,
     resolve_repo_root,
 )
+from review_suite_core.git_reads import with_git_reads
 from review_suite_local import default_state_dir
 
 DEFAULT_BOT_LOGIN = "chatgpt-codex-connector[bot]"
@@ -738,8 +739,10 @@ def local_checkout_contains_reviewed_head(review_root: Path, head_sha: str) -> b
     if not normalized_head:
         return False
     try:
-        resolved_head = resolve_ref(review_root, normalized_head)
         local_head = current_head(review_root)
+        if normalized_head == local_head:
+            return True
+        resolved_head = resolve_ref(review_root, normalized_head)
         return resolved_head == local_head or is_ancestor(
             review_root, resolved_head, local_head
         )
@@ -1157,6 +1160,7 @@ def run_review_cycle(
     }
 
 
+@with_git_reads
 def cmd_run(args: argparse.Namespace) -> int:
     global GH_CWD
     explicit_target = bool(args.owner and args.repo and args.pr_number)

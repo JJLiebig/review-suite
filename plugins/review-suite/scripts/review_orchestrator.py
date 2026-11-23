@@ -44,6 +44,7 @@ from review_suite_core.config import (
     load_config,
     override_model_config,
 )
+from review_suite_core.git_reads import refresh_git_reads, with_git_reads
 from review_suite_core.orchestrator_profiles import (
     MODE_STRICTNESS_ORDER,
     RESTART_TARGET_MODES,
@@ -608,6 +609,7 @@ def _run_arena_recovery_backend_once(state: dict[str, Any], *, state_dir: Path) 
         encoding="utf-8",
         errors="replace",
     )
+    refresh_git_reads()
     stderr = str(proc.stderr or "")
     if stderr:
         sys.stderr.write(stderr)
@@ -1437,6 +1439,8 @@ def _allowed_base_drift(
         recorded_merge_base=recorded_merge_base,
         current_merge_base=current_merge_base,
         reviewed_head=reviewed_head,
+        current_head=current_head_value,
+        include_interaction=False,
     )
     base_changed_paths = list(drift.get("base_changed_paths") or [])
     payload = {
@@ -1462,6 +1466,7 @@ def _allowed_base_drift(
         current_merge_base=current_merge_base,
         reviewed_head=reviewed_head,
         current_head=parent_head,
+        include_interaction=False,
     )
     if not list(parent_drift.get("overlapping_paths") or []) and bool(
         parent_drift.get("patch_equivalent")
@@ -1495,7 +1500,7 @@ def _current_cycle_identity_if_compatible(
             return None
         head = current_head(review_root)
         expected_merge_base = str(identity.get("merge_base") or "").strip()
-        current_merge_base = merge_base(review_root, base, "HEAD")
+        current_merge_base = merge_base(review_root, base, head)
         base_drift = None
         if expected_merge_base and current_merge_base != expected_merge_base:
             reviewed_head = _base_drift_reviewed_head(state)
@@ -1546,7 +1551,7 @@ def _fix_pending_head_change_identity_if_compatible(
             return None
         return {
             "head": head,
-            "merge_base": merge_base(review_root, base, "HEAD"),
+            "merge_base": merge_base(review_root, base, head),
             "base_drift": None,
         }
     except AttributeError, OSError, ValueError:
@@ -1566,11 +1571,11 @@ def _reviewed_tree(state: dict[str, Any], head: str | None) -> str | None:
 def _is_material_fix_head(
     state: dict[str, Any], *, head: str, reviewed_head: str
 ) -> bool:
+    if head == reviewed_head:
+        return False
     head_tree = _reviewed_tree(state, head)
     reviewed_tree = _reviewed_tree(state, reviewed_head)
-    return head != reviewed_head and (
-        not head_tree or not reviewed_tree or head_tree != reviewed_tree
-    )
+    return not head_tree or not reviewed_tree or head_tree != reviewed_tree
 
 
 def _apply_decision_to_ready_state(
@@ -1600,7 +1605,6 @@ def _apply_decision_to_ready_state(
             "Rerun or recover the review round before recording a decision."
         )
     reviewed_head = str(round_payload.get("reviewed_head") or "").strip() or None
-    reviewed_tree = _reviewed_tree(state, reviewed_head)
     if lane == "base-interaction" and decision == DECISION_CLEAN:
         check = dict(state["base_interaction_pending"])
         next_state = deepcopy(state)
@@ -1643,6 +1647,7 @@ def _apply_decision_to_ready_state(
             )
         return next_state
     if decision == DECISION_FINDINGS:
+        reviewed_tree = _reviewed_tree(state, reviewed_head)
         if lane == "base-interaction":
             check = state["base_interaction_pending"]
             next_state = _with_fix_action(record_findings_decision(
@@ -2182,9 +2187,11 @@ def _with_equivalent_base_drift_review_head(
     state: dict[str, Any],
     base_drift: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    drift = dict(base_drift or {})
+    head = (base_drift or {}).get("equivalent_reviewed_head")
+    if not head:
+        return state
     from review_suite_core.patch_identity import acceptance
-    accepted = acceptance(state, str(drift.get("equivalent_reviewed_head") or ""))
+    accepted = acceptance(state, str(head))
     return {**state, "accepted_review": accepted} if accepted else state
 
 
@@ -2282,11 +2289,6 @@ def _compatible_continuation_cycle(
             continue
         if not isinstance(state, dict):
             continue
-        state_stage = str(state.get("stage") or "")
-        if state_stage not in CONTINUATION_REDIRECT_STAGES and not (
-            _green_cycle_needs_current_head_signoff(state, head=head)
-        ):
-            continue
         if isinstance(state.get("superseded_by"), dict):
             continue
         identity = dict(state.get("identity") or {})
@@ -2295,6 +2297,11 @@ def _compatible_continuation_cycle(
         if str(identity.get("base") or "").strip() != str(base or "").strip():
             continue
         if _normalized_branch(str(identity.get("branch") or "")) != normalized_branch:
+            continue
+        state_stage = str(state.get("stage") or "")
+        if state_stage not in CONTINUATION_REDIRECT_STAGES and not (
+            _green_cycle_needs_current_head_signoff(state, head=head)
+        ):
             continue
         recorded_merge_base = str(identity.get("merge_base") or "").strip()
         base_drift = None
@@ -2467,7 +2474,7 @@ def _create_or_resume_cycle(
     branch = current_branch(review_root)
     base_info = effective_base_ref(review_root, args.base)
     base = str(base_info["base"])
-    merge_base_head = merge_base(review_root, base, "HEAD")
+    merge_base_head = merge_base(review_root, base, head)
     model_override = _requested_model_override(args)
     config = _config_with_model_override(load_config(state_dir), model_override)
     arena_disabled = bool(args.no_arena) or _repo_has_no_arena(review_root)
@@ -2586,7 +2593,7 @@ def _current_restart_identity(
         raise ValueError(
             "cannot restart review cycle after HEAD changed; start a new review instead"
         )
-    merge_base_head = merge_base(review_root, base, "HEAD")
+    merge_base_head = merge_base(review_root, base, head)
     expected_merge_base = str(identity.get("merge_base") or "").strip()
     if require_exact and merge_base_head != expected_merge_base:
         raise ValueError(
@@ -2971,7 +2978,7 @@ def _record_validation_status(
         validation_note=args.validation_note,
     )
 
-    updated.setdefault("validation", {})["head"] = _identity_head(state) or dict(state.get("identity") or {}).get("head")
+    updated.setdefault("validation", {})["head"] = current
     return updated
 
 
@@ -3415,7 +3422,8 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
         "review": state.get("public_id"),
         "review_brief": "available" if state.get("review_brief") else "unavailable",
     }
-    summary = review_ladder_summary(state, current_head=_identity_head(state))
+    current_head_value = _identity_head(state)
+    summary = review_ladder_summary(state, current_head=current_head_value)
     action = _action_payload(state, state_dir=state_dir, summary=summary)
     summary = _add_review_ladder_fields(payload, state, action, summary=summary)
     if action:
@@ -3437,7 +3445,7 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
         payload["validation"] = validation
     if (
         state.get("validated_fixes")
-        and state["validated_fixes"][-1]["head"] == _identity_head(state)
+        and state["validated_fixes"][-1]["head"] == current_head_value
         and not state.get("active_findings")
     ):
         payload["fix_resolution"] = FIXES_VALIDATED_NOTE
@@ -3651,6 +3659,7 @@ def _check_base_interaction(
                     allow_unsafe_windows_wsl_fallback=False,
                     on_round_started=started,
                 )
+            refresh_git_reads()
             state = load_cycle_by_key(state_dir, state["cycle_key"]) or state
             state = mark_decision_pending(
                 state,
@@ -3674,6 +3683,7 @@ def _check_base_interaction(
         )
 
 
+@with_git_reads
 def main() -> int:
     parser = build_parser()
     args: argparse.Namespace | None = None

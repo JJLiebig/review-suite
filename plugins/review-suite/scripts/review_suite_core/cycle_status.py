@@ -97,11 +97,11 @@ def validation_blockers(
     checked_head = validation.get("head") or dict(state.get("review_patch") or {}).get("reviewed_head") or identity.get("head")
     comparison_head = identity.get("head") if current_head is None else current_head
     if current_head is None and state.get("review_patch") and identity.get("cwd"):
-        from .patch_identity import git
         from .paths import cwd_path_from_normalized
+        from .workflow_state import current_head as read_head
 
         try:
-            comparison_head = git(cwd_path_from_normalized(identity["cwd"]), "rev-parse", "HEAD").decode().strip()
+            comparison_head = read_head(cwd_path_from_normalized(identity["cwd"]))
         except (OSError, ValueError):
             pass
     for key in ("full_suite", "ci"):
@@ -189,9 +189,9 @@ def review_ladder_summary(
             if live_base != receipt["reviewed_base"]:
                 return {**summary, "review_ladder": "invalidated"}
         else:
-            from .patch_identity import git
+            from .workflow_state import merge_base
             try:
-                live_base = git(Path(receipt["repo"]), "merge-base", receipt["base"], comparison_head).decode().strip()
+                live_base = merge_base(Path(receipt["repo"]), receipt["base"], comparison_head)
                 if live_base != receipt["reviewed_base"]:
                     return {**summary, "review_ladder": "invalidated"}
             except (OSError, ValueError):

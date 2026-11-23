@@ -1510,8 +1510,8 @@ def test_inspect_workflow_status_recommends_full_review_when_anchor_is_not_ances
     assert payload["reason"] == "review_anchor_not_ancestor"
 
 
-def test_inspect_workflow_status_accepts_non_overlapping_equivalent_merge_base_drift(
-    tmp_path: Path,
+def test_status_accepts_non_overlapping_equivalent_merge_base_drift(
+    monkeypatch, tmp_path: Path, git_commands,
 ) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -1536,11 +1536,16 @@ def test_inspect_workflow_status_accepts_non_overlapping_equivalent_merge_base_d
     _git(repo, "checkout", "feature/test")
     _git(repo, "merge", "--no-ff", "main", "-m", "merge main")
 
-    payload = inspect_workflow_status(
-        state_dir=state_dir,
-        review_cwd=repo,
-        base="main",
+    emitted = []
+    _use_default_state_dir(monkeypatch, state_dir)
+    monkeypatch.setattr(review_state, "emit_toon", emitted.append)
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", "--status", "--verbose", "--cd", str(repo), "--base", "main"]
     )
+    git_commands.clear()
+    assert review.main() == 0
+    assert len(git_commands) <= 18, git_commands
+    payload, = emitted
 
     assert payload["recommendation"] == "none"
     assert payload["reason"] == "current_head_already_reviewed"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -651,20 +652,24 @@ def test_inspect_existing_cycle_does_not_reuse_active_request_when_head_moved(
 
 
 def test_cmd_run_records_workflow_anchor_for_completed_cycle(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, git_commands
 ) -> None:
-    emitted: list[dict[str, object]] = []
-    recorded: list[dict[str, object]] = []
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True)
 
-    monkeypatch.setattr(review_github, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(
-        review_github,
-        "local_checkout_contains_reviewed_head",
-        lambda review_root, head_sha: True,
-    )
-    monkeypatch.setattr(
-        review_github, "merge_base", lambda review_root, base_ref: "base-sha-123"
-    )
+    def commit(message: str) -> str:
+        subprocess.run(
+            ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+             "commit", "--allow-empty", "-m", message],
+            cwd=repo, check=True, capture_output=True,
+        )
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+    base = commit("base")
+    subprocess.run(["git", "switch", "-c", "feature"], cwd=repo, check=True, capture_output=True)
+    head = commit("feature")
+    emitted: list[dict[str, object]] = []
     monkeypatch.setattr(
         review_github,
         "get_pr_context",
@@ -673,7 +678,7 @@ def test_cmd_run_records_workflow_anchor_for_completed_cycle(
             "repo": "sample-web",
             "pr_number": 87,
             "url": "https://github.com/example-owner/example-repo/pull/87",
-            "head_sha": "deadbeef",
+            "head_sha": head,
             "base_ref": "main",
         },
     )
@@ -686,7 +691,7 @@ def test_cmd_run_records_workflow_anchor_for_completed_cycle(
             "repo": "sample-web",
             "pr_number": 87,
             "url": "https://github.com/example-owner/example-repo/pull/87",
-            "head_sha": "deadbeef",
+            "head_sha": head,
             "items": [
                 {
                     "kind": "issue_comment",
@@ -697,26 +702,23 @@ def test_cmd_run_records_workflow_anchor_for_completed_cycle(
             ],
         },
     )
-    monkeypatch.setattr(
-        review_github,
-        "record_review_anchor",
-        lambda **kwargs: recorded.append(kwargs) or {},
-    )
-    monkeypatch.setattr(review_github, "default_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(review_github, "default_state_dir", lambda: state_dir)
     monkeypatch.setattr(
         review_github, "emit_toon", lambda payload: emitted.append(payload)
     )
 
-    exit_code = cmd_run(
-        review_github.build_parser().parse_args(["run", "--cd", str(tmp_path)]),
-    )
+    git_commands.clear()
+    exit_code = cmd_run(review_github.build_parser().parse_args(["run", "--cd", str(repo)]))
 
     assert exit_code == 0
     assert emitted
-    assert recorded[0]["lane"] == "review-github"
-    assert recorded[0]["base"] == "main"
-    assert recorded[0]["reviewed_head"] == "deadbeef"
-    assert recorded[0]["review_scope"]["merge_base"] == "base-sha-123"
+    assert len(git_commands) <= 4, git_commands
+    receipt, = (state_dir / "workflow").glob("*/*.json")
+    anchor, = json.loads(receipt.read_text(encoding="utf-8"))["anchors"]
+    assert anchor["lane"] == "review-github"
+    assert anchor["base"] == "main"
+    assert anchor["reviewed_head"] == head
+    assert anchor["review_scope"]["merge_base"] == base
 
 
 def test_cmd_run_does_not_record_workflow_anchor_for_acknowledged_without_body(

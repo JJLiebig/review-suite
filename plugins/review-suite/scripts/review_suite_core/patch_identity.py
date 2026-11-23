@@ -8,6 +8,7 @@ import json
 import re
 import subprocess
 from bisect import bisect_right
+from collections.abc import Iterable
 from contextlib import ExitStack, closing, contextmanager
 from itertools import groupby
 from operator import itemgetter
@@ -15,6 +16,9 @@ from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 
 from .cycle_status import PATCH_RECEIPT_VERSION as VERSION, _no_base_drift, bound_interaction as bound_interaction
+from .git_reads import cached_git_read
+from .workflow_state import merge_base
+
 PATHSPEC_BUDGET = 24_000  # Leave room for Git options under Windows' command-line limit.
 HUNK_BATCH_BUDGET = 32_000  # Limit retained interval data when many shared lines change.
 
@@ -105,6 +109,7 @@ def _patch_sections(patch: bytes) -> Iterator[bytes]:
         yield patch[start:]
 
 
+@cached_git_read
 def patch_identity(repo: Path, base: str, head: str) -> dict[str, Any]:
     # Byte output avoids platform newline conversion and preserves whitespace.
     patch = git(
@@ -231,13 +236,14 @@ def reviewed_receipt(state: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _changed_paths(repo: Path, left: str, right: str, *options: str) -> set[bytes]:
-    paths = git(repo, "diff", *options, "--name-only", "-z", left, right)
+@cached_git_read
+def _changed_paths(repo: Path, left: str, right: str) -> set[bytes]:
+    paths = git(repo, "diff", "--name-only", "-z", left, right)
     return set(paths.split(b"\0")) - {b""}
 
 
 def _path_batches(
-    paths: set[bytes], hunk_estimates: dict[bytes, int] | None = None
+    paths: Iterable[bytes], hunk_estimates: dict[bytes, int] | None = None
 ) -> Iterator[dict[bytes, str]]:
     batch: dict[bytes, str] = {}
     size = 0
@@ -320,7 +326,8 @@ def _has_moved_lines(lines: Iterator[bytes]) -> bool:
     return False
 
 
-def _base_moved_lines(repo: Path, left: str, right: str, paths: set[bytes]) -> bool:
+@cached_git_read
+def _base_moved_lines(repo: Path, left: str, right: str, paths: frozenset[bytes]) -> bool:
     for batch in _path_batches(paths):
         with closing(_patch_lines(repo, left, right, batch, include_edits=True)) as lines:
             # Equivalent patches preserve file types and existence. Each shared
@@ -337,7 +344,7 @@ def acceptance(state: dict[str, Any], current_head: str) -> dict[str, Any] | Non
         if not receipt or receipt["reviewed_base"] == receipt["reviewed_head"]:
             return None
         repo = Path(receipt["repo"])
-        base = git(repo, "merge-base", receipt["base"], current_head).decode().strip()
+        base = merge_base(repo, receipt["base"], current_head)
         reviewed_base = receipt["reviewed_base"]
         reviewed_head = receipt["reviewed_head"]
         # The stored receipt already describes this exact pair of commits.
@@ -347,8 +354,8 @@ def acceptance(state: dict[str, Any], current_head: str) -> dict[str, Any] | Non
         if base != reviewed_base:
             # Identical edit bytes cannot prove location across a base-side move.
             branch_paths = _changed_paths(repo, reviewed_base, reviewed_head)
-            drift_paths = _changed_paths(repo, reviewed_base, base, "--no-renames")
-            if _base_moved_lines(repo, reviewed_base, base, branch_paths & drift_paths):
+            drift_paths, _ = _paths_and_structure(repo, reviewed_base, base, numstat=True)
+            if _base_moved_lines(repo, reviewed_base, base, drift_paths & branch_paths):
                 return None
         return {**receipt, "accepted_head": current_head, "accepted_base": base}
     except OSError, ValueError:
@@ -425,19 +432,39 @@ def _hunk_estimates(repo: Path, left: str, right: str, batch: dict[bytes, str]) 
     return estimates
 
 
-def interaction(repo: Path, old_base: str, new_base: str, head: str) -> dict[str, Any]:
-    drift = _changed_paths(repo, old_base, new_base, "--no-renames")
-    branch = _changed_paths(repo, old_base, head, "--no-renames")
-    overlap = drift & branch
-    base_stats = git(repo, "diff", "--no-renames", "--numstat", "--summary", old_base, new_base)
-    branch_summary = git(repo, "diff", "--no-renames", "--summary", old_base, head)
-    structural = b"-\t-\t" in base_stats or any(
+@cached_git_read
+def _paths_and_structure(
+    repo: Path, left: str, right: str, *, numstat: bool,
+) -> tuple[frozenset[bytes], bool]:
+    # Git terminates path records with NUL and appends the summary as text.
+    output = git(
+        repo, "diff", "--no-renames", "--numstat" if numstat else "--raw",
+        "--summary", "-z", left, right,
+    )
+    records, _, summary = output.rpartition(b"\0")
+    fields = records.split(b"\0")
+    if numstat:
+        rows = [row.split(b"\t", 2) for row in fields if row]
+        paths = frozenset(path for _, _, path in rows)
+        binary = any(added == deleted == b"-" for added, deleted, _ in rows)
+    else:
+        paths = frozenset(fields[1::2])
+        binary = False
+    structural = binary or any(
         line.lstrip().startswith(
             (b"delete mode", b"create mode", b"old mode", b"new mode")
         )
-        for line in (base_stats + branch_summary).splitlines()
+        for line in summary.splitlines()
     )
+    return paths, structural
 
+
+@cached_git_read
+def interaction(repo: Path, old_base: str, new_base: str, head: str) -> dict[str, Any]:
+    drift, base_structural = _paths_and_structure(repo, old_base, new_base, numstat=True)
+    branch, branch_structural = _paths_and_structure(repo, old_base, head, numstat=False)
+    overlap = drift & branch
+    structural = base_structural or branch_structural
     line_overlap = set()
     for batch in _path_batches(overlap):
         estimates = _hunk_estimates(repo, old_base, head, batch) if len(batch) > 1 else None
