@@ -3599,6 +3599,145 @@ def test_restart_brief_cannot_reset_accepted_findings(
 
 
 @pytest.mark.parametrize(
+    ("decision", "lineage", "findings_count", "error"),
+    [
+        ("reslice", "forward", 3, None),
+        ("reslice", "forward", 1, None),
+        ("reslice", "unchanged", 3, None),
+        ("reslice", "rewound-base", 3, "merge-base must descend"),
+        ("reslice", "rewritten-head", 3, "head must descend"),
+        ("replan", "forward", 3, "cannot replace review brief after merge-base changed"),
+    ],
+)
+def test_decided_convergence_brief_restart_requires_compatible_lineage(
+    monkeypatch, tmp_path: Path, capsys, decision, lineage, findings_count, error,
+) -> None:
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    monkeypatch.setenv("REVIEW_SUITE_STATE_DIR", str(state_dir))
+    deslop_calls = _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "base-round", "finding-1", "successor-round")
+    followup_calls = _stub_followup(monkeypatch, "finding-2", "finding-3")
+    _init_repo(repo)
+    initial = _commit_file(repo, "initial.txt", "initial\n", "initial")
+    _commit_file(repo, "api.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/reslice")
+    _commit_file(repo, "api.txt", "landed split API\n", "independent API change")
+    _commit_file(repo, "feature.txt", "feature\n", "feature")
+    _, opened = _run_review(monkeypatch, [
+        "--mode", "deep", "--no-arena", "--review-brief", "Original scope",
+        "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir),
+    ])
+    old_id = str(opened["review"])
+    args = ["--id", old_id]
+    _run_review(monkeypatch, [*args, "--decision", "clean"])
+    _run_review_after_cleanup(monkeypatch, args)
+    for index in range(findings_count):
+        _run_review(monkeypatch, [*args, "--decision", "findings"])
+        if index < findings_count - 1:
+            _commit_file(repo, "feature.txt", f"fix {index}\n", f"fix {index}")
+            _run_review_after_cleanup(monkeypatch, args)
+    if findings_count == 1:
+        _run_review(monkeypatch, [*args, "--contract-conflict", "scope"])
+    _run_review(monkeypatch, [*args, "--focused-validation", "passed", "--full-suite", "passed", "--ci", "passed"])
+    _, decided = _run_review(monkeypatch, [*args, "--convergence-decision", decision])
+    before = _cycle_payload(state_dir, old_id)
+    assert before["convergence"]["status"] == "DECIDED"
+    assert before["convergence"]["decision"] == decision.upper()
+    assert len(before["convergence"]["accepted_findings_heads"]) == findings_count
+    assert before["deslop"]["status"] == "closed"
+    assert len(deslop_calls) == 1
+    assert len(review_calls) == 2
+    assert len(followup_calls) == findings_count - 1
+
+    if lineage == "forward":
+        _git(repo, "checkout", "main")
+        _commit_file(repo, "api.txt", "landed split API\n", "land split API")
+        _git(repo, "checkout", "feature/reslice")
+        _git(repo, "merge", "--no-edit", "main")
+        _commit_file(repo, "feature.txt", "remaining feature\n", "narrow remaining change")
+        assert _git(repo, "diff", "--name-only", "main...HEAD") == "feature.txt"
+    elif lineage == "rewound-base":
+        _git(repo, "branch", "-f", "main", initial)
+    elif lineage == "rewritten-head":
+        _git(repo, "reset", "--hard", "main")
+        _commit_file(repo, "feature.txt", "replacement\n", "rewrite feature")
+
+    _, recorded = _run_review(monkeypatch, [*args, "--show-status"])
+    status_args = ["--status", "--cd", str(repo), "--base", "main"]
+    capsys.readouterr()
+    monkeypatch.setattr(sys, "argv", ["review.py", *status_args])
+    assert review.main() == 0
+    branch_status = capsys.readouterr().out
+    json_statuses = []
+    for show_args in ([*args, "--show-status"], status_args):
+        monkeypatch.setattr(sys, "argv", ["review.py", *show_args, "--json"])
+        assert review.main() == 0
+        json_statuses.append(json.loads(capsys.readouterr().out))
+    assert _cycle_payload(state_dir, old_id) == before
+
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)
+    restart = [*args, "--restart-brief", "Remaining scope", "--reason", "Caller approved split"]
+    exit_code, restarted = _run_review(monkeypatch, restart)
+    if error:
+        assert exit_code == 2
+        assert error in restarted["error"]
+        assert _cycle_payload(state_dir, old_id) == before
+        assert len(review_calls) == 2
+        assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+    else:
+        assert exit_code == 0, restarted
+        new_id = str(restarted["review"])
+        archived = _cycle_payload(state_dir, old_id)
+        successor = _cycle_payload(state_dir, new_id)
+        for key in ("identity", "review_brief", "rounds", "decisions", "active_findings", "validation", "convergence", "deslop"):
+            assert archived[key] == before[key]
+        assert archived["stage"] == "aborted"
+        assert archived["superseded_by"]["review"] == new_id
+        assert successor["restart"]["supersedes"] == old_id
+        assert successor["mode"] == before["mode"]
+        assert successor["identity"]["head"] == _git(repo, "rev-parse", "HEAD")
+        assert successor["identity"]["merge_base"] == _git(repo, "merge-base", "main", "HEAD")
+        assert successor["review_heads"]["merge_base"] == successor["identity"]["merge_base"]
+        assert review_calls[-1]["review_scope"]["reviewed_head"] == successor["identity"]["head"]
+        assert review_calls[-1]["review_scope"]["merge_base"] == successor["identity"]["merge_base"]
+        assert restarted["done"] is False
+        assert successor["review_brief"] == "Remaining scope"
+        assert successor["validation"] == dict.fromkeys(("review_green", "focused", "full_suite", "ci"), "unknown")
+        assert successor["deslop"] == {"tracked": True, "status": "tracked"}
+        assert successor["convergence"]["accepted_findings_heads"] == []
+        assert successor["decisions"] == []
+        assert successor["active_findings"] is None
+        assert [item["round_id"] for item in successor["rounds"]] == ["successor-round"]
+        assert len(review_calls) == 3
+        assert len(deslop_calls) == 1
+
+        code, _ = _run_review(monkeypatch, restart)
+        assert code == 2
+        assert _cycle_payload(state_dir, old_id) == archived
+        assert _cycle_payload(state_dir, new_id) == successor
+        assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
+        _, old_status = _run_review(monkeypatch, [*args, "--show-status"])
+        assert f"--id {new_id}" in old_status["Action"]["cmd"]
+        assert "--restart-brief" not in old_status["Action"]["cmd"]
+        monkeypatch.setattr(sys, "argv", ["review.py", *args, "--show-status", "--json"])
+        assert review.main() == 0
+        old_status = json.loads(capsys.readouterr().out)
+        assert old_status["next_action"] == "none"
+        assert old_status["status"] == decision
+        assert old_status["superseded_by"] == {"review": new_id}
+        assert old_status["done"] is False
+
+    for status in (decided, recorded):
+        assert status["next_action"] == "restart_brief"
+        assert f"--id {old_id} --restart-brief" in status["Action"]["cmd"]
+    assert f"--id {old_id} --restart-brief" in branch_status
+    for status in json_statuses:
+        assert status["status"] == decision
+        assert status["next_action"] == "restart_brief"
+        assert status["done"] is False
+
+
+@pytest.mark.parametrize(
     "checkpoint",
     [
         "fix",
@@ -4262,13 +4401,6 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
             monkeypatch.setattr(sys, "argv", ["review.py", *restart])
             assert review.main() == 2
             assert _cycle_payload(state_dir, public_id) == before
-            _run_review_after_cleanup(
-                monkeypatch,
-                ["--id", public_id, "--convergence-decision", "reslice"],
-            )
-            monkeypatch.setattr(sys, "argv", ["review.py", *restart])
-            assert review.main() == 2
-            review.save_cycle(state_dir, before)
             _run_review_after_cleanup(
                 monkeypatch,
                 ["--id", public_id, "--convergence-decision", "replan"],

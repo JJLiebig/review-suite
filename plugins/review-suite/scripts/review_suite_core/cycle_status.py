@@ -377,6 +377,20 @@ def convergence_summary(state: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def convergence_restart_decision(state: dict[str, Any]) -> str | None:
+    convergence = state.get("convergence") or {}
+    if state.get("stage") != "convergence-decided" or convergence.get("status") != "DECIDED":
+        return None
+    decision = convergence.get("decision")
+    if decision == "RESLICE" or (
+        decision == "REPLAN"
+        and convergence.get("reason") == "budget_exhausted"
+        and state.get("active_findings")
+    ):
+        return decision
+    return None
+
+
 def _effective_mode(state: dict[str, Any]) -> str:
     mode = dict(state.get("mode") or {})
     return str(mode.get("effective") or mode.get("requested") or "").strip()
@@ -534,7 +548,7 @@ def json_status_payload(payload: dict[str, object]) -> dict[str, object]:
 
 
 def route_convergence(
-    payload: dict[str, object], convergence: dict[str, object]
+    payload: dict[str, object], convergence: dict[str, object], *, state: dict[str, Any],
 ) -> None:
     """Report a non-active convergence checkpoint as the cycle's status."""
     if convergence.get("status") == "DECISION_REQUIRED":
@@ -542,7 +556,7 @@ def route_convergence(
         payload["next_action"] = "caller_decision"
     else:
         payload["status"] = str(convergence.get("decision") or "decided").lower()
-        payload["next_action"] = "none"
+        payload["next_action"] = "restart_brief" if convergence_restart_decision(state) else "none"
 
 
 def _orchestrator_review_state_dir(state_dir: Path) -> Path:
@@ -838,7 +852,7 @@ def public_cycle_status(payload: dict[str, Any], state: dict[str, Any]) -> dict[
             public[key] = payload[key]
     convergence = convergence_summary(state)
     if convergence["status"] != "ACTIVE":
-        route_convergence(public, convergence)
+        route_convergence(public, convergence, state=state)
     return public
 
 
