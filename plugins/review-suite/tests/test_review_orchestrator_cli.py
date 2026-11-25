@@ -3668,11 +3668,13 @@ def test_decided_convergence_brief_restart_requires_compatible_lineage(
     monkeypatch.setattr(sys, "argv", ["review.py", *status_args])
     assert review.main() == 0
     branch_status = capsys.readouterr().out
-    json_statuses = []
     for show_args in ([*args, "--show-status"], status_args):
         monkeypatch.setattr(sys, "argv", ["review.py", *show_args, "--json"])
         assert review.main() == 0
-        json_statuses.append(json.loads(capsys.readouterr().out))
+        status = json.loads(capsys.readouterr().out)
+        assert status["status"] == decision
+        assert status["next_action"] == "restart_brief"
+        assert status["done"] is False
     assert _cycle_payload(state_dir, old_id) == before
 
     monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: review.emit_toon({"error": message}) or 2)
@@ -3731,10 +3733,6 @@ def test_decided_convergence_brief_restart_requires_compatible_lineage(
         assert status["next_action"] == "restart_brief"
         assert f"--id {old_id} --restart-brief" in status["Action"]["cmd"]
     assert f"--id {old_id} --restart-brief" in branch_status
-    for status in json_statuses:
-        assert status["status"] == decision
-        assert status["next_action"] == "restart_brief"
-        assert status["done"] is False
 
 
 @pytest.mark.parametrize(

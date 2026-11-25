@@ -3329,12 +3329,12 @@ def _action_payload(
     action: dict[str, Any] | None = None
     stage = state.get("stage")
     if stage in {"decision-required", "convergence-decided"}:
-        convergence = convergence_summary(state)
         if convergence_restart_decision(state):
             return {
                 "cmd": _review_command(public_id, "--restart-brief", "MARKDOWN", "--reason", "REASON", state_dir=state_dir),
                 "note": "Start one linked successor with the approved narrowed or revised brief.",
             }
+        convergence = convergence_summary(state)
         if convergence.get("status") != "DECISION_REQUIRED":
             return None
         return {
