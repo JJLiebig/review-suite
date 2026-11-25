@@ -60,6 +60,7 @@ from review_suite_core.cycle_status import (
     _short_sha,
     _validation_summary,
     add_status_arguments,
+    convergence_restart_decision,
     cycle_status_fields,
     load_status_cycle,
     public_cycle_status,
@@ -184,7 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--restart-mode", choices=RESTART_TARGET_MODES)
     parser.add_argument(
         "--restart-brief",
-        help="Replace a mistaken frozen review brief and start a fresh same-mode cycle.",
+        help="Replace the frozen review brief and start a fresh same-mode successor cycle.",
     )
     parser.add_argument(
         "--link-successor",
@@ -1323,6 +1324,8 @@ def _next_action_label(summary: dict[str, Any], action: dict[str, Any] | None) -
         return "validation"
     if "--deslop-done" in command:
         return "deslop_done"
+    if "--restart-brief" in command:
+        return "restart_brief"
     return "continue"
 
 
@@ -2633,6 +2636,14 @@ def _create_successor_cycle(
     review_root, base, branch, head, merge_base_head = _current_restart_identity(
         state, require_exact=require_exact_identity
     )
+    if (
+        not require_exact_identity
+        and convergence_restart_decision(state) != "RESLICE"
+        and merge_base_head != state["identity"]["merge_base"]
+    ):
+        raise ValueError(
+            "cannot replace review brief after merge-base changed; start a new review instead"
+        )
     model_override = dict(state.get("model_override") or {})
     config = _config_with_model_override(load_config(state_dir), model_override)
     arena_disabled = state.get("arena_disabled") == "cli" or _repo_has_no_arena(
@@ -2673,6 +2684,8 @@ def _create_successor_cycle(
         restart_token=restart_token,
         review_brief=review_brief,
     )
+    if not require_exact_identity:
+        _check_link_identity(state, replacement)
     existing = load_cycle_by_key(state_dir, str(replacement["cycle_key"]))
     if existing is not None:
         if existing.get("review_brief") != review_brief:
@@ -2849,14 +2862,7 @@ def _reserve_review_brief_restart(
         raise ValueError("--restart-brief must differ from the frozen review brief")
 
     convergence = convergence_summary(state)
-    budget_replan = (
-        state.get("stage") == "convergence-decided"
-        and convergence.get("status") == "DECIDED"
-        and convergence.get("decision") == "REPLAN"
-        and convergence.get("reason") == "budget_exhausted"
-        and bool(state.get("active_findings"))
-    )
-    if contract_conflict or budget_replan:
+    if contract_conflict or convergence_restart_decision(state):
         replanned = (
             record_contract_replan(state, conflict=contract_conflict)
             if contract_conflict
@@ -2880,21 +2886,6 @@ def _reserve_review_brief_restart(
             "cannot replace review brief at this checkpoint. Follow the current review action. "
             "For an approved contract change, use --contract-conflict <dimension> with --reason "
             "while awaiting a fix or follow-up, between steps after accepted findings, or after recording that conflict"
-        )
-
-    review_root, _, _, head, merge_base_head = _current_restart_identity(
-        state, require_exact=False
-    )
-    identity = dict(state.get("identity") or {})
-    expected_head = str(identity.get("head") or "").strip()
-    expected_merge_base = str(identity.get("merge_base") or "").strip()
-    if merge_base_head != expected_merge_base:
-        raise ValueError(
-            "cannot replace review brief after merge-base changed; start a new review instead"
-        )
-    if head != expected_head and not is_ancestor(review_root, expected_head, head):
-        raise ValueError(
-            "cannot replace review brief after review lineage changed; start a new review instead"
         )
 
     return _reserve_successor_cycle(
@@ -3338,6 +3329,11 @@ def _action_payload(
     action: dict[str, Any] | None = None
     stage = state.get("stage")
     if stage in {"decision-required", "convergence-decided"}:
+        if convergence_restart_decision(state):
+            return {
+                "cmd": _review_command(public_id, "--restart-brief", "MARKDOWN", "--reason", "REASON", state_dir=state_dir),
+                "note": "Start one linked successor with the approved narrowed or revised brief.",
+            }
         convergence = convergence_summary(state)
         if convergence.get("status") != "DECISION_REQUIRED":
             return None

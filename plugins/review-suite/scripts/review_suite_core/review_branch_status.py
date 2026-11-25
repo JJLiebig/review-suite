@@ -19,6 +19,7 @@ from review_suite_core.cycle_status import (
     _public_status_payload,
     _round_blocked,
     _round_terminal_command,
+    convergence_restart_decision,
     json_status_payload,
     review_status_details,
     route_convergence,
@@ -365,6 +366,11 @@ def _orchestrator_action(
     current_head: str | None = None,
 ) -> dict[str, object] | None:
     stage = str(state.get("stage") or "").strip()
+    if convergence_restart_decision(state):
+        return {
+            "cmd": _review_command(public_id, extra=("--restart-brief", "MARKDOWN", "--reason", "REASON")),
+            "note": "Start one linked successor with the approved narrowed or revised brief.",
+        }
     if convergence_summary(state).get("status") != "ACTIVE":
         return None
     superseded_by = state.get("superseded_by")
@@ -567,7 +573,7 @@ def _orchestrator_status_override(
     )
     payload.update(summary)
     if convergence.get("status") != "ACTIVE":
-        route_convergence(payload, convergence)
+        route_convergence(payload, convergence, state=state)
     elif summary.get("review_ladder") == "invalidated":
         payload["status"] = "stale"
         payload["next_action"] = "rerun_review"

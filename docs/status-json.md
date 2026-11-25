@@ -50,6 +50,12 @@ carried forward to a new head and any base interaction checks. Use
 finished, or waiting on the caller. An unknown id exits with code 2 and prints
 `{"error": "unknown review cycle id: <id>", "status": "usage_error"}`.
 
+An unsuperseded decided `reslice` cycle (or a budget-exhausted `replan` with
+active findings) reports `done: false` and `next_action: "restart_brief"` in
+both status modes. Use the linked-successor command shown in text status;
+for `--restart-brief`, only RESLICE accepts a merge-base that has advanced by
+ancestry.
+
 When a supported restart links cycles, the predecessor includes
 `superseded_by: {"review": "<successor id>"}` and the successor includes
 `supersedes: {"review": "<predecessor id>"}`. These optional fields expose the
