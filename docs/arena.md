@@ -48,6 +48,11 @@ their ratings remain in history. The [1017 update](https://api-docs.deepseek.com
 keeps the API name and pricing unchanged, so the OpenCode route remains
 `opencode-go/deepseek-v4.1-flash`.
 
+GLM 5.4 uses the Z.AI Coding Plan through OpenCode, with `low`, `high`, and
+`max` reasoning in the base pool and `high` and `max` in the deep pool.
+Review Suite records tokens and elapsed time and leaves USD cost blank. The
+plan meters usage in credits. [Z.AI Coding Plan](https://docs.z.ai/devpack/overview)
+
 ## Automatic retirement
 
 Arena automatically keeps the newest **two released model generations per

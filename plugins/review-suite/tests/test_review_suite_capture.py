@@ -1085,14 +1085,27 @@ def test_default_roster_includes_current_model_pricing() -> None:
         ("arena_deep", "deep_review", ("high", "max")),
     ],
 )
+@pytest.mark.parametrize(
+    "model_id,provider_model",
+    [
+        ("deepseek-v4.1-flash-1017", "opencode-go/deepseek-v4.1-flash"),
+        ("glm-5.4", "zai-coding-plan/glm-5.4"),
+    ],
+)
 def test_opencode_arena_selection_launches_current_versions(
-    tmp_path: Path, pool_name: str, task_class: str, efforts: tuple[str, ...]
+    tmp_path: Path,
+    pool_name: str,
+    task_class: str,
+    efforts: tuple[str, ...],
+    model_id: str,
+    provider_model: str,
 ) -> None:
     roster_path = Path(__file__).resolve().parents[1] / "references" / "roster.json"
     roster = review_suite_local.load_roster(roster_path)
     pool = review_suite_core.load_config(tmp_path / "state")["arena"]["pools"][pool_name]
-    candidates = {f"deepseek-v4.1-flash-1017-{effort}" for effort in efforts}
-    candidates.update(("glm-5.3-flash-high", "glm-5.3-flash-max"))
+    expected_efforts = {f"{model_id}-{effort}": effort for effort in efforts}
+    opponents = ("glm-5.3-flash-high", "glm-5.3-flash-max")
+    candidates = set(expected_efforts) | set(opponents[: 4 - len(efforts)])
     payload = review_suite_local.select_pair(
         roster=roster,
         operational_state=review_suite_local.default_operational_state(),
@@ -1108,7 +1121,9 @@ def test_opencode_arena_selection_launches_current_versions(
         variant_ids=pool["variant_ids"],
         excluded_variant_ids=set(pool["variant_ids"]) - candidates,
     )
-    for run in payload["runs"]:
+    selected = {run["variant_id"]: run for run in payload["runs"]}
+    for variant_id, effort in expected_efforts.items():
+        run = selected[variant_id]
         launch = prepare_review_launch(
             tool_name="review-suite",
             model=run["model"],
@@ -1118,16 +1133,8 @@ def test_opencode_arena_selection_launches_current_versions(
             base="main",
             allow_unsafe_windows_wsl_fallback=False,
         )
-        assert launch.command[launch.command.index("--model") + 1] == run[
-            "model"
-        ].removeprefix("opencode::")
-        assert launch.command[launch.command.index("--variant") + 1] == run[
-            "reasoning_effort"
-        ]
-    assert any(
-        run["variant_id"].startswith("deepseek-v4.1-flash-1017-")
-        for run in payload["runs"]
-    )
+        assert launch.command[launch.command.index("--model") + 1] == provider_model
+        assert launch.command[launch.command.index("--variant") + 1] == effort
 
 
 def test_collect_round_results_preserves_foreign_review_cwd_for_capture(

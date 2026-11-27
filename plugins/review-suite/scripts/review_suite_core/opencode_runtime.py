@@ -19,6 +19,7 @@ OPENCODE_DEFAULT_REASONING_EFFORT = "high"
 OPENCODE_MODEL_REASONING_EFFORTS = {
     "opencode-go/deepseek-v4.1-flash": ("low", "high", "max"),
     "opencode-go/glm-5.3-flash": ("low", "high", "max"),
+    "zai-coding-plan/glm-5.4": ("low", "high", "max"),
 }
 OPENCODE_REVIEW_SYSTEM_PROMPT = (
     "Act as a code reviewer for a proposed change made by another engineer. "

@@ -542,6 +542,9 @@ def main() -> int:
             usage = export_usage
         if export_cost is not None:
             cost_usd = export_cost
+        if args.model.startswith("zai-coding-plan/") and cost_usd == 0:
+            # The Coding Plan meters credits. The catalog's zero has no USD equivalent.
+            cost_usd = None
         error_class = classify_opencode_error(
             returncode=proc.returncode,
             errors=errors,
